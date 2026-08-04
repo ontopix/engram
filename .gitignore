@@ -1,0 +1,10 @@
+# Go (future reference CLI)
+/engram
+*.test
+*.out
+
+# OS noise
+.DS_Store
+
+# Derived caches inside example stores are never committed
+**/.engram/cache/
