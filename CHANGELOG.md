@@ -19,6 +19,11 @@
   link and dash); the co-reading discipline (read pinned records of a
   directory and its ancestors alongside its maps) is normed in the
   skills annex (engram-find, engram-write).
+- Skills annex: new `using-engram` orientation skill (panorama, store
+  location, entry through the map, operation→skill routing, red
+  flags); the "four skills, no more" cap dropped — the set is open,
+  disciplines earn skills by recurrence (type-authoring noted as a
+  future split of engram-evolve); adapters annex updated to match.
 - Initial draft of the engram standard: core specification v1 (draft),
   base profile annex v1 (draft), skills annex (draft), adapters annex
   (non-normative, draft), rationale, canonical base-profile schemas,

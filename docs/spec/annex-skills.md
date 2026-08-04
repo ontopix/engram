@@ -1,18 +1,24 @@
 # Annex — Canonical skills, v1 (draft)
 
 **Status:** Draft
-**Revision:** 2026-08-04
+**Revision:** 2026-08-05
 
 The Agent Protocol (core §11) states *what* an agent owes a store; the
 canonical skills teach *how*, in the packaging agents actually consume
 ([Agent Skills](https://agentskills.io) format: `<slug>/SKILL.md`).
-This annex specifies the four skills; the shipped `SKILL.md` artifacts
-will live under `skills/` in this repository and follow this annex.
+This annex specifies the canonical skills; the shipped `SKILL.md`
+artifacts will live under `skills/` in this repository and follow this
+annex.
 
 Skills mirror **operations, not structure**: an agent doesn't need a
 skill per directory — it needs the write discipline, the find
-discipline, the maintenance duties, and the evolution procedure. Four
-skills, no more.
+discipline, the maintenance duties, and the evolution procedure. One
+skill is the exception by design: `using-engram` is orientation, not
+operation — it exists so the others get invoked. The set is open: a
+recurring discipline earns its skill (the traction rule applies to
+skills too — a natural future candidate is a dedicated type-authoring
+skill, split out of `engram-evolve` when schema creation proves to
+deserve its own discipline).
 
 They are runtime-neutral by construction and reach runtimes through
 the adapters annex (sync/vendoring), or simply by being read — each
@@ -20,6 +26,47 @@ skill is plain markdown an agent can follow with filesystem tools
 alone.
 
 ---
+
+## using-engram
+
+**Trigger:** session start, or first contact with an engram store — an
+adoption block naming stores, a `.engram/root.yaml` encountered, or
+any task that touches memory content.
+
+**Orientation, not operation.** This skill carries exactly what a
+store cannot tell an agent that hasn't opened it yet: that stores
+exist, how to recognize them, and which skill to invoke. It points at
+the store and at the other skills; it never restates what they norm —
+the store is self-describing (core D2), and duplicated protocol is
+drift waiting to happen.
+
+**Content:**
+
+1. **The picture.** An engram store is a self-describing tree of
+   markdown records: files are the truth (D1), every directory maps
+   itself (D2), integrity is deterministically checkable (D3), reading
+   is lazy (D4).
+2. **Locate the stores.** The project's adoption block (core §13)
+   names them; absent one, any directory containing
+   `.engram/root.yaml` is a store root.
+3. **Enter through the map** (Protocol P1): read the store's root
+   README before anything else — it carries the store's own protocol.
+   Never bulk-read the tree.
+4. **Route by operation:**
+
+   | Task at hand | Skill |
+   |---|---|
+   | Add or edit store content | `engram-write` |
+   | Retrieve, answer, verify existence | `engram-find` |
+   | Upkeep, drift, duplicates, orphans | `engram-maintain` |
+   | Schema or type changes | `engram-evolve` |
+
+5. **Red flags** — each of these thoughts means stop and route through
+   the skill instead: "I'll just write the file directly" (the write
+   path exists for a reason); "grep found nothing, so it doesn't
+   exist" (absence has a bar); "I'll read the whole tree to be safe"
+   (D4 forbids it); "the schema is obvious from the other records"
+   (read the schema file, prose included).
 
 ## engram-write
 
@@ -34,9 +81,11 @@ information, updating a living record, promoting distilled claims.
    `note` (never force structure), and note the recurrence signal: a
    third same-shaped note means a missing type.
 2. **Place by the maps.** Read the target directory's README and unread
-   ancestors' (Protocol P2); follow `## Placement`. If placement is
-   genuinely ambiguous, the READMEs are defective — fix the map or
-   surface the gap; don't guess silently.
+   ancestors' (Protocol P2), and with them the `pinned: true` records
+   of the target directory and its ancestors — they carry the
+   conventions the write must respect; follow `## Placement`. If
+   placement is genuinely ambiguous, the READMEs are defective — fix
+   the map or surface the gap; don't guess silently.
 3. **Respect earned existence.** Living-record types (person, project)
    are created on recurrence, not first sight (base profile §4). First
    sight is a line, not a file.
@@ -65,18 +114,23 @@ before writing, verification of a claim's existence.
 1. **Descend the maps.** Root README → catalog descriptions → child
    READMEs, opening only what the descriptions justify (D4). The
    catalog line is the contract; trust it over guessed paths.
-2. **Search content in parallel**, not as fallback: grep-class search
+2. **Pinned records ride with the maps.** Before reading records under
+   a directory, also read the `pinned: true` records of that directory
+   and of its ancestors — they are the context the rest assumes.
+   Catalogs mark them `(pinned)`, so they are visible without opening
+   frontmatter.
+3. **Search content in parallel**, not as fallback: grep-class search
    over the store with the query's own terms, then **at least one
    reformulation** (synonyms, the entity's other names, the date's
    neighborhood). Frontmatter is greppable by design — `type:`,
    link targets, `description` lines.
-3. **Follow the graph.** From any hit, walk its typed links and body
+4. **Follow the graph.** From any hit, walk its typed links and body
    wikilinks; from an entity record, its journal anchors. The link
    structure is retrieval infrastructure, not decoration.
-4. **Mind the clocks.** A `fact` with closed `valid_until` was true,
+5. **Mind the clocks.** A `fact` with closed `valid_until` was true,
    isn't now; elapsed time is computed at read time from stored
    anchors. Never present superseded claims as current.
-5. **Absence has a bar** (Protocol P3): claimed only after catalog
+6. **Absence has a bar** (Protocol P3): claimed only after catalog
    descent *and* reformulated content search. Until then: "not found so
    far", with where you looked.
 

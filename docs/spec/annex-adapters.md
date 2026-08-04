@@ -1,7 +1,7 @@
 # Annex — Runtime adapters (non-normative, draft)
 
 **Status:** Draft
-**Revision:** 2026-08-04
+**Revision:** 2026-08-05
 
 How engram stores plug into concrete agent runtimes. Nothing here is
 required for conformance: a store is self-describing (core D2), so the
@@ -22,7 +22,7 @@ Every runtime integration is some subset of:
 | Surface | What it does | Backing |
 |---|---|---|
 | Adoption block | Tells agents where the stores are | Core §13 |
-| Skills | Installs the four disciplines | Skills annex |
+| Skills | Installs the canonical disciplines | Skills annex |
 | Hook binding | Runs fix/gate/derive at real changeset boundaries | Core §8 |
 | Validation feedback | Puts check findings in the agent's loop | Core §9 |
 | Serving layer | Exposes search/read/write as tools | Optional, last resort |
@@ -46,8 +46,11 @@ runtime that commits — including humans in an editor.
 
 Packaged as a **plugin** (planned: `adapters/claude-code/`):
 
-- **Skills** — the four canonical skills, compiled in. Claude Code
-  consumes the Agent Skills format natively.
+- **Skills** — the canonical skills, compiled in. Claude Code
+  consumes the Agent Skills format natively; `using-engram` plays the
+  session-start orientation role there (its store-list injection
+  overlaps the `SessionStart` hook below — an adapter implements one
+  of the two, not both).
 - **Hooks** —
   - `PostToolUse` on `Write|Edit` matching store paths → `engram check
     --changed <file>`, feeding findings straight back into the loop
@@ -67,7 +70,7 @@ canonical skill and installed copy is detected, never guessed
 - The **adoption block** in `AGENTS.md` (core §13) is the load-bearing
   piece: it names the store roots and points at their READMEs, which
   carry the protocol.
-- Runtimes with Agent Skills support get the same four skills via
+- Runtimes with Agent Skills support get the same canonical skills via
   vendoring (`engram sync codex`, planned).
 - Runtimes without skills support still work: the root README's
   `## Agent Protocol` section (core Appendix A.1) is deliberately
