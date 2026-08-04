@@ -32,3 +32,7 @@ Runtime-integration material (CLI bindings, plugins, MCP) lives in
   `gopkg.in/yaml.v3`, and `github.com/santhosh-tekuri/jsonschema`.
 - `examples/` must always conform to the spec at HEAD. Until the CLI
   exists this is enforced by review; afterwards by `engram check` in CI.
+- Commits in this repo are unsigned (`commit.gpgsign false`, local
+  config): the owner's global git signs via 1Password, whose agent does
+  not respond from unattended agent sessions. Do not flip it back;
+  Albert re-signs by rebase if it ever matters.
