@@ -2,7 +2,7 @@
 
 **Version:** v1
 **Status:** Draft
-**Revision:** 2026-08-04
+**Revision:** 2026-08-05
 
 ## Table of contents
 
@@ -76,8 +76,10 @@ This specification defines three independent conformance targets:
 
 - **Store conformance** — a directory tree satisfies the structural and
   content rules of [§2](#2-store-identity-and-layout) through
-  [§7](#7-links), which is exactly: no findings with an `E` code from
-  the static rules of [Appendix B](#appendix-b--check-catalog-normative).
+  [§7](#7-links) and the hook declaration rules of
+  [§8.2](#82-hook-declarations), which is exactly: no findings with an
+  `E` code from the static rules of
+  [Appendix B](#appendix-b--check-catalog-normative).
 - **Tool conformance** — software that reads, writes, or validates
   stores honors the obligations marked for consumers and executors.
 - **Agent conformance** — an agent working in a store follows the Agent
@@ -184,8 +186,10 @@ define sidecar conventions for describing assets; this core does not.
 
 Record and asset filenames:
 
-- MUST NOT contain the characters `[`, `]`, `|`, `#`, newline, or any
-  character forbidden by the host filesystem;
+- MUST NOT contain the characters `[`, `]`, `|`, `#`, space, `(`, `)`,
+  any C0 control character (newline included), or any character
+  forbidden by the host filesystem — generated catalog lines embed
+  filenames in markdown links, and these characters would break them;
 - MUST NOT begin with a dot (that would make them reserved);
 - SHOULD be lowercase kebab-case slugs (`[a-z0-9]` and single hyphens)
   plus extension, because filenames are link targets and identity
@@ -195,8 +199,11 @@ Two entries in the same directory MUST NOT differ only by character
 case: stores are required to remain usable on case-insensitive
 filesystems.
 
-All markdown files MUST be encoded in UTF-8. LF line endings are
-RECOMMENDED.
+All markdown files MUST be encoded in UTF-8 and MUST NOT begin with a
+byte-order mark. Markdown structure normed by this specification —
+headings, fenced code blocks, inline code spans, the catalog block —
+is interpreted per CommonMark. Character counts in this specification
+are Unicode code points. LF line endings are RECOMMENDED.
 
 ---
 
@@ -262,8 +269,11 @@ Every record MUST carry:
 Every record MAY carry:
 
 - `pinned` — boolean. A portable hot/cold signal: a runtime that
-  preloads store content SHOULD prefer records with `pinned: true`.
-  This specification defines no further pinning semantics.
+  preloads store content SHOULD prefer records with `pinned: true`,
+  and generated catalogs mark pinned records ([§5.2](#52-the-catalog)).
+  The co-reading discipline that accompanies pinned records is taught
+  by the canonical skills (skills annex); this core defines no further
+  pinning semantics.
 
 No other universal label exists. Creation and modification timestamps
 are deliberately not labels: the store's version-control history is
@@ -298,14 +308,18 @@ Unknown README frontmatter keys are tool-specific; consumers MUST
 ignore keys they do not recognize. READMEs do not carry `type`: maps
 are not records and do not participate in the type system.
 
-The body MUST state the directory's purpose and, when the directory
+The body SHOULD state the directory's purpose and, when the directory
 accepts records, its **placement rules** — what belongs here and what
 does not, phrased so an agent deciding where to write can decide
 without asking. The `## Placement` heading is RECOMMENDED for that
-section.
+section. Body quality is not mechanically checkable and therefore
+never a conformance finding; it is doctor-class territory
+([§9.2](#92-advisory-diagnostics)) — but the Agent Protocol holds
+writers to it ([§11](#11-agent-protocol), P2, P7).
 
-A README describes its own directory. It MUST NOT describe the internal
-content of descendant directories beyond their one-line descriptions:
+A README describes its own directory. It SHOULD NOT describe the
+internal content of descendant directories beyond their one-line
+descriptions:
 each child README is the authority on its own directory, and duplicated
 descriptions are staleness waiting to happen.
 
@@ -327,11 +341,16 @@ prose.
 
 Catalog content, in order:
 
-1. one line per child directory, alphabetical:
+1. one line per child directory:
    `- [<name>/](<name>/README.md) — <that README's description>`
 2. unless `catalog: dirs`: one line per record directly in this
-   directory, alphabetical:
-   `- [<name>](<name>.md) — <that record's description>`
+   directory:
+   `- [<name>](<name>.md) — <that record's description>`,
+   or, when the record carries `pinned: true`:
+   `- [<name>](<name>.md) (pinned) — <that record's description>`
+
+Within each group, lines are sorted by `<name>`, lexicographic over its
+UTF-8 bytes. The separator is space, em-dash (U+2014), space.
 
 Assets are not cataloged; when they matter, the README's prose mentions
 them. `catalog: dirs` exists for large homogeneous collections
@@ -438,7 +457,9 @@ records would be impossible.
 The OPTIONAL `body` mapping supports:
 
 - `required-sections` — list of strings; the record's body MUST contain
-  a `## <string>` heading for each entry.
+  a `## <string>` heading for each entry. A heading satisfies an entry
+  when it is an ATX level-2 heading whose text, after trimming
+  whitespace, equals the entry exactly, case-sensitively.
 
 This is deliberately not JSON Schema: it is a distinct, tiny assertion
 engine over the markdown body, kept separate so that no reader is
@@ -519,13 +540,21 @@ A wikilink in a record body MUST resolve to an existing record.
 Wikilinks target records only — not READMEs, not assets, not
 directories.
 
+Link extraction — for wikilinks and markdown links alike — ignores
+fenced code blocks and inline code spans: link syntax inside code is
+content, not a link. A record can therefore document link syntax or
+carry a template without creating findings.
+
 ### 7.2 Frontmatter link values
 
 Frontmatter fields hold wikilinks as plain YAML strings, quoted:
-`people: ["[[people/jane-doe]]"]`. Fields whose schema position carries
-`x-engram-link` are validated per [§6.7](#67-link-fields); a wikilink
-in a frontmatter position without `x-engram-link` is validated for
-resolution like a body link.
+`people: ["[[people/jane-doe]]"]`. A frontmatter string is treated as
+a wikilink if and only if the entire string, after trimming
+whitespace, is a wikilink; link syntax embedded in longer prose is not
+extracted. Fields whose schema position carries `x-engram-link` are
+validated per [§6.7](#67-link-fields); a wikilink in a frontmatter
+position without `x-engram-link` is validated for resolution like a
+body link.
 
 ### 7.3 Asset and external links
 
@@ -583,6 +612,10 @@ ordering prefix and `<event>` is one of the events of
 A hook's **scope** is the subtree of the directory whose `.engram/`
 declares it. Absent `on`, the hook applies to every changed record and
 asset in its scope.
+
+Globs in `on.paths` use gitignore-style wildmatch semantics — `*`,
+`?`, character classes, and `**` crossing directory boundaries —
+matched against paths relative to the hook's scope.
 
 ### 8.3 Events
 
@@ -943,7 +976,7 @@ changeset; `W` findings are advisory.
 | E105 | Invalid or unparsable `root.yaml` |
 | E106 | Entries in one directory differing only by case |
 | E107 | Filename contains a forbidden character ([§2.6](#26-filenames-and-encoding)) |
-| E108 | Markdown file not valid UTF-8 |
+| E108 | Markdown file not valid UTF-8, or begins with a byte-order mark |
 
 ### E2xx — Records and maps
 
@@ -954,10 +987,11 @@ changeset; `W` findings are advisory.
 | E203 | `type` resolves to no visible schema |
 | E204 | Missing, empty, multi-line, or over-long `description` |
 | E205 | Frontmatter key with reserved `engram-` prefix |
-| E206 | README missing required frontmatter (`description`) |
+| E206 | README `description` missing, empty, multi-line, or over-long |
 | E207 | Invalid `catalog` value in README frontmatter |
+| E208 | `pinned` present but not boolean |
 
-### E3xx — Schemas and typed content
+### E3xx — Schemas, hooks, and typed content
 
 | Code | Finding |
 |---|---|
@@ -968,6 +1002,7 @@ changeset; `W` findings are advisory.
 | E305 | Schema sets `additionalProperties: false` without declaring permitted universal labels |
 | E306 | Mutually exclusive policies both set |
 | E307 | Root does not define the `note` baseline, or `note` violates [§6.3](#63-the-note-baseline) |
+| E308 | Hook declaration invalid (unparsable YAML, unknown event, invalid `stage`, `name`/filename mismatch, or stage incompatible with the event) |
 
 ### E4xx — Links and catalogs
 
