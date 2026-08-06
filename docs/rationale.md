@@ -43,14 +43,16 @@ subordinated infrastructure.
    README contract with generated catalogs (maps that cannot silently
    drift), lazy descent by one-line descriptions (MemFS's proven
    catalog pattern, made mandatory), and the find discipline's forced
-   reformulation.
+   reformulation. "Lazy" constrains model-context loading, not storage
+   I/O: validators, grep, and index builders may still scan the tree
+   mechanically.
 2. **Facts change truth-value over time.** A file gives you current
    state or a log; "this was true until March" lives nowhere. The
    graph systems (Graphiti/Zep) win benchmarks on exactly this. engram
    takes the lesson without the graph database: bi-temporal fields and
-   supersede-never-edit as *schema-level* contract (base profile
-   `fact`), enforced socially by protocol and mechanically where
-   changeset tooling exists.
+   supersede-never-edit as a schema-backed discipline (the curated
+   `fact` schema plus Protocol P5). Cross-record consistency remains
+   advisory in v1 rather than pretending to be mechanically enforced.
 3. **Query-free recall.** When the agent doesn't know what to search
    for, embeddings beat grep. engram's position: build any index you
    want — as *derived state*, rebuilt from files, never authoritative
@@ -64,9 +66,11 @@ Every system surveyed couples its memory format to its runtime: Letta
 memory needs Letta, Mem0 memories live in Mem0's pipeline, Zep's graph
 speaks Zep's API. The store outlives any runtime choice — ten years of
 notes must not be hostage to this year's framework. Hence a *format*
-standard: markdown + conventions any agent with file tools can operate,
-with conformance defined mechanically (check), not by which software is
-installed.
+standard: portable markdown snapshots any agent with file tools can
+read, with conformance defined mechanically (check), not by a memory
+service. Git is required only to turn those snapshots into an accepted,
+writable history; it does not mediate content reads or define record
+meaning.
 
 The direct ancestors, and what was taken from each:
 
@@ -84,8 +88,40 @@ The direct ancestors, and what was taken from each:
 - **cortex (first adopter):** the writing rules a real second brain
   needed in practice — anchors-not-elapsed-time, provenance that never
   launders, records earned by recurrence, append-only journal, maps
-  carrying no state. Generalized into protocol and profile; the
+  carrying no state. Generalized into protocol and curated schemas; the
   cortex-specific parts stayed home.
+
+## Why managed writes use Git
+
+A persistent memory write is rarely one file. Creating a record may
+also update a map, add a schema, migrate related records, and rewrite
+links. Treating each filesystem edit as accepted immediately exposes
+half-complete states and leaves no stable base for append-only,
+immutable, migration, or rename policies.
+
+Git already provides the missing primitives: a familiar working draft,
+an index that declares the candidate, immutable trees, exact parents,
+content-addressed commits, compare-and-swap ref updates, portable
+history, and synchronization. Engram therefore treats `HEAD` as
+accepted memory while agents edit the worktree and stage only the
+bounded operation they own. At commit time the initial candidate in the
+index is materialized disposably; preparation produces
+the final candidate for validation. The net tree difference is the
+changeset; successful acceptance produces one commit.
+Commit atomicity is the logical boundary, while one editor per checkout,
+shared ref/worktree acceptance locks, and safe post-commit reconciliation
+protect the visible repository worktree.
+
+Giving each reusable memory its own repository also separates ownership
+from consumer projects. Several projects can attach the same checkout
+without adding memory commits to their code histories. A project-local
+nested checkout is viable when deliberately ignored by the outer Git;
+an accidental embedded repository is not a discovery mechanism.
+
+The snapshot/managed-store distinction preserves the escape hatch: an
+archive or copied tree remains readable and statically validatable
+without `.git`, but it is not a writable accepted history until
+initialized or checked out as a managed store.
 
 ## Deliberate absences
 
@@ -96,9 +132,13 @@ The direct ancestors, and what was taken from each:
   Stable IDs require a resolver index to mean anything; an index the
   store can't be read without violates D1. Revisit only if rename pain
   proves real (v2 question).
-- **No embedded execution model.** Hooks are declarations; executors
-  are environment. The spec that defines *who runs things* has coupled
-  itself to a runtime — the exact mistake the standard exists to avoid.
+- **No embedded memory service.** Optional `prepare-changeset` programs
+  use a small process protocol, but the store does not choose a
+  scheduler, sandbox, daemon, database, or bundled language runtime.
+  Git owns accepted writable history; a trusted managed-commit engine
+  executes hooks and owns the complete acceptance transaction. Local Git
+  integration may guard that boundary but cannot replace it. Exported
+  snapshots still need neither to be read or checked statically.
 - **No timestamps in frontmatter.** Version control is the bookkeeping
   clock; frontmatter carries only *world* clocks (`valid_until`), never
   copies of what git already knows. Two clocks in one file always
@@ -109,6 +149,6 @@ The direct ancestors, and what was taken from each:
 
 ## The bet, in one line
 
-Structure in the files, discipline in the protocol, enforcement at the
-changeset, intelligence in the agent — and every layer above the files
-rebuildable, so none of them can hold the memory hostage.
+Structure in the files, accepted history in Git, discipline in the
+protocol, enforcement at the changeset, intelligence in the agent — and
+every derived layer rebuildable, so none can hold the memory hostage.

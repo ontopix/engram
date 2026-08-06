@@ -1,35 +1,55 @@
 # engram — Agent Entrypoint
 
 **Purpose:** this repository hosts the engram standard: the normative
-spec (`docs/spec/`), the canonical base-profile schemas
-(`profiles/base/`), the example stores (`examples/`), and — later — the
+core spec and its independently statused annexes (`docs/spec/`), the
+reference CLI contract (`docs/cli/`), the curated schema inventory
+(`schemas/`), the example snapshots (`examples/`), and — later — the
 `engram` reference CLI (Go).
 
 **Boundaries:** the spec is the authority; the CLI is a non-normative
 reference implementation. Never add references to a specific CLI
-command or implementation to the normative sections of `docs/spec/`.
-Runtime-integration material (CLI bindings, plugins, MCP) lives in
-`docs/spec/annex-adapters.md`, which is explicitly non-normative.
+command or implementation to normative `docs/spec/` sections. The
+normative Git annex defines managed-store semantics without prescribing
+CLI commands. Filesystem runtime bindings and plugin guidance live in
+`docs/spec/annex-adapters.md`, which is explicitly non-normative; the
+reference command surface lives in `docs/cli/README.md`.
 
 ## Layout
 
 - `docs/spec/README.md` — core specification (normative, RFC 2119)
 - `docs/spec/annex-*.md` — annexes, independently versioned
+- `docs/spec/annex-git.md` — normative managed-store Git binding
+- `docs/cli/README.md` — non-normative reference CLI contract
+- `docs/implementation-plan.md` — non-normative phased implementation
+  roadmap and release gates
 - `docs/rationale.md` — non-normative reasoning and evidence
-- `profiles/base/schemas/*.md` — canonical schema files; the annex
-  declares them normative artifacts
-- `examples/minimal/` — smallest conforming store; must stay conforming
+- `schemas/*.md` — non-normative curated schemas; `note.md` mirrors the
+  normative core skeleton
+- `skills/*/SKILL.md` — canonical runtime-neutral skill artifacts once
+  materialized by implementation milestone M0
+- `examples/minimal/` — small conforming snapshot; must stay conforming
 
 ## Constraints
 
-- Spec text uses RFC 2119 keywords and references no implementation.
+- Normative text uses RFC 2119 keywords. The Git annex may norm Git
+  semantics, but normative documents never depend on reference CLI
+  commands, Go packages, or one product implementation.
+- Keep managed-write terminology exact: worktree edits are a **working
+  draft**; the staged/index tree is the **initial candidate**;
+  hook output is the **final candidate**; a **transaction** is the
+  one-shot acceptance attempt, never an editing session or CLI handle.
 - Normative changes update the revision date and `CHANGELOG.md`
   (see `CONTRIBUTING.md`).
-- `profiles/base/schemas/` and the formats defined in the core spec
-  must not drift apart: a change to the schema-file format lands in the
-  same commit as the updated canonical schemas and examples.
-- Future CLI: Go, dependencies limited to the stdlib,
-  `gopkg.in/yaml.v3`, and `github.com/santhosh-tekuri/jsonschema`.
+- `schemas/` and the formats defined in the core spec must not drift
+  apart: a change to the schema-file format lands in the same commit as
+  the updated curated schemas and examples. `schemas/note.md` remains
+  byte-identical to core Appendix A.3.
+- Future CLI: Go, direct package dependencies limited to the stdlib,
+  `go.yaml.in/yaml/v3`,
+  `github.com/santhosh-tekuri/jsonschema/v6`, and
+  `github.com/yuin/goldmark`; versions and transitive modules are pinned
+  by `go.mod`/`go.sum`. Git integration invokes the system Git executable
+  rather than embedding another Git implementation.
 - `examples/` must always conform to the spec at HEAD. Until the CLI
   exists this is enforced by review; afterwards by `engram check` in CI.
 - Commits in this repo are unsigned (`commit.gpgsign false`, local

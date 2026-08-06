@@ -36,7 +36,7 @@ starts. The first version must already carry a Status worth reading.
 
 ## Fields
 
-- `name` — kebab-case, SHOULD equal the filename: it is the inbound
+- `name` — kebab-case, recommended to equal the filename: it is the inbound
   wikilink target, so renaming it means rewriting links (core §7.4).
 - `status` — set on evidence, never on elapsed time. A project silent
   for three months is still `active` until something proves otherwise;

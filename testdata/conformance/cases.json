@@ -1,0 +1,359 @@
+{
+  "version": 1,
+  "seed": "examples/minimal",
+  "common": [
+    {
+      "operation": "write_text",
+      "path": "README.md",
+      "source": "testdata/conformance/files/root-catalog-none.md"
+    }
+  ],
+  "cases": [
+    {
+      "id": "yaml-core-plain-date",
+      "description": "A plain YAML date scalar resolves to a string and satisfies asserted date format validation.",
+      "kind": "snapshot",
+      "snapshot": {
+        "operations": [
+          {
+            "operation": "write_text",
+            "path": ".engram/schemas/dated-event.md",
+            "source": "testdata/conformance/files/date-schema.md"
+          },
+          {
+            "operation": "write_text",
+            "path": "dated-event.md",
+            "source": "testdata/conformance/files/date-record.md"
+          }
+        ]
+      },
+      "expected": {
+        "findings": []
+      }
+    },
+    {
+      "id": "normed-text-encoding",
+      "description": "UTF-8 BOM, CRLF, and UTF-16 each produce E108 without dependent parse findings.",
+      "kind": "snapshot",
+      "snapshot": {
+        "operations": [
+          {
+            "operation": "write_base64",
+            "path": ".engram/root.yaml",
+            "content": "77u/ZW5ncmFtOiAxCg=="
+          },
+          {
+            "operation": "write_base64",
+            "path": "crlf.md",
+            "content": "LS0tDQp0eXBlOiBub3RlDQpkZXNjcmlwdGlvbjogIkNSTEYgcmVjb3JkLiINCi0tLQ0KIyBDUkxGDQo="
+          },
+          {
+            "operation": "write_base64",
+            "path": "utf16.md",
+            "content": "//4tAC0ALQAKAHQAeQBwAGUAOgAgAG4AbwB0AGUACgBkAGUAcwBjAHIAaQBwAHQAaQBvAG4AOgAgACIAVQBUAEYALQAxADYAIAByAGUAYwBvAHIAZAAuACIACgAtAC0ALQAKACMAIABVAFQARgAtADEANgAKAA=="
+          }
+        ]
+      },
+      "expected": {
+        "findings": [
+          {"code": "E108", "path": ".engram/root.yaml"},
+          {"code": "E108", "path": "crlf.md"},
+          {"code": "E108", "path": "utf16.md"}
+        ]
+      }
+    },
+    {
+      "id": "catalog-none-forbids-region",
+      "description": "A catalog region present under catalog none produces E405.",
+      "kind": "snapshot",
+      "snapshot": {
+        "operations": [
+          {
+            "operation": "write_text",
+            "path": "README.md",
+            "source": "testdata/conformance/files/catalog-none-with-region.md"
+          }
+        ]
+      },
+      "expected": {
+        "findings": [
+          {"code": "E405", "path": "README.md"}
+        ]
+      }
+    },
+    {
+      "id": "local-link-components",
+      "description": "Fragments, queries, CommonMark escapes, and an empty local path do not alter filesystem resolution.",
+      "kind": "snapshot",
+      "snapshot": {
+        "operations": [
+          {
+            "operation": "write_text",
+            "path": "link-target.md",
+            "source": "testdata/conformance/files/link-target.md"
+          },
+          {
+            "operation": "write_text",
+            "path": "links-valid.md",
+            "source": "testdata/conformance/files/links-valid.md"
+          }
+        ]
+      },
+      "expected": {
+        "findings": []
+      }
+    },
+    {
+      "id": "local-link-invalid-paths",
+      "description": "An escaping path and a percent-bearing invalid segment aggregate as E403 at their source record.",
+      "kind": "snapshot",
+      "snapshot": {
+        "operations": [
+          {
+            "operation": "write_text",
+            "path": "links-invalid.md",
+            "source": "testdata/conformance/files/links-invalid.md"
+          }
+        ]
+      },
+      "expected": {
+        "findings": [
+          {"code": "E403", "path": "links-invalid.md"}
+        ]
+      }
+    },
+    {
+      "id": "unknown-x-engram-keyword",
+      "description": "An unassigned keyword in the reserved x-engram namespace produces E303.",
+      "kind": "snapshot",
+      "snapshot": {
+        "operations": [
+          {
+            "operation": "write_text",
+            "path": ".engram/schemas/unknown-extension.md",
+            "source": "testdata/conformance/files/unknown-x-engram-schema.md"
+          }
+        ]
+      },
+      "expected": {
+        "findings": [
+          {"code": "E303", "path": ".engram/schemas/unknown-extension.md"}
+        ]
+      }
+    },
+    {
+      "id": "note-baseline-normal-form",
+      "description": "A valid JSON Schema that strengthens note description minLength produces E307.",
+      "kind": "snapshot",
+      "snapshot": {
+        "operations": [
+          {
+            "operation": "write_text",
+            "path": ".engram/schemas/note.md",
+            "source": "testdata/conformance/files/note-minlength-50.md"
+          }
+        ]
+      },
+      "expected": {
+        "findings": [
+          {"code": "E307", "path": ".engram/schemas/note.md"}
+        ]
+      }
+    },
+    {
+      "id": "readme-frontmatter-unparsable",
+      "description": "Unparsable README frontmatter produces E209 and suppresses findings requiring its parsed values.",
+      "kind": "snapshot",
+      "snapshot": {
+        "operations": [
+          {
+            "operation": "write_text",
+            "path": "README.md",
+            "source": "testdata/conformance/files/invalid-readme.md"
+          }
+        ]
+      },
+      "expected": {
+        "findings": [
+          {"code": "E209", "path": "README.md"}
+        ]
+      }
+    },
+    {
+      "id": "universal-label-scalar-types",
+      "description": "Non-string description and type values exercise complete code coverage and path/code ordering.",
+      "kind": "snapshot",
+      "snapshot": {
+        "operations": [
+          {
+            "operation": "write_text",
+            "path": "bad-description.md",
+            "source": "testdata/conformance/files/bad-description.md"
+          },
+          {
+            "operation": "write_text",
+            "path": "bad-type.md",
+            "source": "testdata/conformance/files/bad-type.md"
+          }
+        ]
+      },
+      "expected": {
+        "findings": [
+          {"code": "E204", "path": "bad-description.md"},
+          {"code": "E301", "path": "bad-description.md"},
+          {"code": "E202", "path": "bad-type.md"}
+        ]
+      }
+    },
+    {
+      "id": "immutable-deletion-uses-base",
+      "description": "Deleting an immutable record resolves its type and policy from the base state.",
+      "kind": "changeset",
+      "base": {
+        "operations": [
+          {
+            "operation": "write_text",
+            "path": ".engram/schemas/fixed.md",
+            "source": "testdata/conformance/files/immutable-schema.md"
+          },
+          {
+            "operation": "write_text",
+            "path": "fixed.md",
+            "source": "testdata/conformance/files/immutable-record.md"
+          }
+        ]
+      },
+      "candidate": {
+        "operations": [
+          {
+            "operation": "write_text",
+            "path": ".engram/schemas/fixed.md",
+            "source": "testdata/conformance/files/immutable-schema.md"
+          }
+        ]
+      },
+      "expected": {
+        "status": "complete",
+        "findings": [
+          {"code": "E501", "path": "fixed.md"}
+        ]
+      }
+    },
+    {
+      "id": "append-only-compares-base-bytes",
+      "description": "A non-prefix rewrite of an append-only record produces E502.",
+      "kind": "changeset",
+      "base": {
+        "operations": [
+          {
+            "operation": "write_text",
+            "path": ".engram/schemas/append-log.md",
+            "source": "testdata/conformance/files/append-only-schema.md"
+          },
+          {
+            "operation": "write_text",
+            "path": "append-log.md",
+            "source": "testdata/conformance/files/append-only-base.md"
+          }
+        ]
+      },
+      "candidate": {
+        "operations": [
+          {
+            "operation": "write_text",
+            "path": ".engram/schemas/append-log.md",
+            "source": "testdata/conformance/files/append-only-schema.md"
+          },
+          {
+            "operation": "write_text",
+            "path": "append-log.md",
+            "source": "testdata/conformance/files/append-only-candidate.md"
+          }
+        ]
+      },
+      "expected": {
+        "status": "complete",
+        "findings": [
+          {"code": "E502", "path": "append-log.md"}
+        ]
+      }
+    },
+    {
+      "id": "nfd-entry-name",
+      "description": "A decomposed entry name produces E107 at the containing directory and is pruned.",
+      "kind": "snapshot",
+      "snapshot": {
+        "operations": [
+          {
+            "operation": "write_text",
+            "path": "cafe\u0301.md",
+            "source": "testdata/conformance/files/nfd-record.md"
+          }
+        ]
+      },
+      "expected": {
+        "findings": [
+          {"code": "E107", "path": "."}
+        ]
+      }
+    },
+    {
+      "id": "unicode-full-case-fold",
+      "description": "Sharp-s expansion collides with uppercase STRASSE under Unicode full default case folding.",
+      "kind": "snapshot",
+      "snapshot": {
+        "operations": [
+          {
+            "operation": "write_text",
+            "path": "STRASSE.md",
+            "source": "testdata/conformance/files/casefold-upper.md"
+          },
+          {
+            "operation": "write_text",
+            "path": "stra\u00dfe.md",
+            "source": "testdata/conformance/files/casefold-sharp-s.md"
+          }
+        ]
+      },
+      "expected": {
+        "findings": [
+          {"code": "E106", "path": "."},
+          {"code": "W901", "path": "STRASSE.md"},
+          {"code": "W901", "path": "stra\u00dfe.md"}
+        ]
+      }
+    },
+    {
+      "id": "finding-aggregation",
+      "description": "Two unresolved wikilinks in one record emit one E401 identity.",
+      "kind": "snapshot",
+      "snapshot": {
+        "operations": [
+          {
+            "operation": "write_text",
+            "path": "two-missing-links.md",
+            "source": "testdata/conformance/files/two-missing-links.md"
+          }
+        ]
+      },
+      "expected": {
+        "findings": [
+          {"code": "E401", "path": "two-missing-links.md"}
+        ]
+      }
+    },
+    {
+      "id": "changeset-base-unavailable",
+      "description": "A missing non-initial base yields indeterminate rather than a successful transition result.",
+      "kind": "changeset",
+      "base": "unavailable",
+      "candidate": {
+        "operations": []
+      },
+      "expected": {
+        "status": "indeterminate",
+        "findings": []
+      }
+    }
+  ]
+}

@@ -29,7 +29,7 @@ missing type, not a reason to force structure into notes.
 ## Fields
 
 `description` is the record's catalog line: write it for someone who
-does not know the file exists. `tags` are OPTIONAL free labels; prefer
+does not know the file exists. `tags` are optional free labels; prefer
 links to records over tags when the target deserves existence.
 
 ## Template

@@ -36,7 +36,7 @@ claim in the store traceable to the moment it arrived.
 
 ## Directory setup
 
-The README of a journal directory SHOULD set `catalog: dirs` — dated
+The README of a journal directory is recommended to set `catalog: dirs` — dated
 records are addressed by name, and a 365-line catalog is churn without
 navigation value.
 

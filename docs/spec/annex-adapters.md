@@ -1,14 +1,19 @@
 # Annex — Runtime adapters (non-normative, draft)
 
+**Version:** v1
 **Status:** Draft
-**Revision:** 2026-08-05
+**Revision:** 2026-08-06
+**Normative status:** Non-normative
 
-How engram stores plug into concrete agent runtimes. Nothing here is
-required for conformance: a store is self-describing (core D2), so the
-universal integration — an agent with filesystem tools reading the root
-README and following the Agent Protocol it carries — needs no adapter
-at all. Adapters exist to remove friction and to enforce mechanically
-what the protocol asks politely.
+How engram stores plug into concrete agent runtimes. Nothing here adds
+conformance rules: a snapshot is self-describing (core D2), so the
+universal read integration — an agent with filesystem tools reading the
+root README and following the Agent Protocol it carries — needs no
+adapter. Persistent writes use the normative Git annex; adapters remove
+friction around attachment, working drafts, staging, commits, and
+feedback. Discovery is not a trust decision: without an independently
+trusted `using-engram` skill or an equivalent host decision, core P0
+leaves the store read-only.
 
 The design bets that runtimes are already good at files: models are
 heavily post-trained on filesystem tools, which is precisely why the
@@ -21,26 +26,65 @@ Every runtime integration is some subset of:
 
 | Surface | What it does | Backing |
 |---|---|---|
-| Adoption block | Tells agents where the stores are | Core §13 |
-| Skills | Installs the canonical disciplines | Skills annex |
-| Hook binding | Runs fix/gate/derive at real changeset boundaries | Core §8 |
+| Attachment/adoption block | Tells a project where independent stores are | Core §12, Git annex §6 |
+| Skills | Installs trusted copies of the canonical disciplines | Skills annex |
+| Working-draft binding | Coordinates one editor and stages its initial candidate | Git annex §5 |
+| Commit binding | Materializes, prepares, validates, and accepts one commit | Git annex §4 |
+| Hook binding | Runs `prepare-changeset` once inside the commit attempt | Core §8 |
 | Validation feedback | Puts check findings in the agent's loop | Core §9 |
-| Serving layer | Exposes search/read/write as tools | Optional, last resort |
 
 ## 2. Git binding (runtime-agnostic)
 
-The natural changeset is the commit. `engram init --git` (planned)
-installs:
+A managed store owns its Git worktree; a consumer project merely
+attaches it. The normal agent-write path deliberately follows familiar
+Git staging while keeping acceptance stronger than a raw commit:
 
-- **pre-commit** → run the store's `pre-commit` cascade: `fix` hooks
-  (catalog regeneration, formatting — their edits join the commit),
-  then `gate` hooks (`engram check --changed`); any gate failure
-  rejects the commit.
-- **post-commit** → `derive` hooks: rebuild external indexes, mirrors,
-  notifications. Never writes inside the store.
+1. when separately authorized, synchronize the clean store before
+   editing;
+2. coordinate one automated editor for the checkout and let it assemble
+   the bounded operation in the working tree;
+3. stage only the authorized logical paths, making the index the
+   initial candidate and leaving unrelated unstaged bytes outside it;
+4. at commit time, resolve the accepted branch, acquire the shared ref
+   and worktree locks, then capture `HEAD` and the resolved index;
+5. verify the accepted lineage, materialize the initial candidate away
+   from the live worktree, and complete the boundary preflight;
+6. obtain the applicable `prepare-changeset` programs from base and
+   check local trust for their exact bytes;
+7. run the core §8 protocol and complete validation; and
+8. create one commit, compare-and-swap the accepted ref, and reconcile
+   the index and visible checkout only when safe.
 
-This binding alone turns the spec's guarantees mechanical for any
-runtime that commits — including humans in an editor.
+A local commit does not fetch or push. One physical store attached to
+several projects still has one accepted branch and repository worktree,
+so projects coordinate their complete edit-and-commit operations.
+Independent concurrent writers use separate clones or worktrees and
+integrate their commits later.
+
+A local `pre-commit` launcher inside the memory repository can guard the
+managed boundary, but it cannot own the whole transaction: it returns
+before Git creates the commit and therefore cannot retain the writer
+lock through compare-and-swap or perform post-update reconciliation.
+The launcher should consequently be a minimal POSIX `sh` wrapper that
+delegates to a private entrypoint of the managed-store engine and rejects
+an ordinary raw Git commit with guidance to use that engine. It does not
+prepare hooks or modify the index or worktree. Git hook installation is
+a convenience guard rather than a security boundary: bypassed hooks,
+amend, merge, and lower-level ref manipulation remain outside the
+supported write path. Because installation is repository-local state,
+store creation and clone tooling can install the launcher automatically
+and diagnostic tooling can report drift; no logical store file declares
+it.
+
+There is no core post-commit event. Rebuilding indexes or publishing
+mirrors is runtime automation outside the preparation protocol, because
+a program run before acceptance must not publish a candidate that may
+still be rejected.
+
+The managed commit engine uses repository plumbing without invoking the
+`pre-commit` guard. It alone owns preparation, commit creation,
+compare-and-swap, and reconciliation for the attempt. Hook programs
+remain stored with, and specific to, the memory repository.
 
 ## 3. Claude Code
 
@@ -48,67 +92,82 @@ Packaged as a **plugin** (planned: `adapters/claude-code/`):
 
 - **Skills** — the canonical skills, compiled in. Claude Code
   consumes the Agent Skills format natively; `using-engram` plays the
-  session-start orientation role there (its store-list injection
-  overlaps the `SessionStart` hook below — an adapter implements one
-  of the two, not both).
-- **Hooks** —
-  - `PostToolUse` on `Write|Edit` matching store paths → `engram check
-    --changed <file>`, feeding findings straight back into the loop
-    (write-pair events, cheap early feedback);
-  - `SessionStart` → inject the adoption block's store list, so entry
-    through the maps (P1) happens without prompting.
-- **No MCP required.** Claude Code's own file tools are the intended
-  interface; the store is designed for exactly them.
+  session-start orientation and trust-bootstrap role there. Its source
+  is verified independently of any store it evaluates. Store-list
+  injection overlaps the session-start hook below — an adapter
+  implements one of the two, not both.
+- **Writes** — an authorized write skill coordinates one editor for the
+  checkout, performs the bounded filesystem operation in its working
+  draft, stages only its paths, and requests one managed commit.
+  Per-write callbacks may provide early validation feedback but are not
+  acceptance boundaries. A session-start hook may inject the attachment
+  list, so entry through the maps (P1) happens without prompting.
+- **Filesystem only.** Claude Code's own file tools are the intended
+  interface; the store is designed for exactly them and exposes no
+  separate memory-serving protocol.
 
-Sync of skills follows the compiled-copy pattern: materialized copies
-with a recorded source path and content digest, so drift between
-canonical skill and installed copy is detected, never guessed
-(the `.agents/` bridge established this pattern; engram reuses it).
+The adapter packages the canonical `skills/<slug>/SKILL.md` artifacts
+without changing their bytes. A project-scoped direct installation uses
+`.claude/skills/<slug>/SKILL.md`; distribution may instead use Claude
+Code's plugin mechanism. Ownership and updates belong to that adapter or
+package manager, not to a store or its content.
 
 ## 4. Codex and AGENTS.md-first runtimes
 
-- The **adoption block** in `AGENTS.md` (core §13) is the load-bearing
-  piece: it names the store roots and points at their READMEs, which
-  carry the protocol.
-- Runtimes with Agent Skills support get the same canonical skills via
-  vendoring (`engram sync codex`, planned).
+- The **adoption block** in `AGENTS.md` (core §12) is the load-bearing
+  discovery piece: it names the store roots and points at their READMEs,
+  but does not transfer repository ownership or establish trust or
+  authorization. A store may be shared by several unrelated projects.
+- Runtimes with Agent Skills support get the same canonical skills by
+  digest-checked vendoring or a skills-only plugin. A project-scoped
+  Codex installation uses `.agents/skills/<slug>/SKILL.md`. The trusted
+  `using-engram` copy establishes the operating mode before store prose
+  is followed.
 - Runtimes without skills support still work: the root README's
   `## Agent Protocol` section (core Appendix A.1) is deliberately
-  sufficient as inline instruction — that is the self-describing
-  fallback, and it is why the skeleton includes it.
-- Where the runtime can run commands, wiring `engram check` into its
-  verification habits (CI, pre-commit) supplies the enforcement the
-  session itself cannot.
+  sufficient as an operational fallback, and it is why the skeleton
+  includes it. Because that reminder comes from the store itself, it
+  cannot establish trust in its own source; absent an equivalent host
+  decision, the fallback remains read-only under P0.
+- A harness with multi-call lifecycle support coordinates one bounded
+  working draft, records which logical edits it owns, stages those edits,
+  and then submits the initial candidate to the managed-store engine for
+  preparation and acceptance. The normal file tools need no transaction
+  handle.
+- Validation feedback remains useful while editing, but the definitive
+  state and transition check runs against the final candidate
+  immediately before the commit.
+
+Each attempt designates one executor. The managed commit engine owns hook
+execution and commit creation; the local Git guard does not prepare the
+candidate. A rejected disposable preparation is discarded while the
+original working draft remains available for explicit correction and
+restaging.
 
 ## 5. Unattended and multi-agent operation
 
 Patterns for schedulers and fleets (all optional):
 
-- **Concurrency:** stores under git inherit git's model; concurrent
-  writers SHOULD serialize per store (a global lock, as cortex does) or
-  work in isolated worktrees merged through the normal changeset gates
-  — the gates make merges safe, not the lock.
+- **Concurrency:** one visible checkout has one automated draft writer,
+  and acceptance against its ref uses one writer lock. Distinct stores,
+  clones, or worktrees can draft and prepare independently. Divergent
+  clones replay and revalidate changes instead of introducing merge
+  commits into the accepted lineage. The executor is per attempt and
+  candidate, not a global singleton.
 - **Write partitioning:** deployments that split stores by writability
-  (episodic agent-writable, semantic human-curated — base profile §1)
-  enforce it with mounts/permissions. The spec deliberately owns no
+  (for example, episodic agent-writable and semantic human-curated)
+  enforce it with mounts or permissions. The spec deliberately owns no
   ACLs; infrastructure does it better.
 - **Failure channels:** unattended runs report check failures somewhere
-  a human reads (the base profile's pending-decisions pattern); a gate
-  that fails silently in a cron job protects nothing.
+  a human reads; a hook or validation failure that disappears inside a
+  cron job protects nothing.
 
-## 6. Serving layer (planned, last resort)
+## 6. Adapter conformance note
 
-`engram mcp` — an MCP server exposing `search`, `read`, `write`,
-`check` over a store — for runtimes without filesystem access
-(hosted assistants, web contexts). It is deliberately last in this
-annex: it inverts the design's main bet, so it exists for reach, not as
-a recommendation. Its `write` MUST route through the same changeset
-machinery as any other writer; a serving layer with private semantics
-would fork the store's truth.
-
-## 7. Adapter conformance note
-
-An adapter that runs hooks is an **executor** (core §8.6) and owes the
-commit pair, stage boundaries, ordering, and gate rejection. An adapter
-that only installs skills or adoption blocks owes nothing beyond not
-misrepresenting conformance (core §1.4).
+An adapter that accepts writes is a managed writer (Git annex §4), and
+an adapter that runs hooks is an **executor** (core §8.5). It therefore
+owes working-draft ownership, declared-change isolation, ref-race
+rejection, base/candidate mapping, trust checking, invocation and
+ordering boundaries, candidate import, single execution, and final
+validation. An adapter that only installs skills or attachments owes
+nothing beyond not misrepresenting conformance (core §1.4).
