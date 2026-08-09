@@ -65,7 +65,7 @@ func probeObjectFormat(ctx context.Context, git, root, format string, width int)
 	if _, err := run(ctx, git, "", nil, "init", "--quiet", "--object-format="+format, repository); err != nil {
 		return false, nil
 	}
-	oidBytes, err := run(ctx, git, repository, []byte("engram capability probe\n"), "hash-object", "-w", "--stdin")
+	oidBytes, err := run(ctx, git, repository, []byte("engram capability probe\n"), "-c", "core.fsync=loose-object", "hash-object", "-w", "--no-filters", "--stdin")
 	if err != nil {
 		return false, fmt.Errorf("probe Git %s objects: %w", format, err)
 	}
@@ -82,20 +82,21 @@ func probeObjectFormat(ctx context.Context, git, root, format string, width int)
 
 func probeUpdateRefTransaction(ctx context.Context, git, root string) (bool, error) {
 	repository := filepath.Join(root, "sha1")
-	oidBytes, err := run(ctx, git, repository, []byte("ref transaction probe\n"), "hash-object", "-w", "--stdin")
+	oidBytes, err := run(ctx, git, repository, []byte("ref transaction probe\n"), "-c", "core.fsync=loose-object", "hash-object", "-w", "--no-filters", "--stdin")
 	if err != nil {
 		return false, err
 	}
 	oid := strings.TrimSpace(string(oidBytes))
 	input := "start\ncreate refs/engram/capability-probe " + oid + "\nprepare\ncommit\n"
-	if _, err := run(ctx, git, repository, []byte(input), "update-ref", "--stdin"); err != nil {
+	response, err := run(ctx, git, repository, []byte(input), "-c", "core.fsync=reference", "update-ref", "--no-deref", "--stdin")
+	if err != nil || string(response) != "start: ok\nprepare: ok\ncommit: ok\n" {
 		return false, nil
 	}
 	got, err := run(ctx, git, repository, nil, "rev-parse", "refs/engram/capability-probe")
 	if err != nil || strings.TrimSpace(string(got)) != oid {
 		return false, nil
 	}
-	if _, err := run(ctx, git, repository, nil, "update-ref", "-d", "refs/engram/capability-probe", oid); err != nil {
+	if _, err := run(ctx, git, repository, nil, "-c", "core.fsync=reference", "update-ref", "--no-deref", "-d", "refs/engram/capability-probe", oid); err != nil {
 		return false, err
 	}
 	return true, nil

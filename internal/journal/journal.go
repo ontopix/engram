@@ -5,6 +5,7 @@ package journal
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,6 +16,8 @@ import (
 	"sort"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/ontopix/engram/internal/gitraw"
 )
 
 type State string
@@ -32,6 +35,17 @@ type RefUpdate struct {
 	Ref    string  `json:"ref"`
 	Before *string `json:"before"`
 	After  string  `json:"after"`
+}
+
+type RawFileImage struct {
+	Present bool   `json:"present"`
+	Data    []byte `json:"data"`
+}
+
+type OwnerIdentity struct {
+	PID       int    `json:"pid"`
+	Hostname  string `json:"hostname"`
+	StartedAt string `json:"started_at"`
 }
 
 type Image struct {
@@ -54,14 +68,16 @@ type Fingerprint struct {
 }
 
 type Record struct {
-	Version      int           `json:"version"`
-	State        State         `json:"state"`
-	OwnerToken   string        `json:"owner_token"`
-	Ref          RefUpdate     `json:"ref"`
-	IndexBefore  []byte        `json:"index_before"`
-	IndexAfter   []byte        `json:"index_after"`
-	Paths        []PathUpdate  `json:"paths"`
-	Fingerprints []Fingerprint `json:"fingerprints"`
+	Version      int                 `json:"version"`
+	State        State               `json:"state"`
+	OwnerToken   string              `json:"owner_token"`
+	Owner        OwnerIdentity       `json:"owner"`
+	ObjectFormat gitraw.ObjectFormat `json:"object_format"`
+	Ref          RefUpdate           `json:"ref"`
+	IndexBefore  RawFileImage        `json:"index_before"`
+	IndexAfter   RawFileImage        `json:"index_after"`
+	Paths        []PathUpdate        `json:"paths"`
+	Fingerprints []Fingerprint       `json:"fingerprints"`
 }
 
 func Path(worktreeGitDir string) string {
@@ -80,10 +96,16 @@ func WritePending(name string, record Record) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(name), 0o700); err != nil {
+	directory, base, err := openJournalDirectory(name, true)
+	if err != nil {
 		return err
 	}
-	file, err := os.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	defer directory.Close()
+	// The canonical name is never opened for writing. A crash can leave the
+	// owner-token temporary link, but can never expose truncated canonical
+	// journal bytes. Link provides the portable no-replace publication step.
+	temporaryName := base + ".pending-" + record.OwnerToken
+	file, err := directory.OpenFile(temporaryName, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if errors.Is(err, os.ErrExist) {
 		return ErrExists
 	}
@@ -92,22 +114,46 @@ func WritePending(name string, record Record) error {
 	}
 	if _, err := file.Write(data); err != nil {
 		file.Close()
-		_ = os.Remove(name)
+		_ = directory.Remove(temporaryName)
 		return err
 	}
 	if err := file.Sync(); err != nil {
 		file.Close()
-		_ = os.Remove(name)
+		_ = directory.Remove(temporaryName)
 		return err
 	}
 	if err := file.Close(); err != nil {
+		_ = directory.Remove(temporaryName)
 		return err
 	}
-	return syncDirectory(filepath.Dir(name))
+	if err := directory.Link(temporaryName, base); err != nil {
+		_ = directory.Remove(temporaryName)
+		if errors.Is(err, os.ErrExist) {
+			return ErrExists
+		}
+		return err
+	}
+	if err := syncRoot(directory); err != nil {
+		// The canonical journal may already be durable; never remove it after
+		// publication merely because the durability proof failed.
+		return err
+	}
+	// The canonical name is already durable. Cleanup is retryable from the
+	// owner token and must not turn a published pending journal into a
+	// pre-journal-looking error at the caller.
+	if err := directory.Remove(temporaryName); err == nil {
+		_ = syncRoot(directory)
+	}
+	return nil
 }
 
 func Read(name string) (Record, []byte, error) {
-	data, err := os.ReadFile(name)
+	directory, base, err := openJournalDirectory(name, false)
+	if err != nil {
+		return Record{}, nil, err
+	}
+	defer directory.Close()
+	data, err := stableRead(directory, base)
 	if err != nil {
 		return Record{}, nil, err
 	}
@@ -159,18 +205,47 @@ func Remove(name string, expected []byte) error {
 	if record.State != Cancelled && record.State != Complete || !bytes.Equal(observed, expected) {
 		return ErrChanged
 	}
-	if err := os.Remove(name); err != nil {
+	if err := CleanupOwnedTemporaries(name, expected); err != nil {
 		return err
 	}
-	return syncDirectory(filepath.Dir(name))
+	directory, base, err := openJournalDirectory(name, false)
+	if err != nil {
+		return err
+	}
+	defer directory.Close()
+	current, err := stableRead(directory, base)
+	if err != nil || !bytes.Equal(current, expected) {
+		return ErrChanged
+	}
+	if err := directory.Remove(base); err != nil {
+		return err
+	}
+	return syncRoot(directory)
 }
 
 func validate(record Record) error {
 	if record.Version != 1 || record.State != Pending && record.State != Cancelled && record.State != Complete {
 		return fmt.Errorf("unsupported version or state")
 	}
-	if len(record.OwnerToken) != 64 || record.Ref.Ref == "" || record.Ref.After == "" || !utf8.ValidString(record.Ref.Ref) {
+	if len(record.OwnerToken) != 64 || !lowerHex(record.OwnerToken) || !strings.HasPrefix(record.Ref.Ref, "refs/heads/") || len(record.Ref.Ref) == len("refs/heads/") || !utf8.ValidString(record.Ref.Ref) {
 		return fmt.Errorf("invalid owner or ref update")
+	}
+	if record.Owner.PID <= 0 || record.Owner.Hostname == "" || record.Owner.StartedAt == "" || !utf8.ValidString(record.Owner.Hostname) || !utf8.ValidString(record.Owner.StartedAt) {
+		return fmt.Errorf("invalid owner identity")
+	}
+	if record.ObjectFormat != gitraw.SHA1 && record.ObjectFormat != gitraw.SHA256 {
+		return fmt.Errorf("invalid object format")
+	}
+	if _, err := gitraw.ParseOID(record.ObjectFormat, record.Ref.After); err != nil {
+		return fmt.Errorf("invalid new ref object ID")
+	}
+	if record.Ref.Before != nil {
+		if _, err := gitraw.ParseOID(record.ObjectFormat, *record.Ref.Before); err != nil {
+			return fmt.Errorf("invalid old ref object ID")
+		}
+	}
+	if !record.IndexBefore.Present && len(record.IndexBefore.Data) != 0 || !record.IndexAfter.Present || len(record.IndexAfter.Data) == 0 {
+		return fmt.Errorf("invalid raw index images")
 	}
 	previous := ""
 	for _, update := range record.Paths {
@@ -194,6 +269,9 @@ func validate(record Record) error {
 		if !fingerprint.Present && (fingerprint.Kind != "" || len(fingerprint.Data) != 0) {
 			return fmt.Errorf("absent fingerprint carries an image")
 		}
+		if fingerprint.Present && fingerprint.Kind == "" {
+			return fmt.Errorf("present fingerprint has no kind")
+		}
 	}
 	return nil
 }
@@ -207,10 +285,23 @@ func validateImage(image *Image) error {
 	default:
 		return fmt.Errorf("invalid journal path image kind %q", image.Kind)
 	}
+	if image.Mode&^0o777 != 0 {
+		return fmt.Errorf("journal path image has non-permission mode bits")
+	}
 	if image.Kind == "directory" && len(image.Data) != 0 {
 		return fmt.Errorf("directory image carries bytes")
 	}
 	return nil
+}
+
+func lowerHex(value string) bool {
+	for _, character := range []byte(value) {
+		if character >= '0' && character <= '9' || character >= 'a' && character <= 'f' {
+			continue
+		}
+		return false
+	}
+	return value != ""
 }
 
 func validPath(value string) bool {
@@ -236,16 +327,24 @@ func encode(record Record) ([]byte, error) {
 }
 
 func replace(name string, expected, updated []byte) error {
-	current, err := os.ReadFile(name)
-	if err != nil || !bytes.Equal(current, expected) {
-		return ErrChanged
-	}
-	temporary, err := os.CreateTemp(filepath.Dir(name), ".engram-journal-*")
+	directory, base, err := openJournalDirectory(name, false)
 	if err != nil {
 		return err
 	}
-	temporaryName := temporary.Name()
-	defer os.Remove(temporaryName)
+	defer directory.Close()
+	current, err := stableRead(directory, base)
+	if err != nil || !bytes.Equal(current, expected) {
+		return ErrChanged
+	}
+	temporaryName := filepath.Base(replacementTemporaryPath(name, expected))
+	temporary, err := directory.OpenFile(temporaryName, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return ErrChanged
+		}
+		return err
+	}
+	defer directory.Remove(temporaryName)
 	if err := temporary.Chmod(0o600); err != nil {
 		temporary.Close()
 		return err
@@ -261,21 +360,233 @@ func replace(name string, expected, updated []byte) error {
 	if err := temporary.Close(); err != nil {
 		return err
 	}
-	current, err = os.ReadFile(name)
+	current, err = stableRead(directory, base)
 	if err != nil || !bytes.Equal(current, expected) {
 		return ErrChanged
 	}
-	if err := os.Rename(temporaryName, name); err != nil {
+	if err := directory.Rename(temporaryName, base); err != nil {
 		return err
 	}
-	return syncDirectory(filepath.Dir(name))
+	return syncRoot(directory)
 }
 
-func syncDirectory(name string) error {
+// CleanupOwnedTemporaries removes only deterministic journal temporaries that
+// are cryptographically and structurally bound to the exact observed
+// canonical journal. Unknown or changed bytes are left untouched.
+func CleanupOwnedTemporaries(name string, expected []byte) error {
+	record, observed, err := Read(name)
+	if err != nil || !bytes.Equal(observed, expected) {
+		return ErrChanged
+	}
+	directory, base, err := openJournalDirectory(name, false)
+	if err != nil {
+		return err
+	}
+	defer directory.Close()
+	names := []string{
+		base + ".pending-" + record.OwnerToken,
+		filepath.Base(replacementTemporaryPath(name, expected)),
+	}
+	removed := false
+	for _, temporaryName := range names {
+		data, err := stableRead(directory, temporaryName)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		owned := bytes.Equal(data, expected)
+		if !owned {
+			candidate, decodeErr := decodeCanonical(data)
+			if decodeErr == nil && candidate.OwnerToken == record.OwnerToken {
+				candidate.State = record.State
+				canonical, encodeErr := encode(candidate)
+				owned = encodeErr == nil && bytes.Equal(canonical, expected)
+			}
+		}
+		if !owned {
+			return fmt.Errorf("foreign journal temporary %s", temporaryName)
+		}
+		current, err := stableRead(directory, temporaryName)
+		if err != nil || !bytes.Equal(current, data) {
+			return ErrChanged
+		}
+		if err := directory.Remove(temporaryName); err != nil {
+			return err
+		}
+		removed = true
+	}
+	if removed {
+		return syncRoot(directory)
+	}
+	return nil
+}
+
+func replacementTemporaryPath(name string, expected []byte) string {
+	digest := sha256.Sum256(expected)
+	return fmt.Sprintf("%s.replace-%x", name, digest[:])
+}
+
+func decodeCanonical(data []byte) (Record, error) {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	var record Record
+	if err := decoder.Decode(&record); err != nil || decoder.Decode(&struct{}{}) != io.EOF {
+		return Record{}, fmt.Errorf("malformed managed recovery journal")
+	}
+	if err := validate(record); err != nil {
+		return Record{}, err
+	}
+	canonical, err := encode(record)
+	if err != nil || !bytes.Equal(canonical, data) {
+		return Record{}, fmt.Errorf("managed recovery journal is not canonically encoded")
+	}
+	return record, nil
+}
+
+func openJournalDirectory(name string, create bool) (*os.Root, string, error) {
+	name = filepath.Clean(name)
+	parent := filepath.Dir(name)
+	if gitDir, ok := journalGitDirectory(parent); ok {
+		root, err := openStableDirectory(gitDir)
+		if err != nil {
+			return nil, "", err
+		}
+		for _, component := range []string{"engram", "recovery"} {
+			child, err := openStableChild(root, component, create)
+			if err != nil {
+				root.Close()
+				return nil, "", err
+			}
+			root.Close()
+			root = child
+		}
+		return root, filepath.Base(name), nil
+	}
+	if create {
+		if err := os.MkdirAll(parent, 0o700); err != nil {
+			return nil, "", err
+		}
+	}
+	root, err := openStableDirectory(parent)
+	return root, filepath.Base(name), err
+}
+
+func journalGitDirectory(parent string) (string, bool) {
+	if filepath.Base(parent) != "recovery" {
+		return "", false
+	}
+	engram := filepath.Dir(parent)
+	if filepath.Base(engram) != "engram" {
+		return "", false
+	}
+	return filepath.Dir(engram), true
+}
+
+func openStableDirectory(name string) (*os.Root, error) {
+	info, err := os.Lstat(name)
+	if err != nil {
+		return nil, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return nil, fmt.Errorf("unsafe journal administration directory")
+	}
+	root, err := os.OpenRoot(name)
+	if err != nil {
+		return nil, err
+	}
+	opened, err := root.Stat(".")
+	if err != nil || !opened.IsDir() || !os.SameFile(info, opened) {
+		root.Close()
+		if err != nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf("journal administration directory changed while opening")
+	}
+	return root, nil
+}
+
+func openStableChild(parent *os.Root, name string, create bool) (*os.Root, error) {
+	info, err := parent.Lstat(name)
+	if errors.Is(err, os.ErrNotExist) && create {
+		mkdirErr := parent.Mkdir(name, 0o700)
+		if mkdirErr != nil && !errors.Is(mkdirErr, os.ErrExist) {
+			return nil, mkdirErr
+		}
+		if mkdirErr == nil {
+			if err := syncRoot(parent); err != nil {
+				return nil, err
+			}
+		}
+		info, err = parent.Lstat(name)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return nil, fmt.Errorf("unsafe journal administration path %q", name)
+	}
+	root, err := parent.OpenRoot(name)
+	if err != nil {
+		return nil, err
+	}
+	opened, err := root.Stat(".")
+	if err != nil || !opened.IsDir() || !os.SameFile(info, opened) {
+		root.Close()
+		if err != nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf("journal administration path %q changed while opening", name)
+	}
+	return root, nil
+}
+
+func stableRead(root *os.Root, name string) ([]byte, error) {
+	info, err := root.Lstat(name)
+	if err != nil {
+		return nil, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("unsafe journal file")
+	}
+	file, err := root.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	opened, err := file.Stat()
+	if err != nil || !opened.Mode().IsRegular() || !os.SameFile(info, opened) {
+		file.Close()
+		if err != nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf("journal file changed while opening")
+	}
+	data, readErr := io.ReadAll(file)
+	after, statErr := file.Stat()
+	closeErr := file.Close()
+	if readErr != nil || statErr != nil || closeErr != nil {
+		return nil, errors.Join(readErr, statErr, closeErr)
+	}
+	named, err := root.Lstat(name)
+	if err != nil || named.Mode()&os.ModeSymlink != 0 || !sameFileState(opened, after) || !sameFileState(after, named) {
+		if err != nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf("journal file changed while reading")
+	}
+	return data, nil
+}
+
+func sameFileState(left, right os.FileInfo) bool {
+	return os.SameFile(left, right) && left.Mode() == right.Mode() && left.Size() == right.Size() && left.ModTime() == right.ModTime()
+}
+
+func syncRoot(root *os.Root) error {
 	if runtime.GOOS == "windows" {
 		return nil
 	}
-	directory, err := os.Open(name)
+	directory, err := root.Open(".")
 	if err != nil {
 		return err
 	}

@@ -24,36 +24,21 @@ type Repository struct {
 	runner gitRunner
 }
 
+// Topology is the repository identity that remains discoverable while HEAD or
+// an accepted ref is malformed. Recovery uses it before deciding whether the
+// journal's captured ref is still observable; it carries no accepted-state
+// claim.
+type Topology struct {
+	Root         string
+	GitDir       string
+	CommonGitDir string
+	Format       ObjectFormat
+}
+
 // Discover asks Git only for repository topology, then validates the accepted
 // ref shape itself. All later history and tree traversal uses raw objects.
 func Discover(ctx context.Context, selectedPath string) (*Repository, error) {
-	git, err := exec.LookPath("git")
-	if err != nil {
-		return nil, &Error{Kind: FailureCapability, Op: "locate-git", Err: err}
-	}
-	runner := gitRunner{executable: git, directory: selectedPath}
-
-	inside, err := runner.output(ctx, nil, "rev-parse", "--is-inside-work-tree")
-	if err != nil || stringLine(inside) != "true" {
-		return nil, &Error{Kind: FailureRepository, Op: "discover", Detail: "target is not a non-bare worktree", Err: err}
-	}
-	root, err := runner.pathOutput(ctx, "--show-toplevel")
-	if err != nil {
-		return nil, err
-	}
-	gitDir, err := runner.pathOutput(ctx, "--git-dir")
-	if err != nil {
-		return nil, err
-	}
-	commonDir, err := runner.pathOutput(ctx, "--git-common-dir")
-	if err != nil {
-		return nil, err
-	}
-	formatBytes, err := runner.output(ctx, nil, "rev-parse", "--show-object-format=storage")
-	if err != nil {
-		return nil, &Error{Kind: FailureCapability, Op: "discover-object-format", Err: err}
-	}
-	format, err := ParseObjectFormat(stringLine(formatBytes))
+	topology, runner, err := discoverTopology(ctx, selectedPath)
 	if err != nil {
 		return nil, err
 	}
@@ -81,11 +66,6 @@ func Discover(ctx context.Context, selectedPath string) (*Repository, error) {
 		return nil, &Error{Kind: FailureGit, Op: "discover-head", Detail: "cannot inspect accepted ref"}
 	}
 
-	// --quiet gives the documented status distinction needed here: 0 means
-	// the accepted ref exists, 1 means the symbolic HEAD is genuinely unborn,
-	// and every other status is an inspection failure. Without --quiet,
-	// show-ref reports an absent exact ref as its fatal status on some Git
-	// versions, which must not be conflated with repository failure.
 	_, status, err := runner.outputStatus(ctx, nil, "show-ref", "--verify", "--quiet", headRef)
 	if err != nil {
 		return nil, err
@@ -99,7 +79,7 @@ func Discover(ctx context.Context, selectedPath string) (*Repository, error) {
 		if oidStatus != 0 {
 			return nil, &Error{Kind: FailureGit, Op: "discover-head", Detail: "accepted ref changed while being resolved"}
 		}
-		parsed, parseErr := ParseOID(format, stringLine(oidBytes))
+		parsed, parseErr := ParseOID(topology.Format, stringLine(oidBytes))
 		if parseErr != nil {
 			return nil, &Error{Kind: FailureRepository, Op: "discover-head", Detail: "accepted ref does not contain a canonical object ID", Err: parseErr}
 		}
@@ -108,16 +88,52 @@ func Discover(ctx context.Context, selectedPath string) (*Repository, error) {
 		return nil, &Error{Kind: FailureGit, Op: "discover-head", Detail: "cannot resolve accepted ref"}
 	}
 
-	runner.directory = root
 	return &Repository{
-		Root:         root,
-		GitDir:       gitDir,
-		CommonGitDir: commonDir,
-		HeadRef:      headRef,
-		Head:         head,
-		Format:       format,
-		runner:       runner,
+		Root: topology.Root, GitDir: topology.GitDir, CommonGitDir: topology.CommonGitDir,
+		HeadRef: headRef, Head: head, Format: topology.Format, runner: runner,
 	}, nil
+}
+
+// DiscoverTopology validates only non-bare worktree topology and object
+// format. It intentionally does not interpret HEAD or any ref.
+func DiscoverTopology(ctx context.Context, selectedPath string) (*Topology, error) {
+	topology, _, err := discoverTopology(ctx, selectedPath)
+	return topology, err
+}
+
+func discoverTopology(ctx context.Context, selectedPath string) (*Topology, gitRunner, error) {
+	git, err := exec.LookPath("git")
+	if err != nil {
+		return nil, gitRunner{}, &Error{Kind: FailureCapability, Op: "locate-git", Err: err}
+	}
+	runner := gitRunner{executable: git, directory: selectedPath}
+
+	inside, err := runner.output(ctx, nil, "rev-parse", "--is-inside-work-tree")
+	if err != nil || stringLine(inside) != "true" {
+		return nil, gitRunner{}, &Error{Kind: FailureRepository, Op: "discover", Detail: "target is not a non-bare worktree", Err: err}
+	}
+	root, err := runner.pathOutput(ctx, "--show-toplevel")
+	if err != nil {
+		return nil, gitRunner{}, err
+	}
+	gitDir, err := runner.pathOutput(ctx, "--git-dir")
+	if err != nil {
+		return nil, gitRunner{}, err
+	}
+	commonDir, err := runner.pathOutput(ctx, "--git-common-dir")
+	if err != nil {
+		return nil, gitRunner{}, err
+	}
+	formatBytes, err := runner.output(ctx, nil, "rev-parse", "--show-object-format=storage")
+	if err != nil {
+		return nil, gitRunner{}, &Error{Kind: FailureCapability, Op: "discover-object-format", Err: err}
+	}
+	format, err := ParseObjectFormat(stringLine(formatBytes))
+	if err != nil {
+		return nil, gitRunner{}, err
+	}
+	runner.directory = root
+	return &Topology{Root: root, GitDir: gitDir, CommonGitDir: commonDir, Format: format}, runner, nil
 }
 
 func (r *Repository) ReadObject(ctx context.Context, oid OID) (Object, error) {

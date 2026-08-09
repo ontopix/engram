@@ -28,6 +28,7 @@ const (
 
 var ErrBusy = errors.New("engram rendezvous is busy")
 var ErrOwnership = errors.New("engram rendezvous ownership changed")
+var errRecoveryBusy = errors.New("engram recovery lease is busy")
 
 type Owner struct {
 	Version   int    `json:"version"`
@@ -39,8 +40,16 @@ type Owner struct {
 }
 
 type Handle struct {
-	owner Owner
-	paths []string // Acquisition order; release is reverse.
+	owner   Owner
+	paths   []string // Acquisition order; release is reverse.
+	removed map[string]bool
+}
+
+// RecoveryLease serializes recognized recovery controllers. The persistent
+// lease file is harmless metadata; the authority is the host advisory lock,
+// which the kernel releases if the controller exits.
+type RecoveryLease struct {
+	file *os.File
 }
 
 // RefPath returns the normative lock path for one exact full refname.
@@ -117,7 +126,7 @@ func (h *Handle) SetPhase(phase Phase) error {
 	}
 	for _, name := range h.paths {
 		owner, err := Read(name)
-		if err != nil || owner.Token != h.owner.Token || owner.Phase != h.owner.Phase {
+		if err != nil || owner != h.owner {
 			return ErrOwnership
 		}
 	}
@@ -138,17 +147,27 @@ func (h *Handle) Release() error {
 	if h == nil {
 		return nil
 	}
-	for index := len(h.paths) - 1; index >= 0; index-- {
+	for len(h.paths) != 0 {
+		index := len(h.paths) - 1
 		name := h.paths[index]
-		owner, err := Read(name)
-		if err != nil || owner.Token != h.owner.Token || owner.Phase != h.owner.Phase {
-			return ErrOwnership
+		if h.removed == nil || !h.removed[name] {
+			removed, err := removeOwned(name, h.owner)
+			if h.removed == nil {
+				h.removed = make(map[string]bool)
+			}
+			if removed {
+				h.removed[name] = true
+			}
+			if err != nil {
+				return err
+			}
 		}
-		if err := os.Remove(name); err != nil {
+		if err := syncLockDirectory(name); err != nil {
 			return err
 		}
+		delete(h.removed, name)
+		h.paths = h.paths[:index]
 	}
-	h.paths = nil
 	return nil
 }
 
@@ -159,11 +178,160 @@ func (h *Handle) Owner() Owner {
 	return h.owner
 }
 
+// AcquireRecovery obtains a process-lifetime exclusive lease for one
+// worktree's recovery. The file remains after release; it is not a lifecycle
+// signal and contains no owner authority.
+func AcquireRecovery(worktreeGitDir string) (*RecoveryLease, error) {
+	if worktreeGitDir == "" {
+		return nil, fmt.Errorf("recovery rendezvous requires a worktree Git directory")
+	}
+	name := filepath.Join(worktreeGitDir, "engram", "locks", "recovery.lease")
+	directory, base, err := openLockDirectory(name, true)
+	if err != nil {
+		return nil, err
+	}
+	defer directory.Close()
+	before, statErr := directory.Lstat(base)
+	if statErr == nil && (before.Mode()&os.ModeSymlink != 0 || !before.Mode().IsRegular()) {
+		return nil, fmt.Errorf("unsafe recovery lease file")
+	}
+	if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
+		return nil, statErr
+	}
+	file, err := directory.OpenFile(base, os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	opened, err := file.Stat()
+	if err != nil || !opened.Mode().IsRegular() || statErr == nil && !os.SameFile(before, opened) {
+		_ = file.Close()
+		if err != nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf("recovery lease changed while opening")
+	}
+	named, err := directory.Lstat(base)
+	if err != nil || named.Mode()&os.ModeSymlink != 0 || !os.SameFile(opened, named) {
+		_ = file.Close()
+		if err != nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf("recovery lease changed while opening")
+	}
+	if statErr != nil {
+		if err := file.Sync(); err != nil {
+			_ = file.Close()
+			return nil, err
+		}
+		if err := syncRoot(directory); err != nil {
+			_ = file.Close()
+			return nil, err
+		}
+	}
+	if err := lockRecoveryFile(file); err != nil {
+		_ = file.Close()
+		if errors.Is(err, errRecoveryBusy) {
+			return nil, ErrBusy
+		}
+		return nil, err
+	}
+	return &RecoveryLease{file: file}, nil
+}
+
+// AdoptWriter replaces recognized dead-owner metadata while the recovery
+// lease excludes another adopter. It preserves the transaction token and
+// phase so the immutable journal remains bound to the locks.
+func (l *RecoveryLease) AdoptWriter(commonGitDir, worktreeGitDir, token string, phase Phase, refnames ...string) (*Handle, error) {
+	if l == nil || l.file == nil || len(token) != 64 || phase != PreJournal && phase != JournalRequired {
+		return nil, ErrOwnership
+	}
+	paths, err := writerPaths(commonGitDir, worktreeGitDir, refnames)
+	if err != nil {
+		return nil, err
+	}
+	handle, err := l.AdoptPaths(token, phase, paths...)
+	if err == nil {
+		handle.paths = paths
+	}
+	return handle, err
+}
+
+// AdoptPaths is the recovery-only form used for a recognized partial cleanup
+// or stale pre-journal multi-ref owner. Callers must derive every path from
+// annex-defined locations; this method refuses non-absolute or duplicate
+// paths and never creates a missing lock.
+func (l *RecoveryLease) AdoptPaths(token string, phase Phase, paths ...string) (*Handle, error) {
+	if l == nil || l.file == nil || len(token) != 64 || phase != PreJournal && phase != JournalRequired || len(paths) == 0 {
+		return nil, ErrOwnership
+	}
+	ordered := append([]string(nil), paths...)
+	sort.Strings(ordered)
+	for index, name := range ordered {
+		if !filepath.IsAbs(name) || index != 0 && name == ordered[index-1] {
+			return nil, ErrOwnership
+		}
+	}
+	// Worktree is always the final acquisition and therefore the first
+	// release, even when common/worktree administration paths sort otherwise.
+	for index, name := range ordered {
+		if name == WorktreePath(filepath.Dir(filepath.Dir(filepath.Dir(name)))) || filepath.Base(name) == "worktree.lock" {
+			ordered = append(append(ordered[:index], ordered[index+1:]...), name)
+			break
+		}
+	}
+	before := Owner{Token: token, Phase: phase}
+	for _, name := range ordered {
+		owner, err := Read(name)
+		if err != nil || owner.Token != token || owner.Phase != phase {
+			return nil, ErrOwnership
+		}
+		if before.Version == 0 {
+			before = owner
+		}
+	}
+	hostname, err := os.Hostname()
+	if err != nil {
+		return nil, err
+	}
+	after := Owner{Version: 1, Token: token, PID: os.Getpid(), Hostname: hostname, StartedAt: time.Now().UTC().Format(time.RFC3339Nano), Phase: phase}
+	for _, name := range ordered {
+		owner, err := Read(name)
+		if err != nil || owner.Token != token || owner.Phase != phase {
+			return nil, ErrOwnership
+		}
+		if err := replaceOwned(name, owner, after); err != nil {
+			return nil, err
+		}
+	}
+	// Preserve the caller's acquisition order when it is known. Generic path
+	// adoption uses byte order; Release still runs it in reverse.
+	handle := &Handle{owner: after, paths: append([]string(nil), ordered...)}
+	return handle, nil
+}
+
+func (l *RecoveryLease) Release() error {
+	if l == nil || l.file == nil {
+		return nil
+	}
+	file := l.file
+	l.file = nil
+	return errors.Join(unlockRecoveryFile(file), file.Close())
+}
+
 func Read(name string) (Owner, error) {
-	data, err := os.ReadFile(name)
+	directory, base, err := openLockDirectory(name, false)
 	if err != nil {
 		return Owner{}, err
 	}
+	defer directory.Close()
+	data, err := stableLockRead(directory, base)
+	if err != nil {
+		return Owner{}, err
+	}
+	return decodeOwner(data)
+}
+
+func decodeOwner(data []byte) (Owner, error) {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	var owner Owner
@@ -174,15 +342,17 @@ func Read(name string) (Owner, error) {
 }
 
 func create(name string, owner Owner) error {
-	if err := os.MkdirAll(filepath.Dir(name), 0o700); err != nil {
+	directory, base, err := openLockDirectory(name, true)
+	if err != nil {
 		return err
 	}
+	defer directory.Close()
 	data, err := json.Marshal(owner)
 	if err != nil {
 		return err
 	}
 	data = append(data, '\n')
-	file, err := os.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	file, err := directory.OpenFile(base, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if errors.Is(err, os.ErrExist) {
 		return ErrBusy
 	}
@@ -191,24 +361,29 @@ func create(name string, owner Owner) error {
 	}
 	if _, err := file.Write(data); err != nil {
 		file.Close()
-		_ = os.Remove(name)
+		_ = directory.Remove(base)
 		return err
 	}
 	if err := file.Sync(); err != nil {
 		file.Close()
-		_ = os.Remove(name)
+		_ = directory.Remove(base)
 		return err
 	}
 	if err := file.Close(); err != nil {
-		_ = os.Remove(name)
+		_ = directory.Remove(base)
 		return err
 	}
-	return syncDirectory(filepath.Dir(name))
+	return syncRoot(directory)
 }
 
 func replaceOwned(name string, before, after Owner) error {
-	current, err := Read(name)
-	if err != nil || current.Token != before.Token || current.Phase != before.Phase {
+	directory, base, err := openLockDirectory(name, false)
+	if err != nil {
+		return err
+	}
+	defer directory.Close()
+	current, err := readOwnerAt(directory, base)
+	if err != nil || current != before {
 		return ErrOwnership
 	}
 	data, err := json.Marshal(after)
@@ -216,12 +391,11 @@ func replaceOwned(name string, before, after Owner) error {
 		return err
 	}
 	data = append(data, '\n')
-	temporary, err := os.CreateTemp(filepath.Dir(name), ".engram-lock-*")
+	temporaryName, temporary, err := createLockTemporary(directory)
 	if err != nil {
 		return err
 	}
-	temporaryName := temporary.Name()
-	defer os.Remove(temporaryName)
+	defer directory.Remove(temporaryName)
 	if err := temporary.Chmod(0o600); err != nil {
 		temporary.Close()
 		return err
@@ -237,35 +411,254 @@ func replaceOwned(name string, before, after Owner) error {
 	if err := temporary.Close(); err != nil {
 		return err
 	}
-	current, err = Read(name)
-	if err != nil || current.Token != before.Token || current.Phase != before.Phase {
+	current, err = readOwnerAt(directory, base)
+	if err != nil || current != before {
 		return ErrOwnership
 	}
-	if err := os.Rename(temporaryName, name); err != nil {
+	if err := directory.Rename(temporaryName, base); err != nil {
 		return err
 	}
-	return syncDirectory(filepath.Dir(name))
+	return syncRoot(directory)
 }
 
 func (h *Handle) releaseCreated() error {
 	var result error
 	for index := len(h.paths) - 1; index >= 0; index-- {
-		owner, err := Read(h.paths[index])
-		if err == nil && owner.Token == h.owner.Token {
-			result = errors.Join(result, os.Remove(h.paths[index]))
+		name := h.paths[index]
+		owner, err := Read(name)
+		if err == nil && owner == h.owner {
+			removed, removeErr := removeOwned(name, h.owner)
+			result = errors.Join(result, removeErr)
+			if removed && removeErr == nil {
+				result = errors.Join(result, syncLockDirectory(name))
+			}
 		}
 	}
 	h.paths = nil
 	return result
 }
 
-func syncDirectory(name string) error {
+func writerPaths(commonGitDir, worktreeGitDir string, refnames []string) ([]string, error) {
+	if commonGitDir == "" || worktreeGitDir == "" || len(refnames) == 0 {
+		return nil, fmt.Errorf("writer rendezvous requires Git directories and at least one ref")
+	}
+	refs := append([]string(nil), refnames...)
+	sort.Strings(refs)
+	paths := make([]string, 0, len(refs)+1)
+	last := ""
+	for _, refname := range refs {
+		if refname == "" {
+			return nil, fmt.Errorf("empty accepted refname")
+		}
+		if refname == last {
+			continue
+		}
+		last = refname
+		paths = append(paths, RefPath(commonGitDir, refname))
+	}
+	paths = append(paths, WorktreePath(worktreeGitDir))
+	return paths, nil
+}
+
+func openLockDirectory(name string, create bool) (*os.Root, string, error) {
+	name = filepath.Clean(name)
+	parent := filepath.Dir(name)
+	if gitDir, components, ok := lockGitDirectory(parent); ok {
+		root, err := openStableDirectory(gitDir)
+		if err != nil {
+			return nil, "", err
+		}
+		for _, component := range components {
+			child, err := openStableChild(root, component, create)
+			if err != nil {
+				root.Close()
+				return nil, "", err
+			}
+			root.Close()
+			root = child
+		}
+		return root, filepath.Base(name), nil
+	}
+	if create {
+		if err := os.MkdirAll(parent, 0o700); err != nil {
+			return nil, "", err
+		}
+	}
+	root, err := openStableDirectory(parent)
+	return root, filepath.Base(name), err
+}
+
+func lockGitDirectory(parent string) (string, []string, bool) {
+	components := []string{"engram", "locks"}
+	locks := parent
+	if filepath.Base(parent) == "refs" {
+		locks = filepath.Dir(parent)
+		components = append(components, "refs")
+	}
+	if filepath.Base(locks) != "locks" {
+		return "", nil, false
+	}
+	engram := filepath.Dir(locks)
+	if filepath.Base(engram) != "engram" {
+		return "", nil, false
+	}
+	return filepath.Dir(engram), components, true
+}
+
+func openStableDirectory(name string) (*os.Root, error) {
+	info, err := os.Lstat(name)
+	if err != nil {
+		return nil, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return nil, fmt.Errorf("unsafe rendezvous administration directory")
+	}
+	root, err := os.OpenRoot(name)
+	if err != nil {
+		return nil, err
+	}
+	opened, err := root.Stat(".")
+	if err != nil || !opened.IsDir() || !os.SameFile(info, opened) {
+		root.Close()
+		if err != nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf("rendezvous administration directory changed while opening")
+	}
+	return root, nil
+}
+
+func openStableChild(parent *os.Root, name string, create bool) (*os.Root, error) {
+	info, err := parent.Lstat(name)
+	if errors.Is(err, os.ErrNotExist) && create {
+		mkdirErr := parent.Mkdir(name, 0o700)
+		if mkdirErr != nil && !errors.Is(mkdirErr, os.ErrExist) {
+			return nil, mkdirErr
+		}
+		if mkdirErr == nil {
+			if err := syncRoot(parent); err != nil {
+				return nil, err
+			}
+		}
+		info, err = parent.Lstat(name)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return nil, fmt.Errorf("unsafe rendezvous administration path %q", name)
+	}
+	root, err := parent.OpenRoot(name)
+	if err != nil {
+		return nil, err
+	}
+	opened, err := root.Stat(".")
+	if err != nil || !opened.IsDir() || !os.SameFile(info, opened) {
+		root.Close()
+		if err != nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf("rendezvous administration path %q changed while opening", name)
+	}
+	return root, nil
+}
+
+func stableLockRead(root *os.Root, name string) ([]byte, error) {
+	info, err := root.Lstat(name)
+	if err != nil {
+		return nil, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("unsafe rendezvous file")
+	}
+	file, err := root.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	opened, err := file.Stat()
+	if err != nil || !opened.Mode().IsRegular() || !os.SameFile(info, opened) {
+		file.Close()
+		if err != nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf("rendezvous file changed while opening")
+	}
+	data, readErr := io.ReadAll(file)
+	after, statErr := file.Stat()
+	closeErr := file.Close()
+	if readErr != nil || statErr != nil || closeErr != nil {
+		return nil, errors.Join(readErr, statErr, closeErr)
+	}
+	named, err := root.Lstat(name)
+	if err != nil || named.Mode()&os.ModeSymlink != 0 || !sameFileState(opened, after) || !sameFileState(after, named) {
+		if err != nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf("rendezvous file changed while reading")
+	}
+	return data, nil
+}
+
+func sameFileState(left, right os.FileInfo) bool {
+	return os.SameFile(left, right) && left.Mode() == right.Mode() && left.Size() == right.Size() && left.ModTime() == right.ModTime()
+}
+
+func readOwnerAt(root *os.Root, name string) (Owner, error) {
+	data, err := stableLockRead(root, name)
+	if err != nil {
+		return Owner{}, err
+	}
+	return decodeOwner(data)
+}
+
+func createLockTemporary(root *os.Root) (string, *os.File, error) {
+	for range 16 {
+		var random [16]byte
+		if _, err := rand.Read(random[:]); err != nil {
+			return "", nil, err
+		}
+		name := ".engram-lock-" + hex.EncodeToString(random[:])
+		file, err := root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if errors.Is(err, os.ErrExist) {
+			continue
+		}
+		return name, file, err
+	}
+	return "", nil, fmt.Errorf("cannot allocate a private rendezvous temporary")
+}
+
+func removeOwned(name string, expected Owner) (bool, error) {
+	directory, base, err := openLockDirectory(name, false)
+	if err != nil {
+		return false, err
+	}
+	defer directory.Close()
+	owner, err := readOwnerAt(directory, base)
+	if err != nil || owner != expected {
+		return false, ErrOwnership
+	}
+	if err := directory.Remove(base); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func syncLockDirectory(name string) error {
+	directory, _, err := openLockDirectory(name, false)
+	if err != nil {
+		return err
+	}
+	defer directory.Close()
+	return syncRoot(directory)
+}
+
+func syncRoot(root *os.Root) error {
 	if runtime.GOOS == "windows" {
 		// Go does not expose a portable directory-flush primitive on Windows;
 		// each owned file itself has already been synchronously flushed.
 		return nil
 	}
-	directory, err := os.Open(name)
+	directory, err := root.Open(".")
 	if err != nil {
 		return err
 	}

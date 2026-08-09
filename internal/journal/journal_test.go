@@ -6,15 +6,19 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/ontopix/engram/internal/gitraw"
 )
 
 func fixture() Record {
 	before := "0123456789012345678901234567890123456789"
 	return Record{
 		OwnerToken:   "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		Owner:        OwnerIdentity{PID: 123, Hostname: "fixture", StartedAt: "2026-01-01T00:00:00Z"},
+		ObjectFormat: gitraw.SHA1,
 		Ref:          RefUpdate{Ref: "refs/heads/main", Before: &before, After: "abcdefabcdefabcdefabcdefabcdefabcdefabcd"},
-		IndexBefore:  []byte("before-index"),
-		IndexAfter:   []byte("after-index"),
+		IndexBefore:  RawFileImage{Present: true, Data: []byte("before-index")},
+		IndexAfter:   RawFileImage{Present: true, Data: []byte("after-index")},
 		Paths:        []PathUpdate{{Path: "note.md", Before: &Image{Kind: "regular", Mode: 0o644, Data: []byte("old")}, After: &Image{Kind: "regular", Mode: 0o644, Data: []byte("new")}}},
 		Fingerprints: []Fingerprint{{Name: "config", Present: true, Kind: "regular", Data: []byte("value")}},
 	}
@@ -89,5 +93,31 @@ func TestTerminalUpdateRequiresExactObservedBytes(t *testing.T) {
 	wrong[0] ^= 1
 	if _, err := SetState(name, wrong, Cancelled); !errors.Is(err, ErrChanged) {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestJournalRejectsSymlinkedAdministrationAndFinalFile(t *testing.T) {
+	gitDir := t.TempDir()
+	external := t.TempDir()
+	if err := os.Symlink(external, filepath.Join(gitDir, "engram")); err != nil {
+		t.Skipf("symbolic links unavailable: %v", err)
+	}
+	if err := WritePending(Path(gitDir), fixture()); err == nil {
+		t.Fatal("write followed a symbolic-link administration path")
+	}
+	if _, err := os.Lstat(filepath.Join(external, "recovery")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("external path was touched: %v", err)
+	}
+
+	owned := Path(t.TempDir())
+	if err := WritePending(owned, fixture()); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "journal")
+	if err := os.Symlink(owned, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := Read(link); err == nil {
+		t.Fatal("read followed a symbolic-link journal")
 	}
 }

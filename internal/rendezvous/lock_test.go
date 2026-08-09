@@ -14,6 +14,12 @@ func TestAcquireWriterOrdersAndReleasesLocks(t *testing.T) {
 	root := t.TempDir()
 	common := filepath.Join(root, "common")
 	worktree := filepath.Join(root, "worktree")
+	if err := os.Mkdir(common, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(worktree, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	handle, err := AcquireWriter(common, worktree, "refs/heads/z", "refs/heads/a", "refs/heads/a")
 	if err != nil {
 		t.Fatal(err)
@@ -42,12 +48,18 @@ func TestBusyAcquisitionDoesNotLeakEarlierLocks(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	worktree := filepath.Join(root, "worktree")
+	if err := os.Mkdir(worktree, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	first, err := AcquireWorktree(worktree)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer first.Release()
 	common := filepath.Join(root, "common")
+	if err := os.Mkdir(common, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := AcquireWriter(common, worktree, "refs/heads/main"); !errors.Is(err, ErrBusy) {
 		t.Fatalf("error = %v", err)
 	}
@@ -102,5 +114,33 @@ func TestReleaseNeverRemovesForeignOwnership(t *testing.T) {
 	}
 	if _, err := os.Stat(name); err != nil {
 		t.Fatalf("foreign lock removed: %v", err)
+	}
+}
+
+func TestRendezvousRejectsSymlinkedAdministrationAndFinalFile(t *testing.T) {
+	gitDir := t.TempDir()
+	external := t.TempDir()
+	if err := os.Symlink(external, filepath.Join(gitDir, "engram")); err != nil {
+		t.Skipf("symbolic links unavailable: %v", err)
+	}
+	if _, err := AcquireWorktree(gitDir); err == nil {
+		t.Fatal("acquisition followed a symbolic-link administration path")
+	}
+	if _, err := os.Lstat(filepath.Join(external, "locks")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("external path was touched: %v", err)
+	}
+
+	ownedDir := t.TempDir()
+	handle, err := AcquireWorktree(ownedDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer handle.Release()
+	link := filepath.Join(t.TempDir(), "lock")
+	if err := os.Symlink(WorktreePath(ownedDir), link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Read(link); err == nil {
+		t.Fatal("read followed a symbolic-link lock")
 	}
 }
