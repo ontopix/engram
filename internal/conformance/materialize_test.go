@@ -23,7 +23,7 @@ func TestMaterializeAllRepositoryCases(t *testing.T) {
 		t.Run(fixtureCase.ID, func(t *testing.T) {
 			t.Parallel()
 			materialized, err := manifest.MaterializeCase(repository, t.TempDir(), fixtureCase.ID)
-			if errors.Is(err, ErrPathNotRepresentable) {
+			if errors.Is(err, ErrPathNotRepresentable) || errors.Is(err, ErrFixtureCapability) {
 				t.Skipf("host filesystem cannot represent this exact fixture: %v", err)
 			}
 			if err != nil {
@@ -31,13 +31,13 @@ func TestMaterializeAllRepositoryCases(t *testing.T) {
 			}
 			switch fixtureCase.Kind {
 			case KindSnapshot:
-				if materialized.Snapshot == "" || materialized.Base != "" || materialized.Candidate != "" || materialized.BaseUnavailable {
+				if materialized.Snapshot == "" || materialized.Base != "" || materialized.Candidate != "" || materialized.Managed != "" || materialized.BaseUnavailable {
 					t.Fatalf("snapshot result = %#v", materialized)
 				}
 				assertSeedCopied(t, materialized.Snapshot)
 				assertFinalOperations(t, repository, materialized.Snapshot, manifest.Common, fixtureCase.Snapshot.Operations)
 			case KindChangeset:
-				if materialized.Snapshot != "" || materialized.Candidate == "" {
+				if materialized.Snapshot != "" || materialized.Candidate == "" || materialized.Managed != "" {
 					t.Fatalf("changeset result = %#v", materialized)
 				}
 				assertSeedCopied(t, materialized.Candidate)
@@ -52,6 +52,15 @@ func TestMaterializeAllRepositoryCases(t *testing.T) {
 					}
 					assertSeedCopied(t, materialized.Base)
 					assertFinalOperations(t, repository, materialized.Base, manifest.Common, fixtureCase.Base.Operations)
+				}
+			case KindManaged:
+				if materialized.Managed == "" || materialized.Snapshot != "" || materialized.Base != "" || materialized.Candidate != "" || materialized.BaseUnavailable {
+					t.Fatalf("managed result = %#v", materialized)
+				}
+				assertSeedCopied(t, materialized.Managed)
+				assertFinalOperations(t, repository, materialized.Managed, manifest.Common, fixtureCase.Managed.Operations)
+				if info, err := os.Stat(filepath.Join(materialized.Managed, ".git")); err != nil || !info.IsDir() {
+					t.Fatalf("managed Git directory: info=%v err=%v", info, err)
 				}
 			}
 		})
@@ -290,6 +299,14 @@ func assertFinalOperations(t *testing.T, repository, stateRoot string, operation
 			}
 			if string(got) != string(want) {
 				t.Fatalf("target %q differs from decoded content", name)
+			}
+		case OperationWriteLink:
+			got, err := os.Readlink(target)
+			if err != nil {
+				t.Fatalf("Readlink target %q: %v", name, err)
+			}
+			if filepath.ToSlash(got) != *operation.Target {
+				t.Fatalf("link target %q = %q, want %q", name, got, *operation.Target)
 			}
 		case OperationRemove:
 			if _, err := os.Lstat(target); !errors.Is(err, fs.ErrNotExist) {

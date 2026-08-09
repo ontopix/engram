@@ -1,6 +1,7 @@
 package checker
 
 import (
+	"encoding/json"
 	"reflect"
 	"testing"
 )
@@ -26,5 +27,16 @@ func TestFindingIdentityOrderingAndErrorClass(t *testing.T) {
 	}
 	if (Result{Findings: got[2:]}).HasErrors() {
 		t.Fatal("warnings alone must not report errors")
+	}
+}
+
+func TestEmptyValidationFindingsEncodeAsArray(t *testing.T) {
+	result, _ := CheckTransition(nil, nil, false)
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(encoded) != `{"target":"changeset","status":"indeterminate","findings":[]}` {
+		t.Fatalf("encoded result = %s", encoded)
 	}
 }

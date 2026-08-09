@@ -16,7 +16,9 @@ import (
 // when initialization is true; otherwise it is unavailable and the status is
 // indeterminate.
 func CheckTransition(base, candidate *Snapshot, initialization bool) (Result, []changeset.Change) {
-	result := Result{Target: TargetChangeset, Status: StatusComplete}
+	// Protocol arrays are never null. Initialize the empty finding set before
+	// any indeterminate early return so every result has one stable shape.
+	result := Result{Target: TargetChangeset, Status: StatusComplete, Findings: []Finding{}}
 	findings := make(findingSet)
 	if candidate == nil {
 		result.Status = StatusIndeterminate

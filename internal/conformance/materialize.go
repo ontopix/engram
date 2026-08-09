@@ -1,12 +1,14 @@
 package conformance
 
 import (
+	"bytes"
 	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"strings"
@@ -17,6 +19,10 @@ import (
 // capability limitation; the harness never silently overwrites the alias.
 var ErrPathNotRepresentable = errors.New("filesystem cannot represent exact fixture path")
 
+// ErrFixtureCapability reports a host capability absent from a fixture
+// materializer (currently symbolic links or the system Git executable).
+var ErrFixtureCapability = errors.New("host cannot materialize fixture capability")
+
 // MaterializedCase names the independently materialized states for one case.
 // Snapshot is set for snapshot cases. Base and Candidate are set for
 // changesets, except that an unavailable base has an empty Base path and
@@ -25,6 +31,7 @@ type MaterializedCase struct {
 	Snapshot        string
 	Base            string
 	Candidate       string
+	Managed         string
 	BaseUnavailable bool
 }
 
@@ -77,6 +84,11 @@ func (m *Manifest) ValidateReferences(repoRoot string) error {
 				return err
 			}
 		}
+		if c.Managed != nil {
+			if err := checkOperations(prefix+".managed.operations", c.Managed.Operations); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
@@ -120,6 +132,11 @@ func (m *Manifest) MaterializeCase(repoRoot, tempRoot, caseID string) (*Material
 		}
 		if err == nil {
 			result.Candidate, err = materializeState(repository, temporary, m.Seed, "candidate", m.Common, c.Candidate.Operations)
+		}
+	case KindManaged:
+		result.Managed, err = materializeState(repository, temporary, m.Seed, "managed", m.Common, c.Managed.Operations)
+		if err == nil {
+			err = initializeManagedFixture(result.Managed, c.Managed.Scenario)
 		}
 	default:
 		return nil, fmt.Errorf("case %q has invalid kind %q", c.ID, c.Kind)
@@ -225,6 +242,8 @@ func applyOperations(repository, destination *os.Root, operations []Operation) e
 			if err == nil {
 				err = writeRegular(destination, operation.Path, data, 0o644)
 			}
+		case OperationWriteLink:
+			err = writeSymlink(destination, operation.Path, *operation.Target)
 		case OperationRemove:
 			err = removeRegular(destination, operation.Path)
 		default:
@@ -235,6 +254,139 @@ func applyOperations(repository, destination *os.Root, operations []Operation) e
 		}
 	}
 	return nil
+}
+
+func writeSymlink(root *os.Root, name, target string) error {
+	if err := makeRealParents(root, path.Dir(name)); err != nil {
+		return err
+	}
+	if _, err := lstatExact(root, name); err == nil {
+		return fmt.Errorf("destination %q already exists", name)
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	if err := root.Symlink(filepath.FromSlash(target), filepath.FromSlash(name)); err != nil {
+		return fmt.Errorf("%w: create symbolic link: %v", ErrFixtureCapability, err)
+	}
+	info, err := lstatExact(root, name)
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		return fmt.Errorf("%w: %q was not created as a symbolic link", ErrFixtureCapability, name)
+	}
+	return nil
+}
+
+func initializeManagedFixture(root string, scenario ManagedScenario) error {
+	git, err := exec.LookPath("git")
+	if err != nil {
+		return fmt.Errorf("%w: locate Git: %v", ErrFixtureCapability, err)
+	}
+	runner := fixtureGit{executable: git, directory: root}
+	if _, err := runner.run(nil, "init", "--quiet", "--initial-branch=main", "."); err != nil {
+		return err
+	}
+	for _, pair := range [][2]string{
+		{"user.name", "Engram Conformance"},
+		{"user.email", "conformance@example.test"},
+		{"commit.gpgsign", "false"},
+		{"core.autocrlf", "false"},
+	} {
+		if _, err := runner.run(nil, "config", "--local", pair[0], pair[1]); err != nil {
+			return err
+		}
+	}
+	if _, err := runner.run(nil, "add", "--all"); err != nil {
+		return err
+	}
+	if _, err := runner.run(nil, "commit", "--quiet", "--no-verify", "-m", "Initial fixture"); err != nil {
+		return err
+	}
+
+	switch scenario {
+	case ManagedPresentationMismatch:
+		_, err = runner.run(nil, "config", "--local", "core.autocrlf", "true")
+		return err
+	case ManagedMergeTip:
+		tree, err := runner.line(nil, "rev-parse", "HEAD^{tree}")
+		if err != nil {
+			return err
+		}
+		old, err := runner.line(nil, "rev-parse", "HEAD")
+		if err != nil {
+			return err
+		}
+		other, err := runner.line([]byte("Independent parent\n"), "commit-tree", tree)
+		if err != nil {
+			return err
+		}
+		merge, err := runner.line([]byte("Merge tip\n"), "commit-tree", tree, "-p", old, "-p", other)
+		if err != nil {
+			return err
+		}
+		_, err = runner.run(nil, "update-ref", "refs/heads/main", merge, old)
+		return err
+	case ManagedPrunedEntry:
+		return nil
+	default:
+		return fmt.Errorf("unknown managed fixture scenario %q", scenario)
+	}
+}
+
+type fixtureGit struct {
+	executable string
+	directory  string
+}
+
+func (g fixtureGit) line(input []byte, arguments ...string) (string, error) {
+	output, err := g.run(input, arguments...)
+	if err != nil {
+		return "", err
+	}
+	line := strings.TrimSuffix(string(output), "\n")
+	if line == "" || strings.ContainsAny(line, "\r\n") {
+		return "", fmt.Errorf("fixture Git returned invalid line %q", line)
+	}
+	return line, nil
+}
+
+func (g fixtureGit) run(input []byte, arguments ...string) ([]byte, error) {
+	global := []string{"--no-pager", "--no-optional-locks", "--no-replace-objects", "-c", "core.hooksPath=" + os.DevNull, "-C", g.directory}
+	command := exec.Command(g.executable, append(global, arguments...)...)
+	command.Env = fixtureGitEnvironment(os.Environ())
+	command.Stdin = bytes.NewReader(input)
+	var stdout, stderr bytes.Buffer
+	command.Stdout = &stdout
+	command.Stderr = &stderr
+	if err := command.Run(); err != nil {
+		return nil, fmt.Errorf("fixture Git %s: %w: %s", strings.Join(arguments, " "), err, strings.TrimSpace(stderr.String()))
+	}
+	return stdout.Bytes(), nil
+}
+
+func fixtureGitEnvironment(environment []string) []string {
+	result := make([]string, 0, len(environment)+12)
+	for _, item := range environment {
+		name, _, _ := strings.Cut(item, "=")
+		upper := strings.ToUpper(name)
+		if strings.HasPrefix(upper, "GIT_") || strings.HasPrefix(upper, "ENGRAM_") || strings.HasPrefix(upper, "LC_") || upper == "LANG" || upper == "LANGUAGE" {
+			continue
+		}
+		result = append(result, item)
+	}
+	return append(result,
+		"GIT_CONFIG_NOSYSTEM=1",
+		"GIT_CONFIG_GLOBAL="+os.DevNull,
+		"GIT_CONFIG_COUNT=0",
+		"GIT_NO_LAZY_FETCH=1",
+		"GIT_TERMINAL_PROMPT=0",
+		"GIT_OPTIONAL_LOCKS=0",
+		"GIT_PAGER=cat",
+		"GIT_AUTHOR_DATE=2000-01-01T00:00:00Z",
+		"GIT_COMMITTER_DATE=2000-01-01T00:00:00Z",
+		"LC_ALL=C",
+	)
 }
 
 func openRealRoot(name string) (*os.Root, error) {

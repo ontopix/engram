@@ -23,6 +23,7 @@ type CaseKind string
 const (
 	KindSnapshot  CaseKind = "snapshot"
 	KindChangeset CaseKind = "changeset"
+	KindManaged   CaseKind = "managed"
 )
 
 type OperationKind string
@@ -30,7 +31,16 @@ type OperationKind string
 const (
 	OperationWriteText   OperationKind = "write_text"
 	OperationWriteBase64 OperationKind = "write_base64"
+	OperationWriteLink   OperationKind = "write_symlink"
 	OperationRemove      OperationKind = "remove"
+)
+
+type ManagedScenario string
+
+const (
+	ManagedPresentationMismatch ManagedScenario = "presentation-mismatch"
+	ManagedMergeTip             ManagedScenario = "merge-tip"
+	ManagedPrunedEntry          ManagedScenario = "pruned-entry"
 )
 
 type ExpectedStatus string
@@ -50,13 +60,14 @@ type Manifest struct {
 
 // Case describes one independently materialized snapshot or changeset.
 type Case struct {
-	ID          string     `json:"id"`
-	Description string     `json:"description"`
-	Kind        CaseKind   `json:"kind"`
-	Snapshot    *State     `json:"snapshot,omitempty"`
-	Base        *BaseState `json:"base,omitempty"`
-	Candidate   *State     `json:"candidate,omitempty"`
-	Expected    *Expected  `json:"expected"`
+	ID          string        `json:"id"`
+	Description string        `json:"description"`
+	Kind        CaseKind      `json:"kind"`
+	Snapshot    *State        `json:"snapshot,omitempty"`
+	Base        *BaseState    `json:"base,omitempty"`
+	Candidate   *State        `json:"candidate,omitempty"`
+	Managed     *ManagedState `json:"managed,omitempty"`
+	Expected    *Expected     `json:"expected"`
 }
 
 // State is a sequence of operations applied after the manifest's common
@@ -72,18 +83,27 @@ type BaseState struct {
 	Operations  []Operation
 }
 
-// Operation is a closed tagged union. Source is present only for write_text;
-// Content is present only for write_base64.
+// ManagedState creates one ordinary managed repository from Operations, then
+// applies one closed raw/presentation scenario used by the E6xx corpus.
+type ManagedState struct {
+	Operations []Operation     `json:"operations"`
+	Scenario   ManagedScenario `json:"scenario"`
+}
+
+// Operation is a closed tagged union. Source is present only for write_text,
+// Content only for write_base64, and Target only for write_symlink.
 type Operation struct {
 	Kind    OperationKind `json:"operation"`
 	Path    string        `json:"path"`
 	Source  *string       `json:"source,omitempty"`
 	Content *string       `json:"content,omitempty"`
+	Target  *string       `json:"target,omitempty"`
 }
 
 type Expected struct {
-	Status   *ExpectedStatus `json:"status,omitempty"`
-	Findings []Finding       `json:"findings"`
+	Status      *ExpectedStatus `json:"status,omitempty"`
+	Findings    []Finding       `json:"findings"`
+	NotFindings []string        `json:"not_findings,omitempty"`
 }
 
 type Finding struct {
@@ -175,8 +195,8 @@ func (m *Manifest) Validate() error {
 			if c.Snapshot == nil {
 				return fmt.Errorf("%s.snapshot is required for snapshot cases", where)
 			}
-			if c.Base != nil || c.Candidate != nil {
-				return fmt.Errorf("%s snapshot case must not contain base or candidate", where)
+			if c.Base != nil || c.Candidate != nil || c.Managed != nil {
+				return fmt.Errorf("%s snapshot case must not contain base, candidate, or managed", where)
 			}
 			if c.Expected.Status != nil {
 				return fmt.Errorf("%s.expected.status is not allowed for snapshot cases", where)
@@ -185,8 +205,8 @@ func (m *Manifest) Validate() error {
 				return err
 			}
 		case KindChangeset:
-			if c.Snapshot != nil {
-				return fmt.Errorf("%s changeset case must not contain snapshot", where)
+			if c.Snapshot != nil || c.Managed != nil {
+				return fmt.Errorf("%s changeset case must not contain snapshot or managed", where)
 			}
 			if c.Base == nil {
 				return fmt.Errorf("%s.base is required for changeset cases", where)
@@ -212,11 +232,41 @@ func (m *Manifest) Validate() error {
 			if err := c.Candidate.validate(where + ".candidate"); err != nil {
 				return err
 			}
+		case KindManaged:
+			if c.Managed == nil {
+				return fmt.Errorf("%s.managed is required for managed cases", where)
+			}
+			if c.Snapshot != nil || c.Base != nil || c.Candidate != nil {
+				return fmt.Errorf("%s managed case must not contain snapshot, base, or candidate", where)
+			}
+			if c.Expected.Status == nil || *c.Expected.Status != StatusComplete {
+				return fmt.Errorf("%s.expected.status must be %q for managed cases", where, StatusComplete)
+			}
+			if err := c.Managed.validate(where + ".managed"); err != nil {
+				return err
+			}
 		default:
 			return fmt.Errorf("%s.kind %q is invalid", where, c.Kind)
 		}
 	}
 	return nil
+}
+
+func (m *ManagedState) validate(where string) error {
+	if m.Operations == nil {
+		return fmt.Errorf("%s.operations must be an array", where)
+	}
+	for i := range m.Operations {
+		if err := m.Operations[i].validate(fmt.Sprintf("%s.operations[%d]", where, i)); err != nil {
+			return err
+		}
+	}
+	switch m.Scenario {
+	case ManagedPresentationMismatch, ManagedMergeTip, ManagedPrunedEntry:
+		return nil
+	default:
+		return fmt.Errorf("%s.scenario %q is invalid", where, m.Scenario)
+	}
 }
 
 // CaseByID returns the manifest case with id.
@@ -269,6 +319,9 @@ func (o *Operation) validate(where string) error {
 		if o.Content != nil {
 			return fmt.Errorf("%s.content is not allowed for write_text", where)
 		}
+		if o.Target != nil {
+			return fmt.Errorf("%s.target is not allowed for write_text", where)
+		}
 	case OperationWriteBase64:
 		if o.Content == nil {
 			return fmt.Errorf("%s.content is required for write_base64", where)
@@ -279,8 +332,21 @@ func (o *Operation) validate(where string) error {
 		if _, err := base64.StdEncoding.Strict().DecodeString(*o.Content); err != nil {
 			return fmt.Errorf("%s.content is not strict RFC 4648 base64: %w", where, err)
 		}
-	case OperationRemove:
+		if o.Target != nil {
+			return fmt.Errorf("%s.target is not allowed for write_base64", where)
+		}
+	case OperationWriteLink:
+		if o.Target == nil {
+			return fmt.Errorf("%s.target is required for write_symlink", where)
+		}
+		if err := validateStorePath(where+".target", *o.Target); err != nil {
+			return err
+		}
 		if o.Source != nil || o.Content != nil {
+			return fmt.Errorf("%s write_symlink must contain only operation, path, and target", where)
+		}
+	case OperationRemove:
+		if o.Source != nil || o.Content != nil || o.Target != nil {
 			return fmt.Errorf("%s remove must contain only operation and path", where)
 		}
 	default:
@@ -309,6 +375,24 @@ func (e *Expected) validate(where string) error {
 		seen[key] = struct{}{}
 		if i > 0 && compareFinding(e.Findings[i-1], f) > 0 {
 			return fmt.Errorf("%s.findings must be ordered by UTF-8 path bytes, then ASCII code", where)
+		}
+	}
+	seenCodes := make(map[string]struct{}, len(e.NotFindings))
+	for i, code := range e.NotFindings {
+		if !findingCodePattern.MatchString(code) {
+			return fmt.Errorf("%s.not_findings[%d] %q is invalid", where, i, code)
+		}
+		if _, exists := seenCodes[code]; exists {
+			return fmt.Errorf("%s.not_findings[%d] duplicates %s", where, i, code)
+		}
+		seenCodes[code] = struct{}{}
+		if i > 0 && e.NotFindings[i-1] > code {
+			return fmt.Errorf("%s.not_findings must be ordered by ASCII code", where)
+		}
+		for _, finding := range e.Findings {
+			if finding.Code == code {
+				return fmt.Errorf("%s code %s cannot be both expected and forbidden", where, code)
+			}
 		}
 	}
 	return nil
@@ -380,6 +464,7 @@ func (c *Case) UnmarshalJSON(data []byte) error {
 		Snapshot    json.RawMessage `json:"snapshot"`
 		Base        json.RawMessage `json:"base"`
 		Candidate   json.RawMessage `json:"candidate"`
+		Managed     json.RawMessage `json:"managed"`
 		Expected    json.RawMessage `json:"expected"`
 	}
 	if err := decodeClosed(data, &wire); err != nil {
@@ -391,6 +476,7 @@ func (c *Case) UnmarshalJSON(data []byte) error {
 	c.Snapshot = nil
 	c.Base = nil
 	c.Candidate = nil
+	c.Managed = nil
 	c.Expected = nil
 	if len(wire.Snapshot) != 0 {
 		if isJSONNull(wire.Snapshot) {
@@ -422,6 +508,16 @@ func (c *Case) UnmarshalJSON(data []byte) error {
 		}
 		c.Candidate = &state
 	}
+	if len(wire.Managed) != 0 {
+		if isJSONNull(wire.Managed) {
+			return fmt.Errorf("managed must not be null")
+		}
+		var managed ManagedState
+		if err := decodeClosed(wire.Managed, &managed); err != nil {
+			return fmt.Errorf("managed: %w", err)
+		}
+		c.Managed = &managed
+	}
 	if len(wire.Expected) != 0 {
 		if isJSONNull(wire.Expected) {
 			return fmt.Errorf("expected must not be null")
@@ -441,6 +537,7 @@ func (o *Operation) UnmarshalJSON(data []byte) error {
 		Path    string          `json:"path"`
 		Source  json.RawMessage `json:"source"`
 		Content json.RawMessage `json:"content"`
+		Target  json.RawMessage `json:"target"`
 	}
 	if err := decodeClosed(data, &wire); err != nil {
 		return err
@@ -449,6 +546,7 @@ func (o *Operation) UnmarshalJSON(data []byte) error {
 	o.Path = wire.Path
 	o.Source = nil
 	o.Content = nil
+	o.Target = nil
 	if len(wire.Source) != 0 {
 		if isJSONNull(wire.Source) {
 			return fmt.Errorf("source must not be null")
@@ -469,19 +567,31 @@ func (o *Operation) UnmarshalJSON(data []byte) error {
 		}
 		o.Content = &content
 	}
+	if len(wire.Target) != 0 {
+		if isJSONNull(wire.Target) {
+			return fmt.Errorf("target must not be null")
+		}
+		var target string
+		if err := json.Unmarshal(wire.Target, &target); err != nil {
+			return fmt.Errorf("target must be a string: %w", err)
+		}
+		o.Target = &target
+	}
 	return nil
 }
 
 func (e *Expected) UnmarshalJSON(data []byte) error {
 	var wire struct {
-		Status   json.RawMessage `json:"status"`
-		Findings json.RawMessage `json:"findings"`
+		Status      json.RawMessage `json:"status"`
+		Findings    json.RawMessage `json:"findings"`
+		NotFindings json.RawMessage `json:"not_findings"`
 	}
 	if err := decodeClosed(data, &wire); err != nil {
 		return err
 	}
 	e.Status = nil
 	e.Findings = nil
+	e.NotFindings = nil
 	if len(wire.Status) != 0 {
 		if isJSONNull(wire.Status) {
 			return fmt.Errorf("status must not be null")
@@ -498,6 +608,14 @@ func (e *Expected) UnmarshalJSON(data []byte) error {
 		}
 		if err := decodeClosed(wire.Findings, &e.Findings); err != nil {
 			return fmt.Errorf("findings: %w", err)
+		}
+	}
+	if len(wire.NotFindings) != 0 {
+		if isJSONNull(wire.NotFindings) {
+			return fmt.Errorf("not_findings must not be null")
+		}
+		if err := decodeClosed(wire.NotFindings, &e.NotFindings); err != nil {
+			return fmt.Errorf("not_findings: %w", err)
 		}
 	}
 	return nil

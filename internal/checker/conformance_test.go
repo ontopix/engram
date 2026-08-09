@@ -34,7 +34,7 @@ func TestSnapshotConformanceManifest(t *testing.T) {
 		fixture := fixture
 		t.Run(fixture.ID, func(t *testing.T) {
 			materialized, err := manifest.MaterializeCase(repository, t.TempDir(), fixture.ID)
-			if errors.Is(err, conformance.ErrPathNotRepresentable) {
+			if errors.Is(err, conformance.ErrPathNotRepresentable) || errors.Is(err, conformance.ErrFixtureCapability) {
 				t.Skip(err)
 			}
 			if err != nil {
@@ -48,6 +48,7 @@ func TestSnapshotConformanceManifest(t *testing.T) {
 			if !reflect.DeepEqual(got, fixture.Expected.Findings) {
 				t.Fatalf("findings = %#v, want %#v", got, fixture.Expected.Findings)
 			}
+			assertForbiddenFindingsAbsent(t, got, fixture.Expected.NotFindings)
 		})
 	}
 }
@@ -87,7 +88,19 @@ func TestChangesetConformanceManifest(t *testing.T) {
 			if !reflect.DeepEqual(got, fixture.Expected.Findings) {
 				t.Fatalf("findings = %#v, want %#v", got, fixture.Expected.Findings)
 			}
+			assertForbiddenFindingsAbsent(t, got, fixture.Expected.NotFindings)
 		})
+	}
+}
+
+func assertForbiddenFindingsAbsent(t *testing.T, findings []conformance.Finding, forbidden []string) {
+	t.Helper()
+	for _, finding := range findings {
+		for _, code := range forbidden {
+			if finding.Code == code {
+				t.Fatalf("finding %s was explicitly forbidden by the fixture", code)
+			}
+		}
 	}
 }
 
