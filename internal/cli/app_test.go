@@ -88,3 +88,24 @@ func TestAppRootHelp(t *testing.T) {
 		t.Fatalf("status = %d, stdout = %q, stderr = %q", status, stdout.String(), stderr.String())
 	}
 }
+
+func TestAppRendersSuccessfulTextAndQuietSuppressesIt(t *testing.T) {
+	t.Parallel()
+	app := NewApp()
+	app.Handlers[CommandStatus] = HandlerFunc(func(context.Context, *Invocation) Result {
+		return Result{Outcome: OutcomeOK, Value: struct {
+			Changed bool `json:"changed"`
+		}{Changed: true}}
+	})
+	var stdout, stderr bytes.Buffer
+	if status := app.Run(context.Background(), []string{"status"}, &stdout, &stderr); status != 0 {
+		t.Fatalf("status = %d", status)
+	}
+	if !strings.Contains(stdout.String(), `"changed": true`) || stderr.Len() != 0 {
+		t.Fatalf("stdout = %q, stderr = %q", stdout.String(), stderr.String())
+	}
+	stdout.Reset()
+	if status := app.Run(context.Background(), []string{"--quiet", "status"}, &stdout, &stderr); status != 0 || stdout.Len() != 0 {
+		t.Fatalf("quiet status = %d, stdout = %q", status, stdout.String())
+	}
+}

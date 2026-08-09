@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 
@@ -28,6 +29,11 @@ type App struct {
 	Model    *Model
 	Handlers map[CommandName]Handler
 	Version  engramversion.Provider
+	// Stdin is the byte source for commands whose explicit grammar accepts
+	// standard input (currently `new --body -`). Keeping it on the application
+	// makes parser invocations pure while allowing embedders and tests to supply
+	// a bounded reader instead of inheriting process-global state.
+	Stdin io.Reader
 }
 
 func NewApp() *App {
@@ -36,6 +42,7 @@ func NewApp() *App {
 		Model:    model,
 		Handlers: make(map[CommandName]Handler, len(model.Commands)),
 		Version:  engramversion.NewProvider(),
+		Stdin:    io.LimitReader(emptyReader{}, 0),
 	}
 	for _, command := range model.Commands {
 		name := command.Name
@@ -54,6 +61,13 @@ func NewApp() *App {
 	})
 	return app
 }
+
+// emptyReader is the allocation-free default input for library callers. The
+// executable replaces it with os.Stdin; commands never read it unless their
+// explicit option selects standard input.
+type emptyReader struct{}
+
+func (emptyReader) Read([]byte) (int, error) { return 0, io.EOF }
 
 func (a *App) Run(ctx context.Context, arguments []string, stdout, stderr io.Writer) int {
 	invocation, parseFailure := Parse(a.Model, arguments)
@@ -94,6 +108,22 @@ func (a *App) Run(ctx context.Context, arguments []string, stdout, stderr io.Wri
 		info := result.Value.(engramversion.Info)
 		fmt.Fprintf(stdout, "engram %s\n", info.CLIVersion)
 		return result.Outcome.ExitStatus()
+	}
+	if invocation.Globals.Quiet && result.Outcome == OutcomeOK {
+		return result.Outcome.ExitStatus()
+	}
+	if result.Value != nil {
+		// Protocol v1 leaves the exact human prose non-normative. A stable,
+		// indented rendering keeps every closed result field visible until a
+		// command elects a more specialized human presentation, while JSON mode
+		// above remains the machine contract.
+		encoder := json.NewEncoder(stdout)
+		encoder.SetEscapeHTML(false)
+		encoder.SetIndent("", "  ")
+		if err := encoder.Encode(result.Value); err != nil {
+			fmt.Fprintf(stderr, "engram: %s\n", err)
+			return OutcomeError.ExitStatus()
+		}
 	}
 	return result.Outcome.ExitStatus()
 }
