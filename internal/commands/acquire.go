@@ -63,6 +63,30 @@ func acquireFailure(err error, action string) cli.Result {
 		kind = cli.ErrorRepository
 	case acquire.ErrorIO:
 		kind = cli.ErrorIO
+	case acquire.ErrorRecovery:
+		kind = cli.ErrorOperational
 	}
-	return commandError(kind, fmt.Sprintf("%s: %v", action, err))
+	protocolError := &cli.ProtocolError{Kind: kind, Message: fmt.Sprintf("%s: %v", action, err)}
+	mutation, present := acquire.MutationOf(err)
+	if !present {
+		return cli.Result{Outcome: cli.OutcomeError, Error: protocolError}
+	}
+	result := cli.NewMutationResult()
+	result.Durable = mutation.Durable
+	result.CheckoutChanged = mutation.CheckoutChanged
+	result.RecoveryRequired = mutation.RecoveryRequired
+	if mutation.Accepted != nil {
+		if mutation.Accepted.Ref != nil && mutation.Accepted.Commit != nil {
+			result.LocalRefs = append(result.LocalRefs, cli.RefMutation{
+				Ref: *mutation.Accepted.Ref, After: cloneStringForCommand(mutation.Accepted.Commit),
+			})
+		}
+		if mutation.CheckoutChanged {
+			result.Head = &cli.HeadMutation{
+				Before: cli.MutationGitState{},
+				After:  cli.MutationGitState{Ref: cloneStringForCommand(mutation.Accepted.Ref), Commit: cloneStringForCommand(mutation.Accepted.Commit)},
+			}
+		}
+	}
+	return cli.Result{Outcome: cli.OutcomeError, Value: result, Error: protocolError}
 }
