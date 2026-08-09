@@ -21,10 +21,15 @@ func TestClonePublishesOnlyVerifiedManagedStore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !result.Published || result.Reused || result.Root != destination || result.Remote != "origin" || result.VerifiedCommits != 1 || result.Launcher != guard.Installed || result.Validation.HasErrors() {
+	canonicalParent, err := filepath.EvalSymlinks(filepath.Dir(destination))
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalDestination := filepath.Join(canonicalParent, filepath.Base(destination))
+	if !result.Published || result.Reused || result.Root != canonicalDestination || result.Remote != "origin" || result.VerifiedCommits != 1 || result.Launcher != guard.Installed || result.Validation.HasErrors() {
 		t.Fatalf("result = %#v", result)
 	}
-	store, err := managedread.Open(context.Background(), destination)
+	store, err := managedread.Open(context.Background(), canonicalDestination)
 	if err != nil {
 		t.Fatal(err)
 	}

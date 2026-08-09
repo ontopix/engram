@@ -160,7 +160,21 @@ func Install(ctx context.Context, repository *gitraw.Repository) (State, error) 
 	if err := os.Rename(temporaryName, hook); err != nil {
 		return "", err
 	}
+	if err := syncDirectory(filepath.Dir(hook)); err != nil {
+		return "", err
+	}
 	return Installed, nil
+}
+
+func syncDirectory(name string) error {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	directory, err := os.Open(name)
+	if err != nil {
+		return err
+	}
+	return errors.Join(directory.Sync(), directory.Close())
 }
 
 func isolatedEnvironment(environment []string) []string {

@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"unicode/utf8"
 
@@ -121,6 +122,19 @@ func Clone(ctx context.Context, location string, options Options) (Result, error
 	if err != nil || parentInfo.Mode()&os.ModeSymlink != 0 || !parentInfo.IsDir() {
 		return Result{}, typed(ErrorUsage, "select clone destination", errors.New("destination parent is not an existing real directory"))
 	}
+	canonicalParent, err := filepath.EvalSymlinks(parent)
+	if err != nil {
+		return Result{}, typed(ErrorUsage, "select clone destination", err)
+	}
+	destination = filepath.Join(filepath.Clean(canonicalParent), filepath.Base(destination))
+	if _, statErr := os.Lstat(destination); statErr == nil {
+		if options.DestinationProvided {
+			return Result{}, typed(ErrorConflict, "select clone destination", errors.New("explicit destination already exists"))
+		}
+		return reuse(ctx, location, destination)
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		return Result{}, typed(ErrorIO, "inspect clone destination", statErr)
+	}
 	staging, err := os.MkdirTemp(parent, ".engram-clone-")
 	if err != nil {
 		return Result{}, typed(ErrorIO, "create clone staging directory", err)
@@ -166,6 +180,14 @@ func Clone(ctx context.Context, location string, options Options) (Result, error
 	}
 	if err := os.Rename(checkout, destination); err != nil {
 		return Result{}, typed(ErrorIO, "publish clone", err)
+	}
+	if err := syncDirectory(filepath.Dir(destination)); err != nil {
+		// The target is already visible and may contain the accepted store. An
+		// inability to prove directory-entry durability must not be reported as
+		// an ordinary pre-publication failure that callers could safely retry.
+		cleanup = false
+		result.Published = true
+		return result, typed(ErrorIO, "durably publish clone", err)
 	}
 	result.Published = true
 	if err := os.Remove(staging); err != nil {
@@ -437,6 +459,17 @@ func bounded(value []byte) string {
 		value = value[:limit]
 	}
 	return strings.TrimSpace(string(value))
+}
+
+func syncDirectory(name string) error {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	directory, err := os.Open(name)
+	if err != nil {
+		return err
+	}
+	return errors.Join(directory.Sync(), directory.Close())
 }
 
 func typed(kind ErrorKind, operation string, err error) error {
