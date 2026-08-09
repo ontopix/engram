@@ -35,7 +35,10 @@ type AcceptedAudit struct {
 
 // AuditAccepted inspects the complete locally available accepted lineage. It
 // never fetches. Missing required objects are returned as capability errors by
-// gitraw; E601/E602 causal boundaries remain complete managed results.
+// gitraw; E601/E602 causal boundaries remain complete managed results. A
+// handle may reuse the immutable lineage analysis only for the exact accepted
+// tip and normative rule-set identity; mutable presentation inputs are always
+// observed and rechecked for the current call.
 func (s *Store) AuditAccepted(ctx context.Context) (result *AcceptedAudit, err error) {
 	repository, err := s.observeRepository(ctx)
 	if err != nil {
@@ -52,7 +55,7 @@ func (s *Store) AuditAccepted(ctx context.Context) (result *AcceptedAudit, err e
 		}
 	}()
 	operationStore := s.atRepository(repository)
-	result, err = operationStore.auditAccepted(ctx)
+	result, err = operationStore.cachedAcceptedAudit(ctx)
 	if err != nil {
 		return nil, err
 	}

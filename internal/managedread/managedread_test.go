@@ -156,6 +156,30 @@ func TestConflictedAndIntentToAddIndexRejected(t *testing.T) {
 	})
 }
 
+func TestMalformedIndexIsRejectedAsTypedInputFailure(t *testing.T) {
+	for _, operation := range []struct {
+		name string
+		run  func(context.Context, *Store) error
+	}{
+		{name: "staged", run: func(ctx context.Context, store *Store) error { _, err := store.Staged(ctx); return err }},
+		{name: "status", run: func(ctx context.Context, store *Store) error { _, err := store.Status(ctx); return err }},
+		{name: "diff", run: func(ctx context.Context, store *Store) error { _, err := store.DiffStaged(ctx); return err }},
+	} {
+		t.Run(operation.name, func(t *testing.T) {
+			root := newGitRepository(t, gitraw.SHA1, true)
+			store := openStore(t, root)
+			if err := os.WriteFile(filepath.Join(store.repository.GitDir, "index"), []byte("not a Git index\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			err := operation.run(context.Background(), store)
+			var indexError *IndexError
+			if !errors.As(err, &indexError) || indexError.Kind != IndexMalformed {
+				t.Fatalf("error = %T %v, want malformed IndexError", err, err)
+			}
+		})
+	}
+}
+
 func TestCandidateModeRules(t *testing.T) {
 	t.Run("new executable", func(t *testing.T) {
 		root := newGitRepository(t, gitraw.SHA1, true)

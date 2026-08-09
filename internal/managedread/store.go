@@ -17,6 +17,13 @@ type Store struct {
 	repository *gitraw.Repository
 	git        string
 
+	// acceptedAudits is shared by the short-lived repository observations made
+	// from this handle. Only the immutable lineage/portable audit is reusable;
+	// presentation inputs are deliberately observed on every public operation.
+	acceptedAudits *acceptedAuditCache
+	ruleSetID      string
+	auditLoader    acceptedAuditLoader
+
 	// afterCapture is an internal deterministic fault seam. Production stores
 	// leave it nil; tests can mutate an observed input before final recheck.
 	afterCapture func(operation string)
@@ -52,7 +59,12 @@ func Open(ctx context.Context, selectedPath string) (*Store, error) {
 	if err != nil {
 		return nil, &gitraw.Error{Kind: gitraw.FailureCapability, Op: "locate-git", Err: err}
 	}
-	return &Store{repository: repository, git: git}, nil
+	return &Store{
+		repository:     repository,
+		git:            git,
+		acceptedAudits: newAcceptedAuditCache(),
+		ruleSetID:      acceptedAuditRuleSetIdentity,
+	}, nil
 }
 
 // Repository exposes the immutable discovery result used by this handle.

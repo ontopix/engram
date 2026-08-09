@@ -42,7 +42,13 @@ func (s *Store) observeRepository(ctx context.Context) (*gitraw.Repository, erro
 }
 
 func (s *Store) atRepository(repository *gitraw.Repository) *Store {
-	return &Store{repository: repository, git: s.git}
+	return &Store{
+		repository:     repository,
+		git:            s.git,
+		acceptedAudits: s.acceptedAudits,
+		ruleSetID:      s.ruleSetID,
+		auditLoader:    s.auditLoader,
+	}
 }
 
 func (s *Store) finishOperation(ctx context.Context, operation string, before operationInputs) error {
