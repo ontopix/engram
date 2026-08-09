@@ -198,3 +198,26 @@ func TestCooperatingLockRejectsConcurrentUpdate(t *testing.T) {
 		t.Fatalf("error = %v", err)
 	}
 }
+
+func TestDetachCanRemoveAStaleMissingPath(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	project := filepath.Join(root, "project")
+	store := filepath.Join(root, "store")
+	for _, directory := range []string{project, store} {
+		if err := os.Mkdir(directory, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	attached, err := Attach(project, "", store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(store); err != nil {
+		t.Fatal(err)
+	}
+	detached, err := Detach(project, attached.Entrypoint, store)
+	if err != nil || !detached.Changed {
+		t.Fatalf("detach = %#v, %v", detached, err)
+	}
+}

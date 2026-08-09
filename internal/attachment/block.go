@@ -145,7 +145,11 @@ func update(project, entrypoint, store string, attach bool) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	store, err = CanonicalStore(store)
+	if attach {
+		store, err = CanonicalStore(store)
+	} else {
+		store, err = detachStorePath(store)
+	}
 	if err != nil {
 		return Result{}, err
 	}
@@ -201,6 +205,35 @@ func update(project, entrypoint, store string, attach bool) (Result, error) {
 	}
 	result.Changed = true
 	return result, nil
+}
+
+func detachStorePath(store string) (string, error) {
+	absolute, err := filepath.Abs(store)
+	if err != nil {
+		return "", err
+	}
+	canonical, err := filepath.EvalSymlinks(absolute)
+	if err == nil {
+		info, statErr := os.Stat(canonical)
+		if statErr != nil {
+			return "", statErr
+		}
+		if !info.IsDir() {
+			return "", fmt.Errorf("%s is not a directory", store)
+		}
+		return filepath.Clean(canonical), nil
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		resolvedParent, parentErr := filepath.EvalSymlinks(filepath.Dir(absolute))
+		if parentErr == nil {
+			return filepath.Join(resolvedParent, filepath.Base(absolute)), nil
+		}
+		if errors.Is(parentErr, os.ErrNotExist) {
+			return filepath.Clean(absolute), nil
+		}
+		return "", parentErr
+	}
+	return "", err
 }
 
 func parse(source []byte) (parsedBlock, bool, error) {
