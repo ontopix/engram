@@ -70,11 +70,11 @@ func validateURL(location string) error {
 
 func validateSCP(location string) error {
 	colon := strings.IndexByte(location, ':')
-	if colon <= 0 || colon == len(location)-1 || strings.Contains(location[colon+1:], ":") {
+	if colon <= 0 || colon == len(location)-1 {
 		return fmt.Errorf("repository location is not an admitted URL or scp form")
 	}
 	left, remotePath := location[:colon], location[colon+1:]
-	if strings.HasPrefix(remotePath, "-") || strings.HasPrefix(remotePath, "/") || strings.ContainsAny(remotePath, "\\\r\n\x00") {
+	if strings.ContainsAny(remotePath, "\r\n\x00") {
 		return fmt.Errorf("invalid scp repository path")
 	}
 	user, host := "", left
@@ -84,7 +84,7 @@ func validateSCP(location string) error {
 		}
 		user, host = left[:at], left[at+1:]
 	}
-	if host == "" || strings.ContainsAny(host, "/\\[] ") || strings.ContainsAny(user, "/\\: ") {
+	if host == "" || strings.ContainsAny(host, "/\\ ") || strings.ContainsAny(user, "/\\: ") {
 		return fmt.Errorf("invalid scp repository authority")
 	}
 	return nil

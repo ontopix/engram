@@ -17,6 +17,8 @@ func TestValidateLocationClosedSurface(t *testing.T) {
 		"file:///var/tmp/store.git",
 		"git@example.test:owner/store.git",
 		"example.test:owner/store.git",
+		"example.test:/absolute/store.git",
+		"example.test:-option-looking-remote-path",
 	}
 	for _, location := range valid {
 		if err := ValidateLocation(location); err != nil {
@@ -27,7 +29,7 @@ func TestValidateLocationClosedSurface(t *testing.T) {
 		"", "-uhoh", "http://example.test/store", "git://example.test/store",
 		"ext::command", "ftp://example.test/store", "https://example.test",
 		"https://example.test/store?x=1", "file://relative", "/local/path",
-		"host:/absolute", "host:-option", "host:path\nnext", "@host:path",
+		"host:path\nnext", "@host:path",
 	}
 	for _, location := range invalid {
 		if err := ValidateLocation(location); err == nil {
