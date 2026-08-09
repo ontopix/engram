@@ -55,6 +55,48 @@ type ProtocolError struct {
 	Message string    `json:"message"`
 }
 
+// MutationResult is the closed result carried by an error after an operation
+// may have published durable workflow state. It deliberately separates known
+// effects from the human error message so clients cannot mistake a post-CAS
+// failure for a safe, side-effect-free retry.
+type MutationResult struct {
+	Durable          bool            `json:"durable"`
+	LocalRefs        []RefMutation   `json:"local_refs"`
+	Head             *HeadMutation   `json:"head"`
+	CheckoutChanged  bool            `json:"checkout_changed"`
+	Remote           *RemoteMutation `json:"remote"`
+	RecoveryRequired bool            `json:"recovery_required"`
+}
+
+type RefMutation struct {
+	Ref    string  `json:"ref"`
+	Before *string `json:"before"`
+	After  *string `json:"after"`
+}
+
+type MutationGitState struct {
+	Ref    *string `json:"ref"`
+	Commit *string `json:"commit"`
+}
+
+type HeadMutation struct {
+	Before MutationGitState `json:"before"`
+	After  MutationGitState `json:"after"`
+}
+
+type RemoteMutation struct {
+	Name   string  `json:"name"`
+	Ref    string  `json:"ref"`
+	Before *string `json:"before"`
+	After  string  `json:"after"`
+}
+
+// NewMutationResult initializes every required array as an empty JSON array.
+// The protocol never uses null to mean “no known local ref updates”.
+func NewMutationResult() MutationResult {
+	return MutationResult{LocalRefs: []RefMutation{}}
+}
+
 func (e *ProtocolError) Error() string { return e.Message }
 
 func usageError(format string, arguments ...any) *ProtocolError {

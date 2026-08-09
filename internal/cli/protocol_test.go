@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
 	"testing"
 )
 
@@ -47,5 +48,18 @@ func TestWriteErrorEnvelope(t *testing.T) {
 	want := "{\"version\":1,\"command\":null,\"outcome\":\"error\",\"exit_status\":2,\"result\":{},\"error\":{\"kind\":\"usage\",\"message\":\"bad input\"}}\n"
 	if output.String() != want {
 		t.Fatalf("envelope = %q, want %q", output.String(), want)
+	}
+}
+
+func TestMutationResultHasClosedNonNullShape(t *testing.T) {
+	t.Parallel()
+	result := NewMutationResult()
+	data, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"durable":false,"local_refs":[],"head":null,"checkout_changed":false,"remote":null,"recovery_required":false}`
+	if string(data) != want {
+		t.Fatalf("mutation result = %s, want %s", data, want)
 	}
 }
