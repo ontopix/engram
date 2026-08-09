@@ -81,12 +81,24 @@ func Discover(ctx context.Context, selectedPath string) (*Repository, error) {
 		return nil, &Error{Kind: FailureGit, Op: "discover-head", Detail: "cannot inspect accepted ref"}
 	}
 
-	var head *OID
-	oidBytes, status, err := runner.outputStatus(ctx, nil, "show-ref", "--verify", "--hash", headRef)
+	// --quiet gives the documented status distinction needed here: 0 means
+	// the accepted ref exists, 1 means the symbolic HEAD is genuinely unborn,
+	// and every other status is an inspection failure. Without --quiet,
+	// show-ref reports an absent exact ref as its fatal status on some Git
+	// versions, which must not be conflated with repository failure.
+	_, status, err := runner.outputStatus(ctx, nil, "show-ref", "--verify", "--quiet", headRef)
 	if err != nil {
 		return nil, err
 	}
+	var head *OID
 	if status == 0 {
+		oidBytes, oidStatus, err := runner.outputStatus(ctx, nil, "show-ref", "--verify", "--hash", headRef)
+		if err != nil {
+			return nil, err
+		}
+		if oidStatus != 0 {
+			return nil, &Error{Kind: FailureGit, Op: "discover-head", Detail: "accepted ref changed while being resolved"}
+		}
 		parsed, parseErr := ParseOID(format, stringLine(oidBytes))
 		if parseErr != nil {
 			return nil, &Error{Kind: FailureRepository, Op: "discover-head", Detail: "accepted ref does not contain a canonical object ID", Err: parseErr}

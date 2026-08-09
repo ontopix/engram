@@ -60,6 +60,27 @@ func TestDiscoverLinkedWorktree(t *testing.T) {
 	}
 }
 
+func TestDiscoverUnbornSymbolicHead(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git unavailable")
+	}
+	repository := filepath.Join(t.TempDir(), "unborn")
+	result := testGit(t, "", nil, "init", "--quiet", "--initial-branch=main", repository)
+	if result.status != 0 {
+		t.Fatalf("git init: %s", result.stderr)
+	}
+	discovered, err := Discover(context.Background(), repository)
+	if err != nil {
+		t.Fatalf("Discover unborn repository: %v", err)
+	}
+	if discovered.HeadRef != "refs/heads/main" || discovered.Head != nil {
+		t.Fatalf("unborn accepted state = ref %q, head %v", discovered.HeadRef, discovered.Head)
+	}
+	if _, err := discovered.Audit(context.Background()); !errors.Is(err, ErrRepository) {
+		t.Fatalf("Audit unborn error = %v, want repository error", err)
+	}
+}
+
 func TestBlackBoxMergeStopsBeforeProjection(t *testing.T) {
 	repository := makeRepository(t, SHA1)
 	testGitOK(t, repository, nil, "checkout", "--quiet", "-b", "side")
