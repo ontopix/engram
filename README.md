@@ -2,96 +2,51 @@
 
 A filesystem-native memory standard for AI agents.
 
-An **engram snapshot** is a portable directory tree of markdown records
-that an agent can read, navigate, and validate — with no database or
-embedding pipeline. A writable **managed store** gives those snapshots
-an independent Git history and accepts each logical memory operation as
-one validated commit. The tree is self-describing: every directory
-documents itself, every record declares its type, every type is defined
-by a schema in the tree, and a deterministic validator can prove it
-consistent.
+An engram store is a self-describing tree of markdown records. Each
+portable snapshot can be read and validated with ordinary file tools; a
+writable store uses an independent Git history so each accepted memory
+change is one validated commit.
 
-- **Spec:** [docs/spec/README.md](docs/spec/README.md)
-- **Managed-store Git binding:**
-  [docs/spec/annex-git.md](docs/spec/annex-git.md) — accepted states,
-  working drafts, staged candidates, commits, concurrency, and attachment
-- **Reference CLI contract:** [docs/cli/README.md](docs/cli/README.md)
-- **Implementation plan:**
-  [docs/implementation-plan.md](docs/implementation-plan.md)
-- **Rationale:** [docs/rationale.md](docs/rationale.md) — why files, why
-  no graph database, what the evidence says
-- **Curated schemas:** [schemas/README.md](schemas/README.md) — optional,
-  ready-to-copy vocabulary of common entity types
-- **Skills:** [docs/spec/annex-skills.md](docs/spec/annex-skills.md) —
-  the operating discipline, packaged for agents
-- **Runtime adapters:** [docs/spec/annex-adapters.md](docs/spec/annex-adapters.md)
-  — Claude Code, Codex, and generic integration
+## Repository map
 
-## Design in one paragraph
-
-Files are the source of truth; every index is derived and rebuildable.
-The store is navigated top-down through per-directory `README.md` files
-whose one-line descriptions form a lazy-loading catalog — an agent reads
-the map, not the territory. Types are defined by schema files (JSON
-Schema in frontmatter + placement criteria in prose) scoped lexically:
-a type defined in a directory is valid in that subtree, shadowing is
-forbidden. Portable snapshots remain plain files; writable managed
-stores use their own Git worktree, with accepted memory at `HEAD` and
-each logical write accepted as one validated commit. Integrity is
-enforced at changeset boundaries by declarative transition rules and a
-deterministic `check` with cataloged error codes. Optional
-`prepare-changeset` scripts transform disposable candidates before
-acceptance. Schema-level policies (`immutable`, `append-only`) make
-guarantees like an append-only journal mechanical rather than
-aspirational.
-
-## What this repository contains
-
-| Path | Content |
+| Path | Purpose |
 |---|---|
-| `docs/spec/` | Core specification and independently versioned annexes; each document declares its normative status |
-| `docs/cli/` | Non-normative reference CLI contract |
-| `docs/implementation-plan.md` | Phased Go CLI implementation and release gates |
-| `docs/rationale.md` | Non-normative: the reasoning and the evidence |
-| `schemas/` | Non-normative curated schema inventory |
-| `examples/minimal/` | A small conforming portable snapshot |
-| `skills/` | Canonical runtime-neutral Agent Skills artifacts (planned in implementation milestone M0) |
-| `cmd/`, `internal/` | Reference CLI (`engram`), Go — not yet started |
+| [`docs/spec/README.md`](docs/spec/README.md) | Normative core: snapshot format, validation, transitions, and Agent Protocol |
+| [`docs/spec/annex-git.md`](docs/spec/annex-git.md) | Normative Git binding for writable managed stores |
+| [`docs/cli/README.md`](docs/cli/README.md) | Non-normative reference CLI contract |
+| [`docs/implementation-plan.md`](docs/implementation-plan.md) | Phased implementation roadmap |
+| [`docs/rationale.md`](docs/rationale.md) | Design reasoning and tradeoffs |
+| [`schemas/`](schemas/README.md) | Optional curated record types |
+| [`docs/spec/annex-skills.md`](docs/spec/annex-skills.md) | Canonical agent workflows |
+| [`docs/spec/annex-adapters.md`](docs/spec/annex-adapters.md) | Runtime integration guidance |
+| [`examples/minimal/`](examples/minimal/README.md) | Small conforming snapshot |
+
+## Design
+
+- Files are authoritative; indexes and caches are rebuildable.
+- Every directory has a README map, every record declares a type, and
+  every type is defined by a schema in the tree.
+- Agents navigate by descriptions and load record content only when it
+  is relevant.
+- Deterministic checks protect snapshot and transition integrity.
+- Git is required only for accepted writable history, not for reading a
+  portable snapshot.
+
+The standard exposes no memory-serving protocol. Agents and adapters use
+normal filesystem tools.
 
 ## Status
 
-Pre-release draft. The v1 specification is functionally closed and ready
-to implement against its first adopter
-([cortex](https://github.com/apuigsech/cortex), a personal second-brain
-system); nothing is stable until v1 is declared.
+The v1 design is ready for implementation but remains a pre-release
+draft; no interface is stable until v1 is declared. The executable
+sequence and release gates live in the
+[implementation plan](docs/implementation-plan.md).
+
+Engram complements the [`.agents/` standard](https://github.com/apuigsech/dot-agents):
+projects can attach independent engram stores without merging their Git
+ownership or histories.
 
 Planned publication: `engram.ontopix.ai`.
-
-## Roadmap
-
-- **Now:** build the conformance harness, portable snapshot checker,
-  changeset engine, and read-only managed-history commands.
-- **Next:** add draft/staging helpers and the locked Go acceptance engine,
-  with a minimal POSIX `sh` guard for raw Git commits.
-- **Later:** add linear pull/push replay, operational diagnostics,
-  skills-only adapter packaging, and the v1 release gates.
-
-The executable milestones, dependencies, tests, and exit criteria are
-maintained in the [implementation plan](docs/implementation-plan.md).
-
-Engram exposes no memory-serving protocol: agents and adapters interact
-with stores directly through filesystem tools.
-
-## Relationship to the `.agents/` standard
-
-[`.agents/`](https://github.com/apuigsech/dot-agents) organizes a
-*repository's* agent-facing content (skills, tasks, volatile work
-memory, stable knowledge). engram norms a *memory store* — the thing
-`.agents/` §3.1 explicitly excludes from its own `memory/` pillar. They
-compose: a project adopting `.agents/` attaches one or more independent
-engram stores by path. A deliberately nested checkout is ignored by the
-outer repository or represented explicitly as a submodule; attachment
-does not merge repository ownership.
 
 ## License
 

@@ -1,11 +1,9 @@
 # Conformance fixture manifest
 
-`cases.json` is the machine-readable seed corpus for the normative behaviors
-that must not be delegated to host or library defaults. It is intentionally
-small; the implementation plan requires expanding it to cover every emitted
-catalog code before v1.
+Non-normative fixture format. `cases.json` is the machine-readable seed
+corpus for behavior that must not depend on host or library defaults.
 
-## Materialization contract
+## Fixture materialization
 
 - `seed` and operation `source` values are repository-root-relative UTF-8
   paths. Operation `path` values are normalized store-root-relative paths.

@@ -15,19 +15,15 @@ policy:
 ---
 # journal-entry
 
-The raw layer of episodic memory: what entered the system, when, from
-where. Everything durable — facts, people, projects — is distilled
-*from* this layer and links *back* to it, which is what keeps every
-claim in the store traceable to the moment it arrived.
+The raw layer of episodic memory: what entered the system, when, and
+from where. Durable records can link back to these anchors.
 
 ## Discipline
 
-- One entry per day (or per bounded session), filename the date:
-  `2026-08-04.md`. The `date` field equals the filename.
-- **Append-only by policy** — the store's one mechanically-frozen
-  type. Within the open day, new material is appended at the end;
-  nothing already written is edited. A mistake is corrected by a new
-  dated line stating the correction, never by rewriting history.
+- One entry per day, named by date: `2026-08-04.md`. The `date` field
+  equals the filename stem.
+- The type is mechanically append-only. Add new material at the end;
+  correct a mistake with a later line rather than rewriting history.
 - Entries record signals distilled at capture: what happened and its
   source reference, not pasted transcripts. Third-party content arrives
   summarized, with its identifier — never verbatim walls.
@@ -36,9 +32,8 @@ claim in the store traceable to the moment it arrived.
 
 ## Directory setup
 
-The README of a journal directory is recommended to set `catalog: dirs` — dated
-records are addressed by name, and a 365-line catalog is churn without
-navigation value.
+A journal directory can use `catalog: dirs`: dated records are addressed
+by name, so a long generated list may add little navigation value.
 
 ## Template
 

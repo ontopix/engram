@@ -29,34 +29,28 @@ body:
 ---
 # person
 
-A living record: rewritten as the person's situation changes, with the
-dated trail kept in its sections. `description` says who they are and
-why they matter here — stable, not their latest status.
+A living record updated as a person's situation changes. `description`
+says who they are and why they matter here, not their latest status.
 
 ## When to create one — and when not
 
-**Records are earned by recurrence.** A person seen once is one line in
-a collection note or a `fact` — never a fresh record. Create the record
-on the second meaningful encounter, or when actual work together
-begins; its first version must already say something.
+Create a person record after meaningful recurrence or when real work
+together begins. A one-off mention belongs in its source record.
 
 ## Identity
 
-`emails` (and `aliases`) are the matching keys: automation links people
-by identifier, never by display name — display names collide and
-change. `name` is the human-facing full name.
+`emails` and `aliases` are matching keys; `name` is the human-facing
+display name and is not assumed unique.
 
 ## Body
 
-- `## Facts` (required) — one dated line per durable claim, newest
-  context on top. A contradiction supersedes the old line; prefer
-  promoting weighty claims to `fact` records and linking them.
+- `## Facts` (required) — dated history. Promote weighty claims to
+  `fact` records and link them.
 - `## Interactions` (recommended) — append-only dated log:
   `- 2026-08-04 — <what> → [[journal/daily/2026-08-04]]`.
 
-`org` and `role` state the current claim; when they change, the change
-is dated in Facts and the field is updated — one truth per fact, in one
-place.
+`org` and `role` hold the current values; `## Facts` keeps the dated
+history when either changes.
 
 ## Template
 

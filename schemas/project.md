@@ -24,20 +24,19 @@ body:
 ---
 # project
 
-A line of work with its own state. Not everything with a name is a
-project: a loose task, a conversation topic, an organization, a goal
-nobody is working toward — none of these earn one.
+A line of work with people, decisions, and changing state. A loose task,
+topic, organization, or inactive aspiration is not a project record.
 
 ## When to create one — and when not
 
-**Records are earned by recurrence.** Work that shows up once is a
-journal line; create the record when the work recurs or materially
-starts. The first version must already carry a Status worth reading.
+Create the record when work materially starts or recurs. Its first
+version must already contain a useful status.
 
 ## Fields
 
-- `name` — kebab-case, recommended to equal the filename: it is the inbound
-  wikilink target, so renaming it means rewriting links (core §7.4).
+- `name` — kebab-case, recommended to equal the filename stem to avoid
+  a misleading human-visible mismatch. The record path, not this field,
+  is link identity (core §7.4).
 - `status` — set on evidence, never on elapsed time. A project silent
   for three months is still `active` until something proves otherwise;
   activity is not progress, and silence is not closure.

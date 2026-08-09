@@ -18,10 +18,10 @@ Every normative change MUST:
 
 ## Non-normative changes
 
-Rationale, adapters annex, CLI contract, curated schema documentation,
-README, and examples' prose: editorial review only. Keep the boundary
-visible — non-normative documents must not smuggle in RFC 2119
-requirements that the normative core and annexes do not state.
+Rationale, skills and adapters guidance, CLI contract, curated schema
+documentation, README, and examples' prose: editorial review only. Keep
+the boundary visible — non-normative documents must not smuggle in RFC
+2119 requirements that the normative core and annexes do not state.
 
 ## Versioning discipline
 

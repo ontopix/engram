@@ -16,6 +16,4 @@ wikilinked rather than restated.
 
 ## Placement
 
-Any self-contained topic that fits `note`. If a third note about the
-same kind of thing appears, that is a missing type — define it in
-`.engram/schemas/` instead of forcing structure into notes.
+Self-contained topic records that fit the local `note` schema.

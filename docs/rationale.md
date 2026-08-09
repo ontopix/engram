@@ -1,154 +1,95 @@
 # Rationale
 
-Non-normative. Why engram is shaped the way it is, and what the
-evidence behind each bet looks like. Where this document and the spec
-disagree, the spec governs.
+Non-normative. This document explains the design choices; the
+[specification](spec/README.md) governs whenever they differ.
 
 ## Why files
 
-The 2024–2026 wave of agent-memory systems split into families:
-memory-as-OS (Letta/MemGPT), extraction pipelines (Mem0), temporal
-knowledge graphs (Zep/Graphiti, Cognee), linked-notes stores (A-MEM),
-multi-strategy retrieval stacks (Hindsight). Against all of them, one
-result kept repeating: **plain files operated with plain file tools are
-embarrassingly competitive.**
+Agents and humans already know how to read, search, diff, and repair
+files. A markdown store keeps memory inspectable with those familiar
+tools and avoids making a database, service, or retrieval pipeline a
+prerequisite for access.
 
-The cleanest datapoint is Letta's own benchmark: an agent given only
-`grep`/`search_files`/`open` over flat files scored 74.0% on LoCoMo
-with gpt-4o-mini — above Mem0's graph variant at 68.5%. Letta — the
-company whose founding metaphor was memory-as-OS — subsequently
-rebuilt its memory layer as MemFS: markdown files in a git repo. The
-mechanism behind the result matters more than the number: models are
-post-trained massively on filesystem tools, so they wield them well;
-and an agent that can *reformulate its own query and iterate* beats a
-theoretically-superior single-hop retrieval it operates poorly.
+Two properties matter as much as retrieval quality:
 
-Two further properties tipped the design, both usually unmeasured:
+- **Auditability.** A person can inspect and correct what the agent
+  believes.
+- **Visible failure.** Incorrect content and incomplete writes appear in
+  ordinary files and diffs rather than behind an extraction pipeline.
 
-- **Auditability.** A human can read, diff, and correct what the agent
-  believes. Every write is reviewable; the memory is a repo, not a
-  black box behind an API.
-- **No silent failure.** An extraction pipeline that decides badly what
-  to store is an invisible bug. A file that says the wrong thing is a
-  visible one.
+This does not imply that plain files solve retrieval. It means they are
+the durable source from which better retrieval can be rebuilt.
 
-## Where bare files break — and engram's answer to each
+## Where files need structure
 
-Honest accounting: structured-filesystem memory has three known failure
-modes, and the standard addresses two of them by construction, one by
-subordinated infrastructure.
+Three important weaknesses shape the standard:
 
-1. **Placement and retrieval degrade as the tree grows.** Grep needs
-   the right term; navigation needs a true map. engram's answer is the
-   README contract with generated catalogs (maps that cannot silently
-   drift), lazy descent by one-line descriptions (MemFS's proven
-   catalog pattern, made mandatory), and the find discipline's forced
-   reformulation. "Lazy" constrains model-context loading, not storage
-   I/O: validators, grep, and index builders may still scan the tree
-   mechanically.
-2. **Facts change truth-value over time.** A file gives you current
-   state or a log; "this was true until March" lives nowhere. The
-   graph systems (Graphiti/Zep) win benchmarks on exactly this. engram
-   takes the lesson without the graph database: bi-temporal fields and
-   supersede-never-edit as a schema-backed discipline (the curated
-   `fact` schema plus Protocol P5). Cross-record consistency remains
-   advisory in v1 rather than pretending to be mechanically enforced.
-3. **Query-free recall.** When the agent doesn't know what to search
-   for, embeddings beat grep. engram's position: build any index you
-   want — as *derived state*, rebuilt from files, never authoritative
-   (core §10). The failure of most memory products is making the index
-   the truth; the failure of purist file systems is refusing the index
-   entirely. Subordination resolves both.
+1. **Placement and retrieval degrade with scale.** Directory READMEs
+   provide local maps, and deterministic catalogs do so when enabled.
+   Agents combine map descent with reformulated content search while
+   keeping unrelated files out of model context.
+2. **Claims change over time.** Domain schemas can record validity and
+   superseding relations alongside the store's Git history. The curated
+   `fact` type demonstrates closing an old claim and linking its
+   replacement; cross-record consistency remains advisory in v1.
+3. **Some useful recall has no obvious query.** Full-text, vector, graph,
+   or ranking indexes are welcome as derived state. They remain
+   replaceable because disagreements are resolved in favor of the
+   files.
 
-## Why a standard, not a product
+## Why a standard
 
-Every system surveyed couples its memory format to its runtime: Letta
-memory needs Letta, Mem0 memories live in Mem0's pipeline, Zep's graph
-speaks Zep's API. The store outlives any runtime choice — ten years of
-notes must not be hostage to this year's framework. Hence a *format*
-standard: portable markdown snapshots any agent with file tools can
-read, with conformance defined mechanically (check), not by a memory
-service. Git is required only to turn those snapshots into an accepted,
-writable history; it does not mediate content reads or define record
-meaning.
+Memory should outlive the runtime that first wrote it. Engram therefore
+defines a portable format and mechanically testable behavior rather
+than a memory service. The store carries its maps, types, schemas, and
+operating protocol; no product-specific API is required to understand a
+snapshot.
 
-The direct ancestors, and what was taken from each:
-
-- **MemFS (Letta):** catalog descriptions as lazy-loading contract; git
-  as the write log; worktrees for concurrent background consolidation;
-  the audited insight that file tools beat bespoke retrieval.
-- **The `.agents/` standard:** the meta-shape — RFC-2119 declarative
-  spec, non-normative reference CLI, conformance targets kept separate,
-  canonical skeletons, dogfooding.
-- **Obsidian-culture vault practice:** typed frontmatter + wikilinks as
-  the relational layer; type-discriminated notes; index files as maps —
-  formalized here with validation those vaults never had.
-- **Graphiti/Zep:** bi-temporal validity and invalidate-don't-overwrite,
-  ported from graph edges to frontmatter fields.
-- **cortex (first adopter):** the writing rules a real second brain
-  needed in practice — anchors-not-elapsed-time, provenance that never
-  launders, records earned by recurrence, append-only journal, maps
-  carrying no state. Generalized into protocol and curated schemas; the
-  cortex-specific parts stayed home.
+The design combines several established ideas: filesystem navigation,
+typed markdown frontmatter, wikilinks, generated catalogs, schema-backed
+validity, and version-controlled history. Engram's contribution is to
+make their boundaries explicit and checkable as one format.
 
 ## Why managed writes use Git
 
-A persistent memory write is rarely one file. Creating a record may
-also update a map, add a schema, migrate related records, and rewrite
-links. Treating each filesystem edit as accepted immediately exposes
-half-complete states and leaves no stable base for append-only,
-immutable, migration, or rename policies.
+A logical memory change often touches several files: a record, its map,
+links, and perhaps a schema migration. Treating each filesystem write as
+immediately accepted exposes partial states and gives transition rules
+no stable base.
 
-Git already provides the missing primitives: a familiar working draft,
-an index that declares the candidate, immutable trees, exact parents,
-content-addressed commits, compare-and-swap ref updates, portable
-history, and synchronization. Engram therefore treats `HEAD` as
-accepted memory while agents edit the worktree and stage only the
-bounded operation they own. At commit time the initial candidate in the
-index is materialized disposably; preparation produces
-the final candidate for validation. The net tree difference is the
-changeset; successful acceptance produces one commit.
-Commit atomicity is the logical boundary, while one editor per checkout,
-shared ref/worktree acceptance locks, and safe post-commit reconciliation
-protect the visible repository worktree.
+Git already supplies immutable trees, parent relationships,
+content-addressed commits, and atomic ref updates. A managed store uses
+those primitives to distinguish:
 
-Giving each reusable memory its own repository also separates ownership
-from consumer projects. Several projects can attach the same checkout
-without adding memory commits to their code histories. A project-local
-nested checkout is viable when deliberately ignored by the outer Git;
-an accidental embedded repository is not a discovery mechanism.
+- an editable working draft;
+- the candidate selected for one operation; and
+- the accepted snapshot at the store's branch.
 
-The snapshot/managed-store distinction preserves the escape hatch: an
-archive or copied tree remains readable and statically validatable
-without `.git`, but it is not a writable accepted history until
-initialized or checked out as a managed store.
+Preparation and validation happen before the accepted ref advances.
+The normative [Git annex](spec/annex-git.md) defines the required safety
+properties; it does not make Git metadata part of snapshot content.
+Consequently an exported tree remains readable and statically
+checkable, but becomes writable memory only under a managed-store
+boundary.
 
-## Deliberate absences
+Giving a reusable memory its own repository also separates ownership
+from the projects that consume it. Several projects may attach the same
+store without placing its commits in their code histories.
 
-- **No graph database.** The relational layer is typed links in
-  frontmatter, validated by check. When temporal-graph queries are
-  truly needed, build the graph *from* the store as derived state.
-- **No opaque IDs.** Path-as-identity plus mechanical rename-rewrite.
-  Stable IDs require a resolver index to mean anything; an index the
-  store can't be read without violates D1. Revisit only if rename pain
-  proves real (v2 question).
-- **No embedded memory service.** Optional `prepare-changeset` programs
-  use a small process protocol, but the store does not choose a
-  scheduler, sandbox, daemon, database, or bundled language runtime.
-  Git owns accepted writable history; a trusted managed-commit engine
-  executes hooks and owns the complete acceptance transaction. Local Git
-  integration may guard that boundary but cannot replace it. Exported
-  snapshots still need neither to be read or checked statically.
-- **No timestamps in frontmatter.** Version control is the bookkeeping
-  clock; frontmatter carries only *world* clocks (`valid_until`), never
-  copies of what git already knows. Two clocks in one file always
-  diverge.
-- **No mandated retrieval stack.** The standard norms the substrate and
-  its integrity. Retrieval sophistication — FTS, vectors, rerankers —
-  is a consumer concern, downstream of truth.
+## Deliberate boundaries
 
-## The bet, in one line
+- **No graph database.** Typed links form the portable relational layer;
+  richer graphs can be derived.
+- **No opaque record IDs.** Paths are identities in v1, so renames also
+  rewrite inbound links.
+- **No embedded memory service.** The format chooses neither a daemon,
+  scheduler, database, nor runtime.
+- **No universal bookkeeping timestamps.** Git records file history;
+  schemas add dates only when time has domain meaning.
+- **No mandated retrieval stack.** Retrieval improves downstream of the
+  authoritative files.
 
-Structure in the files, accepted history in Git, discipline in the
-protocol, enforcement at the changeset, intelligence in the agent — and
-every derived layer rebuildable, so none can hold the memory hostage.
+## The bet
+
+Keep truth in files, accepted history in Git, discipline in the Agent
+Protocol, and every acceleration layer rebuildable.

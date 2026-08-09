@@ -10,15 +10,19 @@ reference CLI contract (`docs/cli/`), the curated schema inventory
 reference implementation. Never add references to a specific CLI
 command or implementation to normative `docs/spec/` sections. The
 normative Git annex defines managed-store semantics without prescribing
-CLI commands. Filesystem runtime bindings and plugin guidance live in
+CLI commands. The core Agent Protocol is the sole source of agent
+obligations; canonical skills only teach that protocol. Filesystem
+runtime bindings and plugin guidance live in
 `docs/spec/annex-adapters.md`, which is explicitly non-normative; the
 reference command surface lives in `docs/cli/README.md`.
 
 ## Layout
 
 - `docs/spec/README.md` — core specification (normative, RFC 2119)
-- `docs/spec/annex-*.md` — annexes, independently versioned
+- `docs/spec/annex-*.md` — independently versioned and statused annexes
 - `docs/spec/annex-git.md` — normative managed-store Git binding
+- `docs/spec/annex-skills.md` — non-normative canonical agent workflows
+- `docs/spec/annex-adapters.md` — non-normative runtime integration
 - `docs/cli/README.md` — non-normative reference CLI contract
 - `docs/implementation-plan.md` — non-normative phased implementation
   roadmap and release gates
