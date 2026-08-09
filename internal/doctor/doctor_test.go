@@ -81,7 +81,11 @@ func TestInspectLinkedWorktreeUsesCommonGuardAndCacheButOwnRecoveryState(t *test
 	}
 	for _, name := range requiredNames {
 		if check := findCheck(t, result, name); check.Status != OK {
-			t.Fatalf("%s = %#v", name, check)
+			detail := ""
+			if check.Detail != nil {
+				detail = *check.Detail
+			}
+			t.Fatalf("%s = %#v: %s", name, check, detail)
 		}
 	}
 	repository := discoverTestRepository(t, linked)

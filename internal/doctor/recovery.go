@@ -2,6 +2,7 @@ package doctor
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/ontopix/engram/internal/gitraw"
 	"github.com/ontopix/engram/internal/journal"
+	"github.com/ontopix/engram/internal/pullflow"
 	"github.com/ontopix/engram/internal/rendezvous"
 )
 
@@ -60,24 +62,38 @@ func combineRecoveryPlans(plans ...recoveryPlan) recoveryPlan {
 	return combined
 }
 
-func inspectRecoveryState(current *inspection) recoveryPlan {
+func inspectRecoveryState(ctx context.Context, current *inspection) recoveryPlan {
 	if current.repository == nil {
 		setRequired(&current.result, "recovery.state", Error, nil, "managed repository is unavailable")
 		return recoveryPlan{}
 	}
 	journalPath := journal.Path(current.repository.GitDir)
 	record, rawJournal, journalPresent, journalProblem := inspectJournal(journalPath)
+	pullInspection, pullErr := pullflow.InspectRecovery(ctx, current.repository)
+	if pullErr != nil {
+		setRequired(&current.result, "recovery.state", Error, nil, "cannot inspect pull recovery state: "+pullErr.Error())
+		return recoveryPlan{needed: true}
+	}
+	pullPresent := pullInspection.Disposition != pullflow.RecoveryAbsent
 	refnames := []string{current.repository.HeadRef}
 	if journalPresent && journalProblem == "" {
 		refnames = append(refnames, record.Ref.Ref)
 	}
+	refnames = append(refnames, pullInspection.RefNames...)
 	locks, problem := inspectRendezvousLocks(current.repository.CommonGitDir, current.repository.GitDir, refnames)
-	native := nativeLockPaths(current.repository)
+	native := nativeLockPathsForRefs(current.repository, refnames)
 	if len(native) != 0 {
 		problem = append(problem, "unowned native Git locks are present: "+strings.Join(native, ", "))
 	}
 	if journalProblem != "" {
 		problem = append(problem, journalProblem)
+	}
+	if pullInspection.Disposition == pullflow.RecoveryInconsistent {
+		message := pullInspection.Detail
+		if message == "" {
+			message = "pull transition recovery state is inconsistent"
+		}
+		problem = append(problem, message)
 	}
 
 	plan := recoveryPlan{safe: true, preJournalOnly: true, worktreeGitDir: current.repository.GitDir}
@@ -87,11 +103,19 @@ func inspectRecoveryState(current *inspection) recoveryPlan {
 		plan.safe = false
 		return plan
 	}
-	if len(locks) == 0 && !journalPresent {
+	if len(locks) == 0 && !journalPresent && !pullPresent {
 		return recoveryPlan{}
 	}
 	if len(locks) == 0 {
-		setRequired(&current.result, "recovery.state", Error, pathPointer(journalPath), "recognized journal exists without its rendezvous locks")
+		path := journalPath
+		if pullPresent {
+			path = ""
+		}
+		var pointer *string
+		if path != "" {
+			pointer = pathPointer(path)
+		}
+		setRequired(&current.result, "recovery.state", Error, pointer, "recognized journal exists without its rendezvous locks")
 		return recoveryPlan{needed: true}
 	}
 
@@ -106,6 +130,7 @@ func inspectRecoveryState(current *inspection) recoveryPlan {
 	sort.Strings(tokens)
 	details := make([]string, 0)
 	journalMatched := false
+	pullMatched := false
 	for _, token := range tokens {
 		group := groups[token]
 		owner := group[0].owner
@@ -125,6 +150,31 @@ func inspectRecoveryState(current *inspection) recoveryPlan {
 			continue
 		}
 		hasJournal := journalPresent && record.OwnerToken == token
+		hasPull := (pullInspection.Disposition == pullflow.RecoveryActive || pullInspection.Disposition == pullflow.RecoveryRecoverable) && pullInspection.OwnerToken == token
+		if hasJournal && hasPull {
+			plan.needed, plan.safe = true, false
+			details = append(details, "one lock owner token is claimed by multiple recovery journals")
+			continue
+		}
+		if hasPull {
+			pullMatched = true
+			if problem := validatePullBinding(pullInspection, current, group); problem != "" {
+				plan.needed, plan.safe = true, false
+				details = append(details, problem)
+				continue
+			}
+			switch pullInspection.Disposition {
+			case pullflow.RecoveryActive:
+				plan.blocked = true
+				details = append(details, "coherent live pull transition")
+			case pullflow.RecoveryRecoverable:
+				plan.needed = true
+				plan.preJournalOnly = false
+				plan.locks = append(plan.locks, group...)
+				details = append(details, "recognized stale pull transition requires bounded recovery")
+			}
+			continue
+		}
 		if hasJournal {
 			journalMatched = true
 			if owner.Phase == rendezvous.PreJournal {
@@ -203,6 +253,10 @@ func inspectRecoveryState(current *inspection) recoveryPlan {
 		plan.needed, plan.safe = true, false
 		details = append(details, "journal owner does not match any exact rendezvous lock")
 	}
+	if (pullInspection.Disposition == pullflow.RecoveryActive || pullInspection.Disposition == pullflow.RecoveryRecoverable) && !pullMatched {
+		plan.needed, plan.safe = true, false
+		details = append(details, "pull transition owner does not match every exact rendezvous lock")
+	}
 	if !plan.needed {
 		plan.safe = false
 		plan.preJournalOnly = false
@@ -213,6 +267,24 @@ func inspectRecoveryState(current *inspection) recoveryPlan {
 	}
 	setRequired(&current.result, "recovery.state", Error, nil, strings.Join(sortedUnique(details), "; "))
 	return plan
+}
+
+func validatePullBinding(inspection pullflow.RecoveryInspection, current *inspection, locks []lockObservation) string {
+	if current.repository == nil || inspection.OwnerToken == "" || len(inspection.RefNames) == 0 {
+		return "pull transition inspection lacks its exact owner or refs"
+	}
+	want := make(map[string]struct{}, len(inspection.RefNames)+1)
+	for _, ref := range inspection.RefNames {
+		want[rendezvous.RefPath(current.repository.CommonGitDir, ref)] = struct{}{}
+	}
+	want[rendezvous.WorktreePath(current.repository.GitDir)] = struct{}{}
+	for _, lock := range locks {
+		delete(want, lock.path)
+	}
+	if len(want) != 0 {
+		return "pull transition lacks an exact ref or worktree rendezvous lock"
+	}
+	return ""
 }
 
 func inspectRendezvousLocks(commonGitDir, worktreeGitDir string, refnames []string) ([]lockObservation, []string) {
@@ -396,4 +468,15 @@ func nativeLockPaths(currentRepository *gitraw.Repository) []string {
 		return nil
 	}
 	return nativeLockPathsFor(currentRepository.GitDir, currentRepository.CommonGitDir, currentRepository.HeadRef)
+}
+
+func nativeLockPathsForRefs(repository *gitraw.Repository, refnames []string) []string {
+	if repository == nil {
+		return nil
+	}
+	paths := make([]string, 0)
+	for _, refname := range sortedUnique(refnames) {
+		paths = append(paths, nativeLockPathsFor(repository.GitDir, repository.CommonGitDir, refname)...)
+	}
+	return sortedUnique(paths)
 }

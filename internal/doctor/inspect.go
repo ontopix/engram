@@ -146,7 +146,7 @@ func inspectOnce(ctx context.Context, target string, requested bool) (inspection
 	inspectIdentity(&current, targetExists)
 	inspectGuard(ctx, &current)
 	lifecycle := inspectLifecycleStates(&current)
-	recovery := inspectRecoveryState(&current)
+	recovery := inspectRecoveryState(ctx, &current)
 	inspectReplayState(&current)
 	inspectPresentation(ctx, &current)
 	inspectCacheExclusion(&current)
