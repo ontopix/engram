@@ -18,5 +18,6 @@ func main() {
 	commands.RegisterDraft(app)
 	commands.RegisterHooks(app)
 	commands.RegisterAcquisition(app)
+	commands.RegisterSync(app)
 	os.Exit(app.Run(context.Background(), os.Args[1:], os.Stdout, os.Stderr))
 }
