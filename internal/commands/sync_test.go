@@ -10,7 +10,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/ontopix/engram/internal/checker"
 	"github.com/ontopix/engram/internal/cli"
+	"github.com/ontopix/engram/internal/syncflow"
 )
 
 func TestPushCommandCreatesThenObservesRemoteBranch(t *testing.T) {
@@ -39,6 +41,18 @@ func TestPushCommandCreatesThenObservesRemoteBranch(t *testing.T) {
 	result = decodeObject(t, unchanged.Result)
 	if result["state"] != "up-to-date" || result["changed"] != false || result["before"] == nil {
 		t.Fatalf("second push = %#v", result)
+	}
+}
+
+func TestPushIndeterminateLocalAuditUsesStatusThree(t *testing.T) {
+	result := pushCommandResult(&syncflow.PushResult{
+		State: syncflow.PushRejected,
+		Validation: checker.Result{
+			Target: checker.TargetManagedStore, Status: checker.StatusIndeterminate, Findings: []checker.Finding{},
+		},
+	})
+	if result.Outcome != cli.OutcomeIndeterminate {
+		t.Fatalf("result = %#v", result)
 	}
 }
 

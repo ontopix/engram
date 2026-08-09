@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/ontopix/engram/internal/checker"
 	"github.com/ontopix/engram/internal/cli"
 	"github.com/ontopix/engram/internal/syncflow"
 )
@@ -39,6 +40,23 @@ func runPush(ctx context.Context, invocation *cli.Invocation) cli.Result {
 	pushed, err := syncflow.Push(ctx, store, remote, branch)
 	if err != nil {
 		return syncFailure(err, "push accepted lineage")
+	}
+	return pushCommandResult(pushed)
+}
+
+func pushCommandResult(pushed *syncflow.PushResult) cli.Result {
+	if pushed == nil {
+		return commandError(cli.ErrorInternal, "push returned no result")
+	}
+	switch pushed.Validation.Status {
+	case checker.StatusIndeterminate:
+		return cli.Result{Outcome: cli.OutcomeIndeterminate, Value: pushed}
+	case checker.StatusComplete:
+		if pushed.Validation.HasErrors() {
+			return cli.Result{Outcome: cli.OutcomeIssues, Value: pushed}
+		}
+	default:
+		return commandError(cli.ErrorInternal, fmt.Sprintf("push returned unknown validation status %q", pushed.Validation.Status))
 	}
 	switch pushed.State {
 	case syncflow.PushRejected:
