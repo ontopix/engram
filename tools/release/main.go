@@ -48,12 +48,16 @@ func main() {
 }
 
 func gitRevision(repository string) (string, error) {
-	command := exec.Command("git", "-C", repository, "rev-parse", "--verify", "HEAD^{commit}")
+	command := exec.Command("git", gitRevisionArguments(repository)...)
 	output, err := command.Output()
 	if err != nil {
 		return "", fmt.Errorf("resolve source revision: %w", err)
 	}
 	return strings.TrimSpace(string(output)), nil
+}
+
+func gitRevisionArguments(repository string) []string {
+	return []string{"-c", "core.longpaths=true", "-C", repository, "rev-parse", "--verify", "HEAD^{commit}"}
 }
 
 func environmentEpoch() int64 {

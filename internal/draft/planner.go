@@ -12,6 +12,7 @@ import (
 
 	"github.com/ontopix/engram/internal/checker"
 	"github.com/ontopix/engram/internal/discovery"
+	"github.com/ontopix/engram/internal/fileidentity"
 	"github.com/ontopix/engram/internal/snapshot"
 )
 
@@ -31,6 +32,9 @@ func openPlanner(ctx context.Context, operation, rootName string) (*planner, err
 	}
 	rootInfo, err := os.Lstat(rootName)
 	if err != nil {
+		return nil, typed(ErrorIO, operation, ".", err)
+	}
+	if err := fileidentity.Pin(rootInfo); err != nil {
 		return nil, typed(ErrorIO, operation, ".", err)
 	}
 	checked, err := checker.CheckFS(rootName)

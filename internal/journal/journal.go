@@ -17,6 +17,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/ontopix/engram/internal/fileidentity"
 	"github.com/ontopix/engram/internal/gitraw"
 )
 
@@ -542,7 +543,7 @@ func journalGitDirectory(parent string) (string, bool) {
 }
 
 func openStableDirectory(name string) (*os.Root, error) {
-	info, err := os.Lstat(name)
+	info, err := pinnedFileInfo(os.Lstat(name))
 	if err != nil {
 		return nil, err
 	}
@@ -553,7 +554,7 @@ func openStableDirectory(name string) (*os.Root, error) {
 	if err != nil {
 		return nil, err
 	}
-	opened, err := root.Stat(".")
+	opened, err := pinnedFileInfo(root.Stat("."))
 	if err != nil || !opened.IsDir() || !os.SameFile(info, opened) {
 		root.Close()
 		if err != nil {
@@ -565,7 +566,7 @@ func openStableDirectory(name string) (*os.Root, error) {
 }
 
 func openStableChild(parent *os.Root, name string, create bool) (*os.Root, error) {
-	info, err := parent.Lstat(name)
+	info, err := pinnedFileInfo(parent.Lstat(name))
 	if errors.Is(err, os.ErrNotExist) && create {
 		mkdirErr := parent.Mkdir(name, 0o700)
 		if mkdirErr != nil && !errors.Is(mkdirErr, os.ErrExist) {
@@ -576,7 +577,7 @@ func openStableChild(parent *os.Root, name string, create bool) (*os.Root, error
 				return nil, err
 			}
 		}
-		info, err = parent.Lstat(name)
+		info, err = pinnedFileInfo(parent.Lstat(name))
 	}
 	if err != nil {
 		return nil, err
@@ -588,7 +589,7 @@ func openStableChild(parent *os.Root, name string, create bool) (*os.Root, error
 	if err != nil {
 		return nil, err
 	}
-	opened, err := root.Stat(".")
+	opened, err := pinnedFileInfo(root.Stat("."))
 	if err != nil || !opened.IsDir() || !os.SameFile(info, opened) {
 		root.Close()
 		if err != nil {
@@ -600,7 +601,7 @@ func openStableChild(parent *os.Root, name string, create bool) (*os.Root, error
 }
 
 func stableRead(root *os.Root, name string) ([]byte, error) {
-	info, err := root.Lstat(name)
+	info, err := pinnedFileInfo(root.Lstat(name))
 	if err != nil {
 		return nil, err
 	}
@@ -611,7 +612,7 @@ func stableRead(root *os.Root, name string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	opened, err := file.Stat()
+	opened, err := pinnedFileInfo(file.Stat())
 	if err != nil || !opened.Mode().IsRegular() || !os.SameFile(info, opened) {
 		file.Close()
 		if err != nil {
@@ -620,12 +621,12 @@ func stableRead(root *os.Root, name string) ([]byte, error) {
 		return nil, fmt.Errorf("journal file changed while opening")
 	}
 	data, readErr := io.ReadAll(file)
-	after, statErr := file.Stat()
+	after, statErr := pinnedFileInfo(file.Stat())
 	closeErr := file.Close()
 	if readErr != nil || statErr != nil || closeErr != nil {
 		return nil, errors.Join(readErr, statErr, closeErr)
 	}
-	named, err := root.Lstat(name)
+	named, err := pinnedFileInfo(root.Lstat(name))
 	if err != nil || named.Mode()&os.ModeSymlink != 0 || !sameFileState(opened, after) || !sameFileState(after, named) {
 		if err != nil {
 			return nil, err
@@ -637,6 +638,16 @@ func stableRead(root *os.Root, name string) ([]byte, error) {
 
 func sameFileState(left, right os.FileInfo) bool {
 	return os.SameFile(left, right) && left.Mode() == right.Mode() && left.Size() == right.Size() && left.ModTime() == right.ModTime()
+}
+
+func pinnedFileInfo(info os.FileInfo, err error) (os.FileInfo, error) {
+	if err != nil {
+		return nil, err
+	}
+	if err := fileidentity.Pin(info); err != nil {
+		return nil, err
+	}
+	return info, nil
 }
 
 func syncRoot(root *os.Root) error {

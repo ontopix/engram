@@ -2,7 +2,18 @@
 
 ## Unreleased
 
-No changes after the `v1.0.0-rc.1` release candidate.
+### Reference implementation
+
+- Hardened initialization and clone recovery against concurrent lifecycle,
+  target, stage, and publication-plan replacement. Recovery now seals the
+  approved plan bytes, binds observations to descriptor-derived physical
+  identities, and revalidates the published root before rollback.
+- Made productive Git invocations opt into long-path support and materialized
+  retained filesystem identities before mutable boundaries, including draft,
+  attachment, staging, guard, journal, rendezvous, and pull observations. This
+  closes Windows-specific identity races and long-path failures.
+- Added deterministic regression coverage for disappearance, replacement, and
+  rollback races, including Windows amd64 and arm64 build coverage.
 
 ## 1.0.0-rc.1 — 2026-08-09
 

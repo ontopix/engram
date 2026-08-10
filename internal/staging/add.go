@@ -18,6 +18,7 @@ import (
 
 	"github.com/ontopix/engram/internal/changeset"
 	"github.com/ontopix/engram/internal/checker"
+	"github.com/ontopix/engram/internal/fileidentity"
 	"github.com/ontopix/engram/internal/gitraw"
 	"github.com/ontopix/engram/internal/managedread"
 	"github.com/ontopix/engram/internal/rendezvous"
@@ -358,6 +359,9 @@ func regularPathInfo(name string) (os.FileInfo, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := fileidentity.Pin(info); err != nil {
+		return nil, errors.Join(ErrConcurrent, err)
+	}
 	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
 		return nil, ErrConcurrent
 	}
@@ -404,6 +408,7 @@ func indexUpdates(ctx context.Context, repository *gitraw.Repository, accepted, 
 			return nil, fmt.Errorf("%w: selected working file %q became unavailable", ErrConcurrent, change.Path)
 		}
 		command := exec.CommandContext(ctx, git,
+			"-c", "core.longpaths=true",
 			"--no-pager", "--no-optional-locks", "--no-replace-objects",
 			"-c", "core.hooksPath="+os.DevNull, "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false",
 			"-c", "maintenance.auto=false", "-c", "gc.auto=0",
@@ -442,6 +447,7 @@ func updateAlternateIndex(ctx context.Context, root, indexPath string, format gi
 		}
 	}
 	command := exec.CommandContext(ctx, git,
+		"-c", "core.longpaths=true",
 		"--no-pager", "--no-optional-locks", "--no-replace-objects",
 		"-c", "core.hooksPath="+os.DevNull, "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false",
 		"-c", "maintenance.auto=false", "-c", "gc.auto=0",
@@ -464,6 +470,7 @@ func initializeEmptyIndex(ctx context.Context, root, indexPath string) error {
 		return err
 	}
 	command := exec.CommandContext(ctx, git,
+		"-c", "core.longpaths=true",
 		"--no-pager", "--no-optional-locks", "--no-replace-objects",
 		"-c", "core.hooksPath="+os.DevNull, "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false",
 		"-c", "maintenance.auto=false", "-c", "gc.auto=0",
@@ -652,6 +659,9 @@ func readIndex(name string) ([]byte, os.FileInfo, error) {
 	}
 	if err != nil {
 		return nil, nil, err
+	}
+	if err := fileidentity.Pin(info); err != nil {
+		return nil, nil, errors.Join(ErrConcurrent, err)
 	}
 	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
 		return nil, nil, fmt.Errorf("Git index is not a real regular file")

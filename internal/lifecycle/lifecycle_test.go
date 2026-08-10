@@ -751,6 +751,168 @@ func TestAdoptExpectedRejectsChangedPublicationPlan(t *testing.T) {
 	}
 }
 
+func TestRecoveryExpectationBindsEquivalentPhysicalReplacements(t *testing.T) {
+	t.Run("state", func(t *testing.T) {
+		target := canonicalTarget(t, "store")
+		if _, err := Begin(target, Acquisition); err != nil {
+			t.Fatal(err)
+		}
+		before, err := ObserveRecovery(target, Acquisition)
+		if err != nil {
+			t.Fatal(err)
+		}
+		replaceEquivalentRegular(t, Sidecar(target, Acquisition))
+		after, err := ObserveRecovery(target, Acquisition)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if before.Expectation.StateSHA256 == after.Expectation.StateSHA256 {
+			t.Fatal("equivalent sidecar replacement retained its recovery approval")
+		}
+	})
+
+	t.Run("target", func(t *testing.T) {
+		target := canonicalTarget(t, "store")
+		handle, err := Begin(target, Acquisition)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer handle.Remove()
+		if err := os.Mkdir(target, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		before, err := ObserveRecovery(target, Acquisition)
+		if err != nil {
+			t.Fatal(err)
+		}
+		replaceEquivalentDirectory(t, target)
+		after, err := ObserveRecovery(target, Acquisition)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if before.Expectation.StateSHA256 == after.Expectation.StateSHA256 {
+			t.Fatal("equivalent target replacement retained its recovery approval")
+		}
+	})
+
+	t.Run("stage", func(t *testing.T) {
+		target := canonicalTarget(t, "store")
+		handle, err := Begin(target, Acquisition)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer handle.Remove()
+		stage, err := Stage(handle.State())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Mkdir(stage, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		before, err := ObserveRecovery(target, Acquisition)
+		if err != nil {
+			t.Fatal(err)
+		}
+		replaceEquivalentDirectory(t, stage)
+		after, err := ObserveRecovery(target, Acquisition)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if before.Expectation.StateSHA256 == after.Expectation.StateSHA256 {
+			t.Fatal("equivalent stage replacement retained its recovery approval")
+		}
+	})
+
+	t.Run("plan", func(t *testing.T) {
+		target := canonicalTarget(t, "store")
+		handle, err := Begin(target, Acquisition)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer handle.Remove()
+		stage, err := Stage(handle.State())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Mkdir(stage, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		plan := filepath.Join(stage, "plan-v1.json")
+		if err := os.WriteFile(plan, []byte("approved\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := handle.RequireCleanup(); err != nil {
+			t.Fatal(err)
+		}
+		before, err := ObserveRecovery(target, Acquisition)
+		if err != nil {
+			t.Fatal(err)
+		}
+		stageInfo, err := os.Lstat(stage)
+		if err != nil {
+			t.Fatal(err)
+		}
+		replaceEquivalentRegular(t, plan)
+		if err := os.Chtimes(stage, stageInfo.ModTime(), stageInfo.ModTime()); err != nil {
+			t.Fatal(err)
+		}
+		after, err := ObserveRecovery(target, Acquisition)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if before.Expectation.StateSHA256 == after.Expectation.StateSHA256 {
+			t.Fatal("equivalent plan replacement retained its recovery approval")
+		}
+	})
+}
+
+func replaceEquivalentRegular(t *testing.T, name string) {
+	t.Helper()
+	info, err := os.Lstat(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacement := name + ".equivalent"
+	if err := os.WriteFile(replacement, data, info.Mode().Perm()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(replacement, info.ModTime(), info.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS == "windows" {
+		if err := os.Remove(name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Rename(replacement, name); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(name, info.ModTime(), info.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func replaceEquivalentDirectory(t *testing.T, name string) {
+	t.Helper()
+	info, err := os.Lstat(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(name, name+".displaced"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(name, info.Mode().Perm()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(name, info.ModTime(), info.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func canonicalTarget(t *testing.T, base string) string {
 	t.Helper()
 	parent, err := filepath.EvalSymlinks(t.TempDir())

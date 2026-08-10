@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/ontopix/engram/internal/fileidentity"
 	"github.com/ontopix/engram/internal/snapshot"
 )
 
@@ -671,6 +672,9 @@ func observe(root *os.Root, logicalPath string, readData, readEntries bool) (obs
 		return observation{path: logicalPath, kind: observationAbsent}, nil
 	}
 	if err != nil {
+		return observation{}, err
+	}
+	if err := fileidentity.Pin(info); err != nil {
 		return observation{}, err
 	}
 	result := observation{path: logicalPath, kind: modeKind(info.Mode()), mode: info.Mode(), info: info}

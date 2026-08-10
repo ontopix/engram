@@ -157,6 +157,7 @@ func (b *synchronizedBuffer) bytes() []byte {
 
 func (g *gitClient) run(ctx context.Context, input []byte, extraEnvironment []string, arguments ...string) (gitResult, error) {
 	global := []string{
+		"-c", "core.longpaths=true",
 		"--no-pager", "--no-optional-locks", "--no-replace-objects",
 		"-c", "core.hooksPath=" + os.DevNull, "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false",
 		"-c", "maintenance.auto=false", "-c", "gc.auto=0", "-c", "core.fsync=loose-object", "-C", g.root,
@@ -450,6 +451,7 @@ func updateRefCAS(ctx context.Context, git *gitClient, repository *gitraw.Reposi
 // successful process exit establish a known update.
 func updateRefPreparedCAS(ctx context.Context, git *gitClient, repository *gitraw.Repository, newID string, old *gitraw.OID, recheck func() error) (outcome casOutcome, resultErr error) {
 	global := []string{
+		"-c", "core.longpaths=true",
 		"--no-pager", "--no-optional-locks", "--no-replace-objects",
 		"-c", "core.hooksPath=" + os.DevNull, "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false",
 		"-c", "maintenance.auto=false", "-c", "gc.auto=0", "-c", "core.fsync=reference", "-C", git.root,

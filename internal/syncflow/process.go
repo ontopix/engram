@@ -19,6 +19,7 @@ type commandResult struct {
 
 func runGitCommand(ctx context.Context, executable, root string, environment []string, arguments ...string) commandResult {
 	global := []string{
+		"-c", "core.longpaths=true",
 		"--no-pager",
 		"--no-optional-locks",
 		"--no-replace-objects",

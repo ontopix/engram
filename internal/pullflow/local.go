@@ -16,6 +16,7 @@ import (
 	"sync"
 
 	"github.com/ontopix/engram/internal/checker"
+	"github.com/ontopix/engram/internal/fileidentity"
 	"github.com/ontopix/engram/internal/gitraw"
 	"github.com/ontopix/engram/internal/journal"
 	"github.com/ontopix/engram/internal/managedread"
@@ -483,6 +484,7 @@ func (p *Puller) indexForSnapshot(ctx context.Context, git string, repository *g
 
 func execCommand(ctx context.Context, executable, root string, environment []string, input []byte, arguments ...string) commandResult {
 	global := []string{
+		"-c", "core.longpaths=true",
 		"--no-pager", "--no-optional-locks", "--no-replace-objects",
 		"-c", "core.hooksPath=" + os.DevNull, "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false",
 		"-c", "maintenance.auto=false", "-c", "gc.auto=0", "-C", root,
@@ -610,6 +612,12 @@ func capturePathTransitions(root string, before, after treeimage.Image) ([]pathT
 }
 
 func observePath(root, logical string) (*pathImage, error) {
+	return observePathWith(root, logical, nil)
+}
+
+// observePathWith exposes one deterministic test seam after the path's
+// content has been observed but before its final name revalidation.
+func observePathWith(root, logical string, afterRead func(string)) (*pathImage, error) {
 	name := filepath.Join(root, filepath.FromSlash(logical))
 	before, err := os.Lstat(name)
 	if errors.Is(err, os.ErrNotExist) {
@@ -617,6 +625,9 @@ func observePath(root, logical string) (*pathImage, error) {
 	}
 	if err != nil {
 		return nil, err
+	}
+	if err := fileidentity.Pin(before); err != nil {
+		return nil, fmt.Errorf("worktree path %q identity is unavailable: %w", logical, err)
 	}
 	result := &pathImage{Mode: uint32(before.Mode().Perm())}
 	switch {
@@ -635,14 +646,33 @@ func observePath(root, logical string) (*pathImage, error) {
 		if err != nil {
 			return nil, err
 		}
-		after, err := os.Lstat(name)
-		if err != nil || !after.Mode().IsRegular() || !os.SameFile(before, after) || before.Mode().Perm() != after.Mode().Perm() {
-			return nil, fmt.Errorf("worktree path %q changed while being captured", logical)
-		}
 	default:
 		return nil, fmt.Errorf("worktree path %q has an unsupported kind", logical)
 	}
+	if afterRead != nil {
+		afterRead(name)
+	}
+	after, err := os.Lstat(name)
+	if err == nil {
+		err = fileidentity.Pin(after)
+	}
+	if err != nil || hostKind(after.Mode()) != result.Kind || !os.SameFile(before, after) || before.Mode().Perm() != after.Mode().Perm() {
+		return nil, fmt.Errorf("worktree path %q changed while being captured", logical)
+	}
 	return result, nil
+}
+
+func hostKind(mode os.FileMode) string {
+	switch {
+	case mode&os.ModeSymlink != 0:
+		return "symlink"
+	case mode.IsDir():
+		return "directory"
+	case mode.IsRegular():
+		return "regular"
+	default:
+		return "special"
+	}
 }
 
 func matchesTreeImage(observed *pathImage, expected treeimage.Entry, present bool) bool {

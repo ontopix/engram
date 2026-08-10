@@ -17,6 +17,7 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/ontopix/engram/internal/fileidentity"
 	"github.com/ontopix/engram/internal/gitraw"
 )
 
@@ -62,7 +63,7 @@ func Path(ctx context.Context, repository *gitraw.Repository) (string, error) {
 		return "", err
 	}
 	hooks := filepath.Join(repository.CommonGitDir, hooksDirectory)
-	if info, err := os.Lstat(hooks); err == nil {
+	if info, err := pinnedFileInfo(os.Lstat(hooks)); err == nil {
 		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
 			return "", conflict("the Git hooks administration path is not a real directory")
 		}
@@ -148,7 +149,7 @@ func openLocation(ctx context.Context, repository *gitraw.Repository, create boo
 	if _, err := Path(ctx, repository); err != nil {
 		return nil, err
 	}
-	commonInfo, err := os.Lstat(repository.CommonGitDir)
+	commonInfo, err := pinnedFileInfo(os.Lstat(repository.CommonGitDir))
 	if err != nil {
 		return nil, err
 	}
@@ -157,7 +158,7 @@ func openLocation(ctx context.Context, repository *gitraw.Repository, create boo
 		return nil, err
 	}
 	result := &location{commonPath: repository.CommonGitDir, commonInfo: commonInfo, common: common}
-	openedInfo, err := common.Stat(".")
+	openedInfo, err := pinnedFileInfo(common.Stat("."))
 	if err != nil || !openedInfo.IsDir() || !os.SameFile(commonInfo, openedInfo) {
 		result.close()
 		if err != nil {
@@ -166,7 +167,7 @@ func openLocation(ctx context.Context, repository *gitraw.Repository, create boo
 		return nil, conflict("the Git administration directory changed while it was opened")
 	}
 
-	hooksInfo, err := common.Lstat(hooksDirectory)
+	hooksInfo, err := pinnedFileInfo(common.Lstat(hooksDirectory))
 	if errors.Is(err, os.ErrNotExist) && create {
 		mkdirErr := common.Mkdir(hooksDirectory, 0o700)
 		if mkdirErr != nil && !errors.Is(mkdirErr, os.ErrExist) {
@@ -179,7 +180,7 @@ func openLocation(ctx context.Context, repository *gitraw.Repository, create boo
 				return nil, err
 			}
 		}
-		hooksInfo, err = common.Lstat(hooksDirectory)
+		hooksInfo, err = pinnedFileInfo(common.Lstat(hooksDirectory))
 	}
 	if errors.Is(err, os.ErrNotExist) {
 		return result, nil
@@ -197,7 +198,7 @@ func openLocation(ctx context.Context, repository *gitraw.Repository, create boo
 		result.close()
 		return nil, err
 	}
-	openedHooksInfo, err := hooks.Stat(".")
+	openedHooksInfo, err := pinnedFileInfo(hooks.Stat("."))
 	if err != nil || !openedHooksInfo.IsDir() || !os.SameFile(hooksInfo, openedHooksInfo) {
 		hooks.Close()
 		result.close()
@@ -236,14 +237,14 @@ func (l *location) verify() error {
 		return conflict("the Git administration directory changed")
 	}
 	if l.hooks == nil {
-		if _, err := l.common.Lstat(hooksDirectory); errors.Is(err, os.ErrNotExist) {
+		if _, err := pinnedFileInfo(l.common.Lstat(hooksDirectory)); errors.Is(err, os.ErrNotExist) {
 			return nil
 		} else if err != nil {
 			return err
 		}
 		return conflict("the Git hooks administration path appeared concurrently")
 	}
-	hooksInfo, err := l.common.Lstat(hooksDirectory)
+	hooksInfo, err := pinnedFileInfo(l.common.Lstat(hooksDirectory))
 	if err != nil {
 		return err
 	}
@@ -254,7 +255,7 @@ func (l *location) verify() error {
 }
 
 func inspectHook(root *os.Root) (State, bool, error) {
-	info, err := root.Lstat(hookName)
+	info, err := pinnedFileInfo(root.Lstat(hookName))
 	if errors.Is(err, os.ErrNotExist) {
 		return Planned, false, nil
 	}
@@ -269,7 +270,7 @@ func inspectHook(root *os.Root) (State, bool, error) {
 		return "", true, err
 	}
 	defer file.Close()
-	openedInfo, err := file.Stat()
+	openedInfo, err := pinnedFileInfo(file.Stat())
 	if err != nil {
 		return "", true, err
 	}
@@ -283,7 +284,7 @@ func inspectHook(root *os.Root) (State, bool, error) {
 	if !bytes.Equal(data, program) {
 		return "", true, ErrConflict
 	}
-	namedInfo, err := root.Lstat(hookName)
+	namedInfo, err := pinnedFileInfo(root.Lstat(hookName))
 	if err != nil || namedInfo.Mode()&os.ModeSymlink != 0 || !os.SameFile(openedInfo, namedInfo) {
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return "", true, err
@@ -300,7 +301,7 @@ func repairOwnedHook(location *location) error {
 	if err := location.verify(); err != nil {
 		return err
 	}
-	info, err := location.hooks.Lstat(hookName)
+	info, err := pinnedFileInfo(location.hooks.Lstat(hookName))
 	if err != nil {
 		return err
 	}
@@ -312,7 +313,7 @@ func repairOwnedHook(location *location) error {
 		return err
 	}
 	defer file.Close()
-	openedInfo, err := file.Stat()
+	openedInfo, err := pinnedFileInfo(file.Stat())
 	if err != nil || !openedInfo.Mode().IsRegular() || !os.SameFile(info, openedInfo) {
 		if err != nil {
 			return err
@@ -332,7 +333,7 @@ func repairOwnedHook(location *location) error {
 	if err := file.Sync(); err != nil {
 		return err
 	}
-	namedInfo, err := location.hooks.Lstat(hookName)
+	namedInfo, err := pinnedFileInfo(location.hooks.Lstat(hookName))
 	if err != nil || namedInfo.Mode()&os.ModeSymlink != 0 || !os.SameFile(openedInfo, namedInfo) {
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
@@ -463,7 +464,7 @@ func rejectHooksPathOverride(ctx context.Context, repository *gitraw.Repository)
 
 func queryConfig(ctx context.Context, git, root string, arguments ...string) ([]byte, bool, error) {
 	command := exec.CommandContext(ctx, git,
-		append([]string{"--no-pager", "--no-optional-locks", "--no-replace-objects", "-C", root, "config"}, arguments...)...)
+		append([]string{"-c", "core.longpaths=true", "--no-pager", "--no-optional-locks", "--no-replace-objects", "-C", root, "config"}, arguments...)...)
 	command.Env = isolatedEnvironment(os.Environ())
 	output, err := command.Output()
 	if ctx.Err() != nil {
@@ -494,7 +495,7 @@ func validateDirectoryChain(name string) (os.FileInfo, error) {
 	}
 	var final os.FileInfo
 	for index := len(chain) - 1; index >= 0; index-- {
-		info, err := os.Lstat(chain[index])
+		info, err := pinnedFileInfo(os.Lstat(chain[index]))
 		if err != nil {
 			return nil, err
 		}
@@ -506,6 +507,16 @@ func validateDirectoryChain(name string) (os.FileInfo, error) {
 		}
 	}
 	return final, nil
+}
+
+func pinnedFileInfo(info os.FileInfo, err error) (os.FileInfo, error) {
+	if err != nil {
+		return nil, err
+	}
+	if err := fileidentity.Pin(info); err != nil {
+		return nil, err
+	}
+	return info, nil
 }
 
 func conflict(detail string) error {

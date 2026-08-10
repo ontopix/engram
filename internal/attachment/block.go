@@ -18,6 +18,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/ontopix/engram/internal/fileidentity"
 	"github.com/ontopix/engram/internal/lockidentity"
 )
 
@@ -123,6 +124,7 @@ func ResolveProject(ctx context.Context, explicit string) (string, error) {
 	git, err := exec.LookPath("git")
 	if err == nil {
 		command := exec.CommandContext(ctx, git,
+			"-c", "core.longpaths=true",
 			"--no-pager", "--no-optional-locks", "--no-replace-objects",
 			"-c", "core.hooksPath="+os.DevNull, "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false",
 			"-c", "maintenance.auto=false", "-c", "gc.auto=0",
@@ -488,6 +490,9 @@ func readOptional(name string) ([]byte, os.FileInfo, error) {
 	}
 	if err != nil {
 		return nil, nil, err
+	}
+	if err := fileidentity.Pin(info); err != nil {
+		return nil, nil, fmt.Errorf("capture entrypoint identity: %w", err)
 	}
 	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
 		return nil, nil, fmt.Errorf("entrypoint is not a real regular file")

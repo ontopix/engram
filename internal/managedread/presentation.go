@@ -361,6 +361,7 @@ func auditObservedPaths(root string, paths []string, builder *presentationFinger
 
 func (s *Store) presentationGit(ctx context.Context, repository *gitraw.Repository, input []byte, arguments ...string) ([]byte, int, []byte, error) {
 	global := []string{
+		"-c", "core.longpaths=true",
 		"--no-pager", "--no-optional-locks", "--no-replace-objects",
 		"-c", "core.hooksPath=" + os.DevNull, "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false",
 		"-c", "maintenance.auto=false", "-c", "gc.auto=0", "-C", repository.Root,

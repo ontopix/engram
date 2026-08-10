@@ -58,6 +58,54 @@ func TestAddStagesOnlyLiteralSelectionAndPreservesDraft(t *testing.T) {
 	}
 }
 
+func TestReadIndexPinsOriginalIdentity(t *testing.T) {
+	parent := t.TempDir()
+	name := filepath.Join(parent, "index")
+	displacedName := filepath.Join(parent, "index-displaced")
+	want := []byte("same index bytes")
+	if err := os.WriteFile(name, want, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, original, err := readIndex(name)
+	if err != nil || !bytes.Equal(got, want) {
+		t.Fatalf("readIndex = %q, %#v, %v", got, original, err)
+	}
+	if err := os.Rename(name, displacedName); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(name, want, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	replacement, err := os.Lstat(name)
+	if err != nil || os.SameFile(original, replacement) {
+		t.Fatalf("index identity followed replacement: %v", err)
+	}
+	displaced, err := os.Lstat(displacedName)
+	if err != nil || !os.SameFile(original, displaced) {
+		t.Fatalf("index identity lost displaced original: %v", err)
+	}
+
+	temporary, err := regularPathInfo(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	temporaryDisplaced := filepath.Join(parent, "temporary-displaced")
+	if err := os.Rename(name, temporaryDisplaced); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(name, want, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	replacement, err = os.Lstat(name)
+	if err != nil || os.SameFile(temporary, replacement) {
+		t.Fatalf("regular path identity followed replacement: %v", err)
+	}
+	temporaryOriginal, err := os.Lstat(temporaryDisplaced)
+	if err != nil || !os.SameFile(temporary, temporaryOriginal) {
+		t.Fatalf("regular path identity lost displaced original: %v", err)
+	}
+}
+
 func TestAddAllIncludesDeletionAndAddition(t *testing.T) {
 	root := fixture(t, false)
 	if err := os.Remove(filepath.Join(root, "topics", "why-files.md")); err != nil {

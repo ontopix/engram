@@ -77,6 +77,60 @@ func TestFmtSelectionDryRunCheckAndPublication(t *testing.T) {
 	}
 }
 
+func TestPlannerPinsRootAndKindOnlyObservationIdentities(t *testing.T) {
+	store := minimalStore(t)
+	planner, err := openPlanner(context.Background(), "fmt", store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	planner.close()
+	displacedStore := store + "-displaced"
+	if err := os.Rename(store, displacedStore); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(store, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	replacement, err := os.Lstat(store)
+	if err != nil || os.SameFile(planner.plan.rootInfo, replacement) {
+		t.Fatalf("planner root identity followed replacement: %v", err)
+	}
+	displaced, err := os.Lstat(displacedStore)
+	if err != nil || !os.SameFile(planner.plan.rootInfo, displaced) {
+		t.Fatalf("planner root identity lost displaced root: %v", err)
+	}
+
+	parent := t.TempDir()
+	name := filepath.Join(parent, "entry")
+	displacedName := filepath.Join(parent, "entry-displaced")
+	if err := os.WriteFile(name, []byte("same\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.OpenRoot(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	observed, observeErr := observe(root, "entry", false, false)
+	closeErr := root.Close()
+	if observeErr != nil || closeErr != nil {
+		t.Fatal(errors.Join(observeErr, closeErr))
+	}
+	if err := os.Rename(name, displacedName); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(name, []byte("same\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	current, err := os.Lstat(name)
+	if err != nil || os.SameFile(observed.info, current) {
+		t.Fatalf("kind-only observation followed replacement: %v", err)
+	}
+	original, err := os.Lstat(displacedName)
+	if err != nil || !os.SameFile(observed.info, original) {
+		t.Fatalf("kind-only observation lost displaced entry: %v", err)
+	}
+}
+
 func TestFmtPreservesEveryByteOutsideCatalogRegion(t *testing.T) {
 	store := minimalStore(t)
 	name := filepath.Join(store, "topics", "README.md")

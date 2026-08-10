@@ -297,6 +297,7 @@ func runGit(ctx context.Context, root string, input []byte, arguments ...string)
 		return gitResult{}, err
 	}
 	global := []string{
+		"-c", "core.longpaths=true",
 		"--no-pager", "--no-optional-locks", "--no-replace-objects",
 		"-c", "core.hooksPath=" + os.DevNull, "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false",
 		"-c", "maintenance.auto=false", "-c", "gc.auto=0", "-C", root,

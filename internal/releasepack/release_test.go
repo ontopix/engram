@@ -339,15 +339,18 @@ func TestReleaseGitEnvironmentHasOneAuthoritativeLocale(t *testing.T) {
 }
 
 func TestReleaseGitDisablesWorktreeObservers(t *testing.T) {
-	joined := strings.Join(releaseGitPrefix("/exact/repository"), "\n")
-	for _, required := range []string{
-		"core.hooksPath=" + os.DevNull,
-		"core.fsmonitor=false",
-		"core.untrackedCache=false",
-	} {
-		if !strings.Contains(joined, required) {
-			t.Errorf("release Git prefix lacks %q: %q", required, joined)
-		}
+	want := []string{
+		"-c", "core.longpaths=true",
+		"--no-pager", "--no-optional-locks", "--no-replace-objects",
+		"-c", "core.hooksPath=" + os.DevNull,
+		"-c", "core.fsmonitor=false",
+		"-c", "core.untrackedCache=false",
+		"-c", "maintenance.auto=false",
+		"-c", "gc.auto=0",
+		"-C", "/exact/repository",
+	}
+	if got := releaseGitPrefix("/exact/repository"); !reflect.DeepEqual(got, want) {
+		t.Fatalf("release Git prefix = %#v, want %#v", got, want)
 	}
 }
 

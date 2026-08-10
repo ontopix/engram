@@ -172,6 +172,39 @@ func TestSymlinkedGitAdministrationPathIsConflict(t *testing.T) {
 	}
 }
 
+func TestPinnedDirectoryIdentityRejectsRenameAndReplacement(t *testing.T) {
+	parent := t.TempDir()
+	target := filepath.Join(parent, "target")
+	displaced := filepath.Join(parent, "displaced")
+	if err := os.Mkdir(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	original, err := pinnedFileInfo(os.Lstat(target))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(target, displaced); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	replacement, err := pinnedFileInfo(os.Lstat(target))
+	if err != nil {
+		t.Fatal(err)
+	}
+	displacedInfo, err := pinnedFileInfo(os.Lstat(displaced))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if os.SameFile(original, replacement) {
+		t.Fatal("pinned Git administration identity followed the replacement path")
+	}
+	if !os.SameFile(original, displacedInfo) {
+		t.Fatal("pinned Git administration identity no longer identifies the displaced directory")
+	}
+}
+
 func TestOwnedNonExecutableHookIsRepairedOnlyByInstall(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("executable mode is not portable on Windows")

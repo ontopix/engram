@@ -465,6 +465,7 @@ func releaseGitOutput(ctx context.Context, root string, arguments ...string) ([]
 
 func releaseGitPrefix(root string) []string {
 	return []string{
+		"-c", "core.longpaths=true",
 		"--no-pager", "--no-optional-locks", "--no-replace-objects",
 		"-c", "core.hooksPath=" + os.DevNull,
 		"-c", "core.fsmonitor=false",

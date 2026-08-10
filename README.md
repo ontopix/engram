@@ -39,11 +39,13 @@ normal filesystem tools.
 
 ## Status
 
-The reference implementation is complete through M6 and is prepared as the
-`v1.0.0-rc.1` release candidate. The standard and observable CLI interfaces
-remain pre-release drafts until the final `v1.0.0` release; release-candidate
-interfaces can still change. Completed milestones and release evidence are
-recorded in the [implementation plan](docs/implementation-plan.md).
+The reference implementation is complete through M6. The embedded
+release-candidate version is `1.0.0-rc.1`; the current development tree also
+contains the unreleased portability and recovery hardening recorded in the
+[changelog](CHANGELOG.md). The standard and observable CLI interfaces remain
+pre-release drafts until the final `v1.0.0` release; release-candidate interfaces
+can still change. Completed milestones and release evidence are recorded in the
+[implementation plan](docs/implementation-plan.md).
 
 Engram complements the [`.agents/` standard](https://github.com/apuigsech/dot-agents):
 projects can attach independent engram stores without merging their Git

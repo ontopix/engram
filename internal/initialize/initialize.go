@@ -22,6 +22,7 @@ import (
 	"github.com/ontopix/engram/internal/bootstrap"
 	"github.com/ontopix/engram/internal/changeset"
 	"github.com/ontopix/engram/internal/checker"
+	"github.com/ontopix/engram/internal/fileidentity"
 	"github.com/ontopix/engram/internal/fsatomic"
 	"github.com/ontopix/engram/internal/gitpresent"
 	"github.com/ontopix/engram/internal/gitraw"
@@ -283,7 +284,29 @@ func RecoverExpected(ctx context.Context, target string, expected lifecycle.Reco
 	return recover(ctx, target, &expected)
 }
 
+type recoveryOperations struct {
+	readLifecycle      func(string, lifecycle.Operation) (lifecycle.State, []byte, error)
+	acquireRecovery    func(string, lifecycle.Operation) (*lifecycle.RecoveryLease, error)
+	beforeRollback     func(string) error
+	beforeRollbackSync func(string) error
+}
+
+func (operations recoveryOperations) withDefaults() recoveryOperations {
+	if operations.readLifecycle == nil {
+		operations.readLifecycle = lifecycle.Read
+	}
+	if operations.acquireRecovery == nil {
+		operations.acquireRecovery = lifecycle.AcquireRecovery
+	}
+	return operations
+}
+
 func recover(ctx context.Context, target string, expected *lifecycle.RecoveryExpectation) (result RecoveryResult, resultErr error) {
+	return recoverWithOperations(ctx, target, expected, recoveryOperations{})
+}
+
+func recoverWithOperations(ctx context.Context, target string, expected *lifecycle.RecoveryExpectation, operations recoveryOperations) (result RecoveryResult, resultErr error) {
+	operations = operations.withDefaults()
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -294,10 +317,25 @@ func recover(ctx context.Context, target string, expected *lifecycle.RecoveryExp
 	if err != nil {
 		return RecoveryResult{Needed: true, RecoveryRequired: true}, typed(ErrorUsage, "resolve initialization recovery target", err)
 	}
-	if _, _, err := lifecycle.Read(canonical, lifecycle.Initialization); errors.Is(err, os.ErrNotExist) {
-		return RecoveryResult{}, nil
+	if _, _, err := operations.readLifecycle(canonical, lifecycle.Initialization); err != nil {
+		switch {
+		case errors.Is(err, lifecycle.ErrChanged):
+			// Confirm a concurrent disappearance only after acquiring the
+			// recovery lease. A replacement must be adopted and revalidated.
+		case errors.Is(err, os.ErrNotExist):
+			if expected == nil {
+				return RecoveryResult{}, nil
+			}
+			return RecoveryResult{Needed: true, RecoveryRequired: initializationLifecycleResidual(canonical)}, typed(
+				ErrorConcurrency, "read initialization lifecycle", errors.Join(lifecycle.ErrChanged, err),
+			)
+		default:
+			return RecoveryResult{Needed: true, RecoveryRequired: initializationLifecycleResidual(canonical)}, typed(
+				ErrorRecovery, "read initialization lifecycle", err,
+			)
+		}
 	}
-	lease, err := lifecycle.AcquireRecovery(canonical, lifecycle.Initialization)
+	lease, err := operations.acquireRecovery(canonical, lifecycle.Initialization)
 	if err != nil {
 		kind := ErrorRecovery
 		if errors.Is(err, rendezvous.ErrBusy) {
@@ -322,14 +360,14 @@ func recover(ctx context.Context, target string, expected *lifecycle.RecoveryExp
 		handle, err = lifecycle.AdoptExpected(canonical, lifecycle.Initialization, *expected)
 	}
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
+		if expected == nil && lifecycleAbsentAtAdopt(canonical, lifecycle.Initialization, err) {
 			return RecoveryResult{}, nil
 		}
 		kind := ErrorRecovery
-		if errors.Is(err, lifecycle.ErrOwnerLive) || errors.Is(err, lifecycle.ErrChanged) {
+		if errors.Is(err, lifecycle.ErrOwnerLive) || errors.Is(err, lifecycle.ErrChanged) || errors.Is(err, os.ErrNotExist) {
 			kind = ErrorConcurrency
 		}
-		return RecoveryResult{Needed: true, RecoveryRequired: true}, typed(kind, "adopt initialization lifecycle", err)
+		return RecoveryResult{Needed: true, RecoveryRequired: initializationLifecycleResidual(canonical)}, typed(kind, "adopt initialization lifecycle", err)
 	}
 	stage, err := lifecycle.Stage(handle.State())
 	if err != nil {
@@ -341,11 +379,15 @@ func recover(ctx context.Context, target string, expected *lifecycle.RecoveryExp
 	if handle.State().Phase != lifecycle.CleanupRequired {
 		return RecoveryResult{Needed: true, RecoveryRequired: true}, typed(ErrorRecovery, "recognize initialization lifecycle", errors.New("unsupported initialization recovery phase"))
 	}
-	record, err := readPublicationPlan(stage, handle.State())
-	if err != nil {
+	planRaw, planPresent := handle.RecoveryPlanRaw()
+	if !planPresent {
 		if _, stageErr := os.Lstat(stage); errors.Is(stageErr, os.ErrNotExist) {
 			return finishSidecarLastRecovery(ctx, canonical, handle)
 		}
+		return RecoveryResult{Needed: true, RecoveryRequired: true}, typed(ErrorRecovery, "read initialization recovery plan", errors.New("approved initialization publication plan is unavailable"))
+	}
+	record, err := decodePublicationPlan(planRaw, handle.State())
+	if err != nil {
 		return RecoveryResult{Needed: true, RecoveryRequired: true}, typed(ErrorRecovery, "read initialization recovery plan", err)
 	}
 	if err := ctx.Err(); err != nil {
@@ -355,6 +397,9 @@ func recover(ctx context.Context, target string, expected *lifecycle.RecoveryExp
 	gitPath := filepath.Join(canonical, ".git")
 	if _, err := os.Lstat(gitPath); err == nil {
 		publishedInfo, statErr := os.Lstat(canonical)
+		if statErr == nil {
+			statErr = fileidentity.Pin(publishedInfo)
+		}
 		if statErr != nil || publishedInfo.Mode()&os.ModeSymlink != 0 || !publishedInfo.IsDir() {
 			return RecoveryResult{Needed: true, RecoveryRequired: true}, typed(ErrorConflict, "inspect published initialization target", errors.Join(statErr, errors.New("published target is not one real directory")))
 		}
@@ -377,6 +422,9 @@ func recover(ctx context.Context, target string, expected *lifecycle.RecoveryExp
 	}
 
 	info, err := os.Lstat(canonical)
+	if err == nil {
+		err = fileidentity.Pin(info)
+	}
 	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
 		return RecoveryResult{Needed: true, RecoveryRequired: true}, typed(ErrorConflict, "recover initialization target", errors.Join(err, errors.New("existing initialization target is no longer one real directory")))
 	}
@@ -388,9 +436,18 @@ func recover(ctx context.Context, target string, expected *lifecycle.RecoveryExp
 	if err := handle.RevalidateRecovery(); err != nil {
 		return RecoveryResult{Needed: true, RecoveryRequired: true}, typed(ErrorConcurrency, "revalidate initialization recovery plan", err)
 	}
-	changed, durable, err := rollbackPublishedAdditions(ctx, canonical, record)
+	if operations.beforeRollback != nil {
+		if err := operations.beforeRollback(canonical); err != nil {
+			return RecoveryResult{Needed: true, RecoveryRequired: true}, typed(ErrorConcurrency, "prepare initialization rollback", err)
+		}
+	}
+	changed, durable, err := rollbackPublishedAdditions(ctx, canonical, info, record, operations.beforeRollbackSync)
 	if err != nil {
-		return RecoveryResult{Needed: true, Durable: durable, CheckoutChanged: changed, RecoveryRequired: true}, &Error{Kind: ErrorRecovery, Operation: "roll back initialization publication", Durable: durable, CheckoutChanged: changed, RecoveryRequired: true, Underlying: err}
+		kind := ErrorRecovery
+		if errors.Is(err, lifecycle.ErrChanged) {
+			kind = ErrorConcurrency
+		}
+		return RecoveryResult{Needed: true, Durable: durable, CheckoutChanged: changed, RecoveryRequired: true}, &Error{Kind: kind, Operation: "roll back initialization publication", Durable: durable, CheckoutChanged: changed, RecoveryRequired: true, Underlying: err}
 	}
 	return finishRecovery(stage, handle, nil, changed, durable)
 }
@@ -747,6 +804,9 @@ func finishSidecarLastRecovery(ctx context.Context, target string, handle *lifec
 		return RecoveryResult{Needed: true, RecoveryRequired: true}, typed(ErrorCancelled, "recover sidecar-last initialization", err)
 	}
 	before, statErr := os.Lstat(target)
+	if statErr == nil {
+		statErr = fileidentity.Pin(before)
+	}
 	if errors.Is(statErr, os.ErrNotExist) {
 		if err := handle.RevalidateRecovery(); err != nil {
 			return RecoveryResult{Needed: true, RecoveryRequired: true}, typed(ErrorConcurrency, "revalidate absent initialization target", err)
@@ -830,10 +890,14 @@ func acceptedPublishedStateWithoutPlan(ctx context.Context, root string) (*manag
 	return acceptedPublishedState(ctx, root, repository.Head.String())
 }
 
-func rollbackPublishedAdditions(ctx context.Context, rootPath string, record publicationPlan) (changed, durable bool, resultErr error) {
+func rollbackPublishedAdditions(ctx context.Context, rootPath string, expectedRoot os.FileInfo, record publicationPlan, beforeSync func(string) error) (changed, durable bool, resultErr error) {
 	root, err := os.OpenRoot(rootPath)
 	if err != nil {
 		return false, false, err
+	}
+	openedRoot, statErr := root.Stat(".")
+	if statErr != nil || expectedRoot == nil || !openedRoot.IsDir() || !os.SameFile(expectedRoot, openedRoot) {
+		return false, false, errors.Join(lifecycle.ErrChanged, statErr, root.Close(), errors.New("initialization rollback target identity changed"))
 	}
 	defer func() { resultErr = errors.Join(resultErr, root.Close()) }()
 	type ownedFile struct {
@@ -854,89 +918,207 @@ func rollbackPublishedAdditions(ctx context.Context, rootPath string, record pub
 		if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
 			return false, false, errors.Join(err, fmt.Errorf("published path %s no longer has its owned shape", planned.Path))
 		}
+		if err := fileidentity.Pin(info); err != nil {
+			return false, false, errors.Join(lifecycle.ErrChanged, err)
+		}
 		file, err := root.Open(logical)
 		if err != nil {
 			return false, false, err
 		}
 		data, readErr := io.ReadAll(io.LimitReader(file, int64(len(planned.Data))+1))
 		opened, statErr := file.Stat()
-		closeErr := file.Close()
 		after, afterErr := root.Lstat(logical)
+		if afterErr == nil {
+			if err := fileidentity.Pin(after); err != nil {
+				afterErr = errors.Join(lifecycle.ErrChanged, err)
+			}
+		}
+		closeErr := file.Close()
 		if readErr != nil || statErr != nil || closeErr != nil || afterErr != nil || !os.SameFile(info, opened) || !os.SameFile(opened, after) || !bytes.Equal(data, planned.Data) {
 			return false, false, errors.Join(readErr, statErr, closeErr, afterErr, fmt.Errorf("published path %s differs from its recovery record", planned.Path))
 		}
 		present = append(present, ownedFile{path: planned.Path, info: after, data: append([]byte(nil), planned.Data...)})
 	}
-	dirtyDirectories := make(map[string]struct{})
+	beforeSyncCalled := false
+	syncMutation := func(parent *os.Root, parentPath string, parentInfo os.FileInfo) (bool, error) {
+		if !beforeSyncCalled {
+			beforeSyncCalled = true
+			if beforeSync != nil {
+				if err := beforeSync(rootPath); err != nil {
+					return false, errors.Join(err, parent.Close())
+				}
+			}
+		}
+		return syncAndRevalidateRollbackParent(root, parent, parentPath, parentInfo)
+	}
 	for index := len(present) - 1; index >= 0; index-- {
 		if err := ctx.Err(); err != nil {
 			return changed, durable, err
 		}
 		owned := present[index]
 		logical := filepath.FromSlash(owned.path)
-		before, err := root.Lstat(logical)
-		if err != nil || before.Mode()&os.ModeSymlink != 0 || !before.Mode().IsRegular() || !os.SameFile(owned.info, before) {
-			return changed, durable, errors.Join(err, fmt.Errorf("published path %s changed after recovery preflight", owned.path))
-		}
-		file, err := root.Open(logical)
+		parentPath := filepath.Dir(logical)
+		parent, parentInfo, err := openRollbackParent(root, parentPath)
 		if err != nil {
 			return changed, durable, err
+		}
+		base := filepath.Base(logical)
+		before, err := parent.Lstat(base)
+		if err != nil || before.Mode()&os.ModeSymlink != 0 || !before.Mode().IsRegular() {
+			return changed, durable, errors.Join(err, parent.Close(), fmt.Errorf("published path %s changed after recovery preflight", owned.path))
+		}
+		if err := fileidentity.Pin(before); err != nil || !os.SameFile(owned.info, before) {
+			return changed, durable, errors.Join(lifecycle.ErrChanged, err, parent.Close(), fmt.Errorf("published path %s changed after recovery preflight", owned.path))
+		}
+		file, err := parent.Open(base)
+		if err != nil {
+			return changed, durable, errors.Join(err, parent.Close())
 		}
 		data, readErr := io.ReadAll(io.LimitReader(file, int64(len(owned.data))+1))
 		opened, statErr := file.Stat()
+		after, afterErr := parent.Lstat(base)
+		if afterErr == nil {
+			if err := fileidentity.Pin(after); err != nil {
+				afterErr = errors.Join(lifecycle.ErrChanged, err)
+			}
+		}
 		closeErr := file.Close()
-		after, afterErr := root.Lstat(logical)
 		if readErr != nil || statErr != nil || closeErr != nil || afterErr != nil ||
 			!os.SameFile(owned.info, opened) || !os.SameFile(opened, after) || !bytes.Equal(data, owned.data) {
-			return changed, durable, errors.Join(readErr, statErr, closeErr, afterErr, fmt.Errorf("published path %s changed immediately before rollback", owned.path))
+			return changed, durable, errors.Join(readErr, statErr, closeErr, afterErr, parent.Close(), fmt.Errorf("published path %s changed immediately before rollback", owned.path))
 		}
-		if err := root.Remove(logical); err != nil {
-			return changed, durable, err
+		if err := parent.Remove(base); err != nil {
+			return changed, durable, errors.Join(err, parent.Close())
 		}
 		changed = true
-		dirtyDirectories[filepath.Dir(filepath.Join(rootPath, logical))] = struct{}{}
+		synced, err := syncMutation(parent, parentPath, parentInfo)
+		durable = durable || synced
+		if err != nil {
+			return changed, durable, err
+		}
 	}
 	for index := len(record.Directories) - 1; index >= 0; index-- {
 		logical := filepath.FromSlash(record.Directories[index])
-		info, err := root.Lstat(logical)
-		if errors.Is(err, os.ErrNotExist) {
-			continue
-		}
-		if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-			return changed, durable, errors.Join(err, fmt.Errorf("publication directory %s changed shape", record.Directories[index]))
-		}
-		directory, err := root.Open(logical)
+		parentPath := filepath.Dir(logical)
+		parent, parentInfo, err := openRollbackParent(root, parentPath)
 		if err != nil {
 			return changed, durable, err
 		}
+		base := filepath.Base(logical)
+		info, err := parent.Lstat(base)
+		if errors.Is(err, os.ErrNotExist) {
+			if err := parent.Close(); err != nil {
+				return changed, durable, err
+			}
+			continue
+		}
+		if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return changed, durable, errors.Join(err, parent.Close(), fmt.Errorf("publication directory %s changed shape", record.Directories[index]))
+		}
+		if err := fileidentity.Pin(info); err != nil {
+			return changed, durable, errors.Join(lifecycle.ErrChanged, err, parent.Close())
+		}
+		directory, err := parent.Open(base)
+		if err != nil {
+			return changed, durable, errors.Join(err, parent.Close())
+		}
 		entries, readErr := directory.ReadDir(1)
 		opened, statErr := directory.Stat()
+		after, afterErr := parent.Lstat(base)
+		if afterErr == nil {
+			if err := fileidentity.Pin(after); err != nil {
+				afterErr = errors.Join(lifecycle.ErrChanged, err)
+			}
+		}
 		closeErr := directory.Close()
-		after, afterErr := root.Lstat(logical)
 		if readErr != nil && !errors.Is(readErr, io.EOF) || statErr != nil || closeErr != nil || afterErr != nil ||
 			after.Mode()&os.ModeSymlink != 0 || !after.IsDir() || !os.SameFile(info, opened) || !os.SameFile(opened, after) {
-			return changed, durable, errors.Join(readErr, statErr, closeErr, afterErr, fmt.Errorf("publication directory %s changed immediately before rollback", record.Directories[index]))
+			return changed, durable, errors.Join(readErr, statErr, closeErr, afterErr, parent.Close(), fmt.Errorf("publication directory %s changed immediately before rollback", record.Directories[index]))
 		}
 		if len(entries) != 0 {
+			if err := parent.Close(); err != nil {
+				return changed, durable, err
+			}
 			continue // Preserve a directory now containing unrelated bytes.
 		}
-		removeErr := root.Remove(logical)
-		if removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-			return changed, durable, removeErr
+		if err := parent.Remove(base); err != nil {
+			return changed, durable, errors.Join(err, parent.Close())
 		}
-		if removeErr == nil {
-			changed = true
-			dirtyDirectories[filepath.Dir(filepath.Join(rootPath, logical))] = struct{}{}
-		}
-	}
-	if changed {
-		var err error
-		durable, err = syncChangedDirectoriesWithEvidence(dirtyDirectories, syncDirectory)
+		changed = true
+		synced, err := syncMutation(parent, parentPath, parentInfo)
+		durable = durable || synced
 		if err != nil {
-			return true, durable, err
+			return changed, durable, err
 		}
 	}
 	return changed, durable, nil
+}
+
+func openRollbackParent(root *os.Root, directory string) (*os.Root, os.FileInfo, error) {
+	before, err := root.Lstat(directory)
+	if err != nil || before.Mode()&os.ModeSymlink != 0 || !before.IsDir() {
+		return nil, nil, errors.Join(lifecycle.ErrChanged, err, errors.New("initialization rollback parent is not one real directory"))
+	}
+	if err := fileidentity.Pin(before); err != nil {
+		return nil, nil, errors.Join(lifecycle.ErrChanged, err)
+	}
+	parent, err := root.OpenRoot(directory)
+	if err != nil {
+		return nil, nil, errors.Join(lifecycle.ErrChanged, err)
+	}
+	openedInfo, statErr := parent.Stat(".")
+	if statErr == nil {
+		statErr = fileidentity.Pin(openedInfo)
+	}
+	after, lstatErr := root.Lstat(directory)
+	if lstatErr == nil {
+		if err := fileidentity.Pin(after); err != nil {
+			lstatErr = errors.Join(lifecycle.ErrChanged, err)
+		}
+	}
+	if statErr != nil || lstatErr != nil || openedInfo.Mode()&os.ModeSymlink != 0 || !openedInfo.IsDir() ||
+		after.Mode()&os.ModeSymlink != 0 || !after.IsDir() || !os.SameFile(before, openedInfo) || !os.SameFile(openedInfo, after) {
+		return nil, nil, errors.Join(lifecycle.ErrChanged, statErr, lstatErr, parent.Close(), errors.New("initialization rollback parent changed"))
+	}
+	return parent, openedInfo, nil
+}
+
+func syncAndRevalidateRollbackParent(root, parent *os.Root, directory string, expected os.FileInfo) (durable bool, resultErr error) {
+	durable, syncErr := syncOpenedRollbackParent(parent)
+	after, lstatErr := root.Lstat(directory)
+	if lstatErr == nil {
+		if err := fileidentity.Pin(after); err != nil {
+			lstatErr = errors.Join(lifecycle.ErrChanged, err)
+		}
+	}
+	closeErr := parent.Close()
+	if lstatErr != nil || after.Mode()&os.ModeSymlink != 0 || !after.IsDir() || expected == nil || !os.SameFile(expected, after) {
+		return durable, errors.Join(lifecycle.ErrChanged, syncErr, closeErr, lstatErr, errors.New("initialization rollback parent identity changed after sync"))
+	}
+	return durable, errors.Join(syncErr, closeErr)
+}
+
+func syncOpenedRollbackParent(root *os.Root) (durable bool, resultErr error) {
+	opened, err := root.Open(".")
+	if err != nil {
+		return false, err
+	}
+	info, statErr := opened.Stat()
+	if statErr != nil || !info.IsDir() {
+		return false, errors.Join(statErr, opened.Close(), errors.New("initialization rollback parent handle is not a directory"))
+	}
+	syncErr := opened.Sync()
+	closeErr := opened.Close()
+	// Windows does not expose portable directory-fsync semantics. Preserve the
+	// existing durability contract while still opening and closing the exact
+	// parent through its already-anchored Root.
+	if runtime.GOOS == "windows" {
+		syncErr = nil
+	}
+	if syncErr != nil {
+		return false, errors.Join(syncErr, closeErr)
+	}
+	return true, closeErr
 }
 
 func resultFromPlan(plan *bootstrap.Plan, dryRun bool) Result {
@@ -1039,27 +1221,7 @@ func encodePlan(record publicationPlan) ([]byte, error) {
 	return output.Bytes(), nil
 }
 
-func readPublicationPlan(stage string, state lifecycle.State) (publicationPlan, error) {
-	name := filepath.Join(stage, "plan-v1.json")
-	before, err := os.Lstat(name)
-	if err != nil || before.Mode()&os.ModeSymlink != 0 || !before.Mode().IsRegular() {
-		return publicationPlan{}, errors.Join(err, errors.New("initialization publication plan is unavailable"))
-	}
-	file, err := os.Open(name)
-	if err != nil {
-		return publicationPlan{}, err
-	}
-	data, readErr := io.ReadAll(io.LimitReader(file, (16<<20)+1))
-	opened, statErr := file.Stat()
-	closeErr := file.Close()
-	if readErr != nil || statErr != nil || closeErr != nil {
-		return publicationPlan{}, errors.Join(readErr, statErr, closeErr)
-	}
-	after, lstatErr := os.Lstat(name)
-	if lstatErr != nil || after.Mode()&os.ModeSymlink != 0 || !after.Mode().IsRegular() ||
-		!os.SameFile(before, opened) || !os.SameFile(opened, after) {
-		return publicationPlan{}, errors.Join(lstatErr, errors.New("initialization publication plan changed concurrently"))
-	}
+func decodePublicationPlan(data []byte, state lifecycle.State) (publicationPlan, error) {
 	if len(data) > 16<<20 {
 		return publicationPlan{}, errors.New("initialization publication plan is too large")
 	}
@@ -1258,7 +1420,7 @@ func configuredIdentity(ctx context.Context, environment []string) (Identity, er
 		if err != nil {
 			return "", err
 		}
-		command := exec.CommandContext(ctx, git, "--no-pager", "config", "--get", key)
+		command := exec.CommandContext(ctx, git, "-c", "core.longpaths=true", "--no-pager", "config", "--get", key)
 		command.Env = gitEnvironment(environment, false)
 		output, err := command.Output()
 		if err != nil {
@@ -1283,6 +1445,7 @@ func runGit(ctx context.Context, root string, environment []string, isolateGloba
 		return err
 	}
 	global := []string{
+		"-c", "core.longpaths=true",
 		"--no-pager", "--no-optional-locks", "--no-replace-objects",
 		"-c", "core.hooksPath=" + os.DevNull, "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false",
 		"-c", "maintenance.auto=false", "-c", "gc.auto=0", "-C", root,
@@ -1397,6 +1560,23 @@ func privateAcceptedRefPresent(stage, commit string) bool {
 
 func lifecycleResidual(handle initializationLifecycle) bool {
 	return handle != nil && handle.RecoveryRequired()
+}
+
+// lifecycleAbsentAtAdopt recognizes only a sidecar that was already absent
+// when adoption began. ErrChanged means a non-cooperating mutation happened
+// while this controller held the lease and therefore remains fail-closed. A
+// replacement at the exact name also prevents idempotent success.
+func lifecycleAbsentAtAdopt(target string, operation lifecycle.Operation, cause error) bool {
+	if !errors.Is(cause, os.ErrNotExist) || errors.Is(cause, lifecycle.ErrChanged) {
+		return false
+	}
+	_, err := os.Lstat(lifecycle.Sidecar(target, operation))
+	return errors.Is(err, os.ErrNotExist)
+}
+
+func initializationLifecycleResidual(target string) bool {
+	_, err := os.Lstat(lifecycle.Sidecar(target, lifecycle.Initialization))
+	return !errors.Is(err, os.ErrNotExist)
 }
 
 func removeInitializationLifecycle(handle initializationLifecycle) error {

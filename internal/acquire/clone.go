@@ -18,6 +18,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/ontopix/engram/internal/checker"
+	"github.com/ontopix/engram/internal/fileidentity"
 	"github.com/ontopix/engram/internal/gitpresent"
 	"github.com/ontopix/engram/internal/gitraw"
 	"github.com/ontopix/engram/internal/guard"
@@ -430,26 +431,7 @@ func writePublicationPlan(stage string, plan publicationPlan) error {
 	return syncDirectory(stage)
 }
 
-func readPublicationPlan(stage string, state lifecycle.State) (publicationPlan, error) {
-	name := publicationPlanPath(stage)
-	before, err := os.Lstat(name)
-	if err != nil || before.Mode()&os.ModeSymlink != 0 || !before.Mode().IsRegular() {
-		return publicationPlan{}, errors.Join(err, errors.New("clone publication plan is unavailable"))
-	}
-	file, err := os.Open(name)
-	if err != nil {
-		return publicationPlan{}, err
-	}
-	data, readErr := io.ReadAll(io.LimitReader(file, maxPublicationPlanBytes+1))
-	opened, statErr := file.Stat()
-	closeErr := file.Close()
-	if readErr != nil || statErr != nil || closeErr != nil {
-		return publicationPlan{}, errors.Join(readErr, statErr, closeErr)
-	}
-	after, lstatErr := os.Lstat(name)
-	if lstatErr != nil || after.Mode()&os.ModeSymlink != 0 || !after.Mode().IsRegular() || !os.SameFile(before, opened) || !os.SameFile(opened, after) {
-		return publicationPlan{}, errors.Join(lstatErr, errors.New("clone publication plan changed concurrently"))
-	}
+func decodePublicationPlan(data []byte, state lifecycle.State) (publicationPlan, error) {
 	if len(data) > maxPublicationPlanBytes {
 		return publicationPlan{}, errors.New("clone publication plan is too large")
 	}
@@ -507,12 +489,20 @@ type RecoveryResult struct {
 }
 
 type recoveryOperations struct {
+	readLifecycle   func(string, lifecycle.Operation) (lifecycle.State, []byte, error)
+	acquireRecovery func(string, lifecycle.Operation) (*lifecycle.RecoveryLease, error)
 	cleanupStage    func(string) error
 	removeLifecycle func(*lifecycle.Handle) error
 	verifyPublished func(context.Context, string, publicationPlan) (*managedread.GitState, error)
 }
 
 func (operations recoveryOperations) withDefaults() recoveryOperations {
+	if operations.readLifecycle == nil {
+		operations.readLifecycle = lifecycle.Read
+	}
+	if operations.acquireRecovery == nil {
+		operations.acquireRecovery = lifecycle.AcquireRecovery
+	}
 	if operations.cleanupStage == nil {
 		operations.cleanupStage = cleanupPrivateStage
 	}
@@ -568,14 +558,23 @@ func recover(ctx context.Context, target string, expected *lifecycle.RecoveryExp
 	if err != nil {
 		return nil, typed(ErrorUsage, "resolve clone recovery target", err)
 	}
-	state, _, err := lifecycle.Read(canonical, lifecycle.Acquisition)
-	if errors.Is(err, os.ErrNotExist) {
-		return &RecoveryResult{}, nil
-	}
+	state, _, err := operations.readLifecycle(canonical, lifecycle.Acquisition)
 	if err != nil {
-		return acquisitionRecoveryFailure(canonical, nil, ErrorRecovery, "read clone lifecycle", err, nil)
+		switch {
+		case errors.Is(err, lifecycle.ErrChanged):
+			// A stable read can lose the sidecar while another controller is
+			// finishing. Confirm that outcome only after acquiring the recovery
+			// lease; a replacement must instead be adopted and revalidated.
+		case errors.Is(err, os.ErrNotExist):
+			if expected == nil {
+				return &RecoveryResult{}, nil
+			}
+			return acquisitionRecoveryFailure(canonical, nil, ErrorConcurrency, "read clone lifecycle", errors.Join(lifecycle.ErrChanged, err), nil)
+		default:
+			return acquisitionRecoveryFailure(canonical, nil, ErrorRecovery, "read clone lifecycle", err, nil)
+		}
 	}
-	lease, err := lifecycle.AcquireRecovery(canonical, lifecycle.Acquisition)
+	lease, err := operations.acquireRecovery(canonical, lifecycle.Acquisition)
 	if err != nil {
 		kind := ErrorRecovery
 		if errors.Is(err, rendezvous.ErrBusy) {
@@ -621,11 +620,11 @@ func recover(ctx context.Context, target string, expected *lifecycle.RecoveryExp
 		// read and released the nonblocking lease before this attempt acquired
 		// it. An unbound recovery is idempotent in that case; an explicitly
 		// observed recovery keeps reporting the changed input as concurrency.
-		if expected == nil && errors.Is(err, os.ErrNotExist) {
+		if expected == nil && lifecycleAbsentAtAdopt(canonical, lifecycle.Acquisition, err) {
 			return &RecoveryResult{}, nil
 		}
 		kind := ErrorRecovery
-		if errors.Is(err, lifecycle.ErrOwnerLive) || errors.Is(err, lifecycle.ErrChanged) {
+		if errors.Is(err, lifecycle.ErrOwnerLive) || errors.Is(err, lifecycle.ErrChanged) || errors.Is(err, os.ErrNotExist) {
 			kind = ErrorConcurrency
 		}
 		return acquisitionRecoveryFailure(canonical, nil, kind, "adopt clone lifecycle", err, nil)
@@ -700,6 +699,9 @@ func recover(ctx context.Context, target string, expected *lifecycle.RecoveryExp
 	}
 
 	info, statErr := os.Lstat(canonical)
+	if statErr == nil {
+		statErr = fileidentity.Pin(info)
+	}
 	if errors.Is(statErr, os.ErrNotExist) {
 		if err := ctx.Err(); err != nil {
 			return acquisitionRecoveryFailure(canonical, nil, ErrorCancelled, "cancel clone recovery", err, nil, handle)
@@ -727,7 +729,11 @@ func recover(ctx context.Context, target string, expected *lifecycle.RecoveryExp
 	if statErr != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
 		return acquisitionRecoveryFailure(canonical, nil, ErrorConflict, "inspect published clone", errors.Join(statErr, errors.New("clone target is not one real directory")), nil, handle)
 	}
-	plan, planErr := readPublicationPlan(stage, state)
+	planRaw, planPresent := handle.RecoveryPlanRaw()
+	if !planPresent {
+		return acquisitionRecoveryFailure(canonical, nil, ErrorRecovery, "read clone publication plan", errors.New("approved clone publication plan is unavailable"), nil, handle)
+	}
+	plan, planErr := decodePublicationPlan(planRaw, state)
 	if planErr != nil {
 		return acquisitionRecoveryFailure(canonical, nil, ErrorRecovery, "read clone publication plan", planErr, nil, handle)
 	}
@@ -756,6 +762,9 @@ func recover(ctx context.Context, target string, expected *lifecycle.RecoveryExp
 	if statErr != nil || afterRecheck.Mode()&os.ModeSymlink != 0 || !afterRecheck.IsDir() || !os.SameFile(info, afterRecheck) || !os.SameFile(beforeRecheck, afterRecheck) {
 		return acquisitionRecoveryFailure(canonical, &RecoveryResult{Needed: true, Published: true, Accepted: cloneGitState(accepted)}, ErrorConcurrency, "recheck published clone identity", errors.Join(statErr, errors.New("published clone identity changed during recovery")), accepted, handle)
 	}
+	if err := handle.RevalidateRecovery(); err != nil {
+		return acquisitionRecoveryFailure(canonical, &RecoveryResult{Needed: true, Published: true, Accepted: cloneGitState(accepted)}, ErrorConcurrency, "finalize published clone recovery authority", err, accepted, handle)
+	}
 	// The plan is the only exact authority which binds a published repository to
 	// this acquisition. Keep it until sidecar removal is known durable; otherwise
 	// a failed removal would strand cleanup-required state with no recoverable
@@ -774,10 +783,25 @@ func recover(ctx context.Context, target string, expected *lifecycle.RecoveryExp
 	}
 	result.Performed = true
 	result.Durable = true
+	if err := handle.RevalidateRecoveryStage(); err != nil {
+		return acquisitionRecoveryFailure(canonical, result, ErrorConcurrency, "revalidate published clone stage cleanup", err, accepted, handle)
+	}
 	if err := operations.cleanupStage(stage); err != nil {
 		return acquisitionRecoveryFailure(canonical, result, ErrorIO, "clean published clone stage", err, accepted, handle)
 	}
 	return result, nil
+}
+
+// lifecycleAbsentAtAdopt recognizes only a sidecar that was already absent
+// when adoption began. ErrChanged means a non-cooperating mutation happened
+// while this controller held the lease and therefore remains fail-closed. A
+// replacement at the exact name also prevents idempotent success.
+func lifecycleAbsentAtAdopt(target string, operation lifecycle.Operation, cause error) bool {
+	if !errors.Is(cause, os.ErrNotExist) || errors.Is(cause, lifecycle.ErrChanged) {
+		return false
+	}
+	_, err := os.Lstat(lifecycle.Sidecar(target, operation))
+	return errors.Is(err, os.ErrNotExist)
 }
 
 // finishSidecarLastRecovery handles a missing exact private stage. Absence or
@@ -789,6 +813,9 @@ func finishSidecarLastRecovery(ctx context.Context, target string, handle *lifec
 		return acquisitionRecoveryFailure(target, nil, ErrorCancelled, "cancel sidecar-last clone recovery", err, nil, handle)
 	}
 	before, statErr := os.Lstat(target)
+	if statErr == nil {
+		statErr = fileidentity.Pin(before)
+	}
 	if errors.Is(statErr, os.ErrNotExist) {
 		if err := handle.RevalidateRecovery(); err != nil {
 			return acquisitionRecoveryFailure(target, nil, ErrorConcurrency, "revalidate absent sidecar-last clone target", err, nil, handle)
@@ -971,6 +998,7 @@ func runClone(ctx context.Context, location, destination string) error {
 		return typed(ErrorCapability, "locate Git", err)
 	}
 	arguments := []string{
+		"-c", "core.longpaths=true",
 		"--no-pager", "--no-optional-locks", "--no-replace-objects",
 		"-c", "core.hooksPath=" + os.DevNull,
 		"-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false",
@@ -1105,6 +1133,7 @@ func gitOutputStatus(ctx context.Context, root string, arguments ...string) ([]b
 		return nil, -1, err
 	}
 	global := []string{
+		"-c", "core.longpaths=true",
 		"--no-pager", "--no-optional-locks", "--no-replace-objects",
 		"-c", "core.hooksPath=" + os.DevNull, "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false",
 		"-c", "maintenance.auto=false", "-c", "gc.auto=0", "-C", root,

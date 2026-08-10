@@ -16,11 +16,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"reflect"
 	"runtime"
-	"strings"
 	"time"
 
+	"github.com/ontopix/engram/internal/fileidentity"
 	"github.com/ontopix/engram/internal/rendezvous"
 )
 
@@ -60,12 +59,16 @@ type State struct {
 }
 
 type Handle struct {
-	path                string
-	state               State
-	raw                 []byte
-	info                os.FileInfo
-	operations          lifecycleOperations
-	recoveryExpectation *RecoveryExpectation
+	path                 string
+	state                State
+	raw                  []byte
+	info                 os.FileInfo
+	operations           lifecycleOperations
+	recoveryExpectation  *RecoveryExpectation
+	recoveryPlanRaw      []byte
+	recoveryPlanPresent  bool
+	recoveryStageID      []byte
+	recoveryStagePresent bool
 }
 
 // Mutation is the exact lifecycle-controller evidence carried by a failed
@@ -224,6 +227,11 @@ type RecoveryObservation struct {
 	targetInfo os.FileInfo
 	stageInfo  os.FileInfo
 	planInfo   os.FileInfo
+
+	stateIdentity  []byte
+	targetIdentity []byte
+	stageIdentity  []byte
+	planIdentity   []byte
 }
 
 // Sidecar returns the exact target-derived controller-state name.
@@ -402,27 +410,27 @@ func exactRegularPath(name string, identity os.FileInfo) bool {
 
 // Read performs a stable, closed, canonical state read.
 func Read(target string, operation Operation) (State, []byte, error) {
-	state, raw, _, err := readState(target, operation)
+	state, raw, _, _, err := readState(target, operation)
 	return state, raw, err
 }
 
-func readState(target string, operation Operation) (State, []byte, os.FileInfo, error) {
+func readState(target string, operation Operation) (State, []byte, os.FileInfo, []byte, error) {
 	name := Sidecar(target, operation)
-	raw, info, err := readStableRegular(name, maxStateBytes)
+	raw, info, identity, err := readStableRegular(name, maxStateBytes)
 	if err != nil {
-		return State{}, nil, nil, err
+		return State{}, nil, nil, nil, err
 	}
 	var state State
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&state); err != nil || decoder.Decode(&struct{}{}) != io.EOF || validateState(state) != nil || state.Target != target || state.Operation != operation {
-		return State{}, nil, nil, ErrMalformed
+		return State{}, nil, nil, nil, ErrMalformed
 	}
 	canonical, err := encode(state)
 	if err != nil || !bytes.Equal(raw, canonical) {
-		return State{}, nil, nil, ErrMalformed
+		return State{}, nil, nil, nil, ErrMalformed
 	}
-	return state, append([]byte(nil), raw...), info, nil
+	return state, append([]byte(nil), raw...), info, append([]byte(nil), identity...), nil
 }
 
 // ObserveRecovery returns one closed stable observation. It samples the whole
@@ -451,7 +459,7 @@ func ObserveRecovery(target string, operation Operation) (RecoveryObservation, e
 }
 
 func observeRecoveryOnce(target string, operation Operation) (RecoveryObservation, error) {
-	state, raw, stateInfo, err := readState(target, operation)
+	state, raw, stateInfo, stateIdentity, err := readState(target, operation)
 	if err != nil {
 		return RecoveryObservation{}, err
 	}
@@ -461,9 +469,9 @@ func observeRecoveryOnce(target string, operation Operation) (RecoveryObservatio
 	}
 	result := RecoveryObservation{
 		State: state, StateRaw: raw, TargetPath: state.Target, StagePath: stage,
-		PlanPath: filepath.Join(stage, "plan-v1.json"), stateInfo: stateInfo,
+		PlanPath: filepath.Join(stage, "plan-v1.json"), stateInfo: stateInfo, stateIdentity: stateIdentity,
 	}
-	targetBefore, targetErr := os.Lstat(state.Target)
+	targetInfo, targetIdentity, targetErr := readStableRealDirectory(state.Target)
 	if errors.Is(targetErr, os.ErrNotExist) {
 		if _, afterErr := os.Lstat(state.Target); !errors.Is(afterErr, os.ErrNotExist) {
 			return RecoveryObservation{}, errors.Join(ErrChanged, afterErr)
@@ -472,17 +480,11 @@ func observeRecoveryOnce(target string, operation Operation) (RecoveryObservatio
 		if targetErr != nil {
 			return RecoveryObservation{}, targetErr
 		}
-		if targetBefore.Mode()&os.ModeSymlink != 0 || !targetBefore.IsDir() {
-			return RecoveryObservation{}, errors.Join(ErrMalformed, errors.New("lifecycle target is not absent or one real directory"))
-		}
-		targetAfter, afterErr := os.Lstat(state.Target)
-		if afterErr != nil || targetAfter.Mode()&os.ModeSymlink != 0 || !targetAfter.IsDir() || !os.SameFile(targetBefore, targetAfter) {
-			return RecoveryObservation{}, errors.Join(ErrChanged, afterErr)
-		}
 		result.TargetPresent = true
-		result.targetInfo = targetAfter
+		result.targetInfo = targetInfo
+		result.targetIdentity = targetIdentity
 	}
-	stageBefore, err := os.Lstat(stage)
+	stageBefore, stageIdentity, err := readStableRealDirectory(stage)
 	if errors.Is(err, os.ErrNotExist) {
 		if _, afterErr := os.Lstat(stage); !errors.Is(afterErr, os.ErrNotExist) {
 			return RecoveryObservation{}, errors.Join(ErrChanged, afterErr)
@@ -492,25 +494,25 @@ func observeRecoveryOnce(target string, operation Operation) (RecoveryObservatio
 	if err != nil {
 		return RecoveryObservation{}, err
 	}
-	if stageBefore.Mode()&os.ModeSymlink != 0 || !stageBefore.IsDir() {
-		return RecoveryObservation{}, errors.Join(ErrMalformed, errors.New("lifecycle stage is not one real directory"))
-	}
 	result.StagePresent = true
 	result.stageInfo = stageBefore
-	planRaw, planInfo, planErr := readStableRegular(result.PlanPath, maxRecoveryPlanBytes)
+	result.stageIdentity = stageIdentity
+	planRaw, planInfo, planIdentity, planErr := readStableRegular(result.PlanPath, maxRecoveryPlanBytes)
 	if planErr == nil {
 		result.PlanPresent = true
 		result.PlanRaw = planRaw
 		result.planInfo = planInfo
+		result.planIdentity = planIdentity
 	} else if !errors.Is(planErr, os.ErrNotExist) {
 		return RecoveryObservation{}, errors.Join(planErr, errors.New("lifecycle recovery plan is not stable"))
 	} else if state.Phase == CleanupRequired {
 		return RecoveryObservation{}, errors.Join(ErrMalformed, errors.New("cleanup-required lifecycle stage has no publication plan"))
 	}
-	stageAfter, err := os.Lstat(stage)
-	if err != nil || stageAfter.Mode()&os.ModeSymlink != 0 || !stageAfter.IsDir() || !os.SameFile(stageBefore, stageAfter) {
+	stageAfter, afterIdentity, err := readStableRealDirectory(stage)
+	if err != nil || !os.SameFile(stageBefore, stageAfter) || !bytes.Equal(stageIdentity, afterIdentity) {
 		return RecoveryObservation{}, errors.Join(ErrChanged, err)
 	}
+	result.stageInfo = stageAfter
 	return result, nil
 }
 
@@ -519,16 +521,16 @@ func sameRecoveryObservation(left, right RecoveryObservation) bool {
 		left.TargetPath != right.TargetPath || left.TargetPresent != right.TargetPresent ||
 		left.StagePath != right.StagePath || left.StagePresent != right.StagePresent ||
 		left.PlanPath != right.PlanPath || left.PlanPresent != right.PlanPresent ||
-		!os.SameFile(left.stateInfo, right.stateInfo) {
+		!os.SameFile(left.stateInfo, right.stateInfo) || !bytes.Equal(left.stateIdentity, right.stateIdentity) {
 		return false
 	}
-	if left.TargetPresent && !os.SameFile(left.targetInfo, right.targetInfo) {
+	if left.TargetPresent && (!os.SameFile(left.targetInfo, right.targetInfo) || !bytes.Equal(left.targetIdentity, right.targetIdentity)) {
 		return false
 	}
-	if left.StagePresent && !os.SameFile(left.stageInfo, right.stageInfo) {
+	if left.StagePresent && (!os.SameFile(left.stageInfo, right.stageInfo) || !bytes.Equal(left.stageIdentity, right.stageIdentity)) {
 		return false
 	}
-	return !left.PlanPresent || os.SameFile(left.planInfo, right.planInfo) && bytes.Equal(left.PlanRaw, right.PlanRaw)
+	return !left.PlanPresent || os.SameFile(left.planInfo, right.planInfo) && bytes.Equal(left.planIdentity, right.planIdentity) && bytes.Equal(left.PlanRaw, right.PlanRaw)
 }
 
 func recoveryDigest(observation RecoveryObservation) string {
@@ -544,22 +546,22 @@ func recoveryDigest(observation RecoveryObservation) string {
 	}
 	writeDigestField("format", []byte("engram-lifecycle-recovery-v1"))
 	writeDigestField("state", observation.StateRaw)
-	writeDigestField("state-identity", fileIdentity(observation.stateInfo))
+	writeDigestField("state-identity", observation.stateIdentity)
 	if observation.TargetPresent {
 		writeDigestField("target", []byte("present"))
-		writeDigestField("target-identity", fileIdentity(observation.targetInfo))
+		writeDigestField("target-identity", observation.targetIdentity)
 	} else {
 		writeDigestField("target", []byte("absent"))
 	}
 	if observation.StagePresent {
 		writeDigestField("stage", []byte("present"))
-		writeDigestField("stage-identity", fileIdentity(observation.stageInfo))
+		writeDigestField("stage-identity", observation.stageIdentity)
 	} else {
 		writeDigestField("stage", []byte("absent"))
 	}
 	if observation.PlanPresent {
 		writeDigestField("plan", []byte("present"))
-		writeDigestField("plan-identity", fileIdentity(observation.planInfo))
+		writeDigestField("plan-identity", observation.planIdentity)
 		writeDigestField("plan-bytes", observation.PlanRaw)
 	} else {
 		writeDigestField("plan", []byte("absent"))
@@ -567,87 +569,91 @@ func recoveryDigest(observation RecoveryObservation) string {
 	return hex.EncodeToString(digest.Sum(nil))
 }
 
-// fileIdentity extracts the platform identity fields used by os.SameFile.
-// Reflection keeps this package portable across the different FileInfo.Sys
-// structs while deliberately excluding timestamps (including access time).
-func fileIdentity(info os.FileInfo) []byte {
-	if info == nil {
-		return nil
-	}
-	var output bytes.Buffer
-	fmt.Fprintf(&output, "%T", info.Sys())
-	value := reflect.ValueOf(info.Sys())
-	for value.IsValid() && (value.Kind() == reflect.Pointer || value.Kind() == reflect.Interface) {
-		if value.IsNil() {
-			break
-		}
-		value = value.Elem()
-	}
-	identityFields := map[string]bool{
-		"dev": true, "ino": true, "vol": true, "idxhi": true, "idxlo": true,
-		"volumeserialnumber": true, "fileindexhigh": true, "fileindexlow": true,
-	}
-	found := false
-	if value.IsValid() && value.Kind() == reflect.Struct {
-		typeInfo := value.Type()
-		for index := 0; index < value.NumField(); index++ {
-			name := strings.ToLower(typeInfo.Field(index).Name)
-			if !identityFields[name] {
-				continue
-			}
-			field := value.Field(index)
-			switch field.Kind() {
-			case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-				fmt.Fprintf(&output, "|%s=%d", name, field.Int())
-				found = true
-			case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
-				fmt.Fprintf(&output, "|%s=%d", name, field.Uint())
-				found = true
-			}
-		}
-	}
-	if !found {
-		fmt.Fprintf(&output, "|name=%s|size=%d|mode=%d|mtime=%d", info.Name(), info.Size(), info.Mode(), info.ModTime().UnixNano())
-	}
-	return output.Bytes()
-}
-
-func readStableRegular(name string, maximum int64) ([]byte, os.FileInfo, error) {
+func readStableRealDirectory(name string) (os.FileInfo, []byte, error) {
 	before, err := os.Lstat(name)
 	if err != nil {
 		return nil, nil, err
 	}
+	if before.Mode()&os.ModeSymlink != 0 || !before.IsDir() {
+		return nil, nil, errors.Join(ErrMalformed, errors.New("lifecycle path is not one real directory"))
+	}
+	if err := fileidentity.Pin(before); err != nil {
+		return nil, nil, errors.Join(ErrChanged, err)
+	}
+	directory, err := os.Open(name)
+	if err != nil {
+		return nil, nil, fmt.Errorf("%w: open stable lifecycle directory: %v", ErrChanged, err)
+	}
+	opened, statErr := directory.Stat()
+	var identity []byte
+	var identityErr error
+	if statErr == nil {
+		identity, identityErr = fileidentity.PersistentID(directory, opened)
+	}
+	after, lstatErr := os.Lstat(name)
+	if lstatErr == nil {
+		if pinErr := fileidentity.Pin(after); pinErr != nil {
+			lstatErr = errors.Join(ErrChanged, pinErr)
+		}
+	}
+	closeErr := directory.Close()
+	if statErr != nil || identityErr != nil || lstatErr != nil || closeErr != nil {
+		return nil, nil, errors.Join(statErr, identityErr, lstatErr, closeErr)
+	}
+	if after.Mode()&os.ModeSymlink != 0 || !after.IsDir() ||
+		!os.SameFile(before, opened) || !os.SameFile(opened, after) {
+		return nil, nil, ErrChanged
+	}
+	return after, append([]byte(nil), identity...), nil
+}
+
+func readStableRegular(name string, maximum int64) ([]byte, os.FileInfo, []byte, error) {
+	before, err := os.Lstat(name)
+	if err != nil {
+		return nil, nil, nil, err
+	}
 	if before.Mode()&os.ModeSymlink != 0 || !before.Mode().IsRegular() {
-		return nil, nil, ErrMalformed
+		return nil, nil, nil, ErrMalformed
+	}
+	if err := fileidentity.Pin(before); err != nil {
+		return nil, nil, nil, errors.Join(ErrChanged, err)
 	}
 	file, err := os.Open(name)
 	if err != nil {
-		return nil, nil, fmt.Errorf("%w: open stable lifecycle file: %v", ErrChanged, err)
+		return nil, nil, nil, fmt.Errorf("%w: open stable lifecycle file: %v", ErrChanged, err)
 	}
 	openedBefore, openedBeforeErr := file.Stat()
+	var identity []byte
+	var identityErr error
+	if openedBeforeErr == nil {
+		identity, identityErr = fileidentity.PersistentID(file, openedBefore)
+	}
 	raw, readErr := io.ReadAll(io.LimitReader(file, maximum+1))
 	openedAfter, openedAfterErr := file.Stat()
 	_, seekErr := file.Seek(0, io.SeekStart)
 	secondRaw, secondReadErr := io.ReadAll(io.LimitReader(file, maximum+1))
 	openedSecond, openedSecondErr := file.Stat()
 	closeErr := file.Close()
-	if openedBeforeErr != nil || readErr != nil || openedAfterErr != nil || seekErr != nil || secondReadErr != nil || openedSecondErr != nil || closeErr != nil {
-		return nil, nil, errors.Join(openedBeforeErr, readErr, openedAfterErr, seekErr, secondReadErr, openedSecondErr, closeErr)
+	if openedBeforeErr != nil || identityErr != nil || readErr != nil || openedAfterErr != nil || seekErr != nil || secondReadErr != nil || openedSecondErr != nil || closeErr != nil {
+		return nil, nil, nil, errors.Join(openedBeforeErr, identityErr, readErr, openedAfterErr, seekErr, secondReadErr, openedSecondErr, closeErr)
 	}
 	if int64(len(raw)) > maximum || int64(len(secondRaw)) > maximum {
-		return nil, nil, ErrMalformed
+		return nil, nil, nil, ErrMalformed
 	}
 	after, err := os.Lstat(name)
 	if err != nil {
-		return nil, nil, fmt.Errorf("%w: restat stable lifecycle file: %v", ErrChanged, err)
+		return nil, nil, nil, fmt.Errorf("%w: restat stable lifecycle file: %v", ErrChanged, err)
+	}
+	if err := fileidentity.Pin(after); err != nil {
+		return nil, nil, nil, errors.Join(ErrChanged, err)
 	}
 	if after.Mode()&os.ModeSymlink != 0 || !after.Mode().IsRegular() ||
 		!sameStableFile(before, openedBefore) || !sameStableFile(openedBefore, openedAfter) ||
 		!sameStableFile(openedAfter, openedSecond) || !sameStableFile(openedSecond, after) ||
 		!bytes.Equal(raw, secondRaw) {
-		return nil, nil, ErrChanged
+		return nil, nil, nil, ErrChanged
 	}
-	return append([]byte(nil), raw...), after, nil
+	return append([]byte(nil), raw...), after, append([]byte(nil), identity...), nil
 }
 
 func sameStableFile(left, right os.FileInfo) bool {
@@ -668,7 +674,7 @@ func (h *Handle) RecoveryRequired() bool {
 	if h == nil || h.path == "" || h.info == nil {
 		return false
 	}
-	current, raw, currentInfo, err := readState(h.state.Target, h.state.Operation)
+	current, raw, currentInfo, _, err := readState(h.state.Target, h.state.Operation)
 	return err == nil && current == h.state && bytes.Equal(raw, h.raw) && os.SameFile(h.info, currentInfo)
 }
 
@@ -678,7 +684,7 @@ func (h *Handle) RequireCleanup() (resultErr error) {
 	if h == nil || h.state.Phase != Running {
 		return ErrChanged
 	}
-	current, raw, currentInfo, err := readState(h.state.Target, h.state.Operation)
+	current, raw, currentInfo, _, err := readState(h.state.Target, h.state.Operation)
 	if err != nil || current.Owner.Token != h.state.Owner.Token || !bytes.Equal(raw, h.raw) || h.info != nil && !os.SameFile(h.info, currentInfo) {
 		return errors.Join(ErrChanged, err)
 	}
@@ -734,7 +740,7 @@ func (h *Handle) RequireCleanup() (resultErr error) {
 	if err := h.operations.close(temporary); err != nil {
 		return err
 	}
-	current, raw, currentInfo, err = readState(h.state.Target, h.state.Operation)
+	current, raw, currentInfo, _, err = readState(h.state.Target, h.state.Operation)
 	if err != nil || current.Owner.Token != h.state.Owner.Token || !bytes.Equal(raw, h.raw) || h.info != nil && !os.SameFile(h.info, currentInfo) {
 		return errors.Join(ErrChanged, err)
 	}
@@ -779,7 +785,7 @@ func (h *Handle) Remove() error {
 	if h == nil {
 		return nil
 	}
-	current, raw, currentInfo, err := readState(h.state.Target, h.state.Operation)
+	current, raw, currentInfo, _, err := readState(h.state.Target, h.state.Operation)
 	if err != nil || current.Owner.Token != h.state.Owner.Token || !bytes.Equal(raw, h.raw) || h.info != nil && !os.SameFile(h.info, currentInfo) {
 		return errors.Join(ErrChanged, err)
 	}
@@ -845,8 +851,50 @@ func adopt(target string, operation Operation, expected *RecoveryExpectation) (*
 	approved := observation.Expectation
 	return &Handle{
 		path: Sidecar(target, operation), state: observation.State, raw: observation.StateRaw, info: observation.stateInfo,
-		recoveryExpectation: &approved,
+		recoveryExpectation: &approved, recoveryPlanRaw: append([]byte(nil), observation.PlanRaw...), recoveryPlanPresent: observation.PlanPresent,
+		recoveryStageID: append([]byte(nil), observation.stageIdentity...), recoveryStagePresent: observation.StagePresent,
 	}, nil
+}
+
+// RecoveryPlanRaw returns the exact plan bytes approved during recovery
+// observation. Recovery controllers decode this sealed copy instead of
+// reopening plan-v1.json through a mutable pathname.
+func (h *Handle) RecoveryPlanRaw() ([]byte, bool) {
+	if h == nil || h.recoveryExpectation == nil || !h.recoveryPlanPresent {
+		return nil, false
+	}
+	return append([]byte(nil), h.recoveryPlanRaw...), true
+}
+
+// RecoveryStageIdentity returns the descriptor-derived physical identity of
+// the exact stage approved during recovery observation. It remains available
+// after the lifecycle sidecar has been removed so a controller can bind final
+// best-effort stage cleanup to the object that the sidecar authorized.
+func (h *Handle) RecoveryStageIdentity() ([]byte, bool) {
+	if h == nil || h.recoveryExpectation == nil || !h.recoveryStagePresent || len(h.recoveryStageID) == 0 {
+		return nil, false
+	}
+	return append([]byte(nil), h.recoveryStageID...), true
+}
+
+// RevalidateRecoveryStage requires the current exact stage name to still
+// identify the descriptor-derived physical directory approved at adoption.
+// Unlike RevalidateRecovery, it intentionally remains usable after successful
+// sidecar removal, immediately before best-effort cleanup of that stage.
+func (h *Handle) RevalidateRecoveryStage() error {
+	expected, present := h.RecoveryStageIdentity()
+	if !present {
+		return ErrChanged
+	}
+	stage, err := Stage(h.state)
+	if err != nil {
+		return errors.Join(ErrChanged, err)
+	}
+	_, current, err := readStableRealDirectory(stage)
+	if err != nil || !bytes.Equal(expected, current) {
+		return errors.Join(ErrChanged, err)
+	}
+	return nil
 }
 
 // RevalidateRecovery requires the adopted sidecar/stage/plan tuple to remain

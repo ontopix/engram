@@ -94,6 +94,34 @@ func TestAttachDetachPreserveSurroundingBytes(t *testing.T) {
 	}
 }
 
+func TestReadOptionalPinsOriginalIdentity(t *testing.T) {
+	parent := t.TempDir()
+	name := filepath.Join(parent, "AGENTS.md")
+	displacedName := filepath.Join(parent, "AGENTS-displaced.md")
+	want := []byte("same bytes\n")
+	if err := os.WriteFile(name, want, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	got, original, err := readOptional(name)
+	if err != nil || !bytes.Equal(got, want) {
+		t.Fatalf("readOptional = %q, %#v, %v", got, original, err)
+	}
+	if err := os.Rename(name, displacedName); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(name, want, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	replacement, err := os.Lstat(name)
+	if err != nil || os.SameFile(original, replacement) {
+		t.Fatalf("entrypoint identity followed replacement: %v", err)
+	}
+	displaced, err := os.Lstat(displacedName)
+	if err != nil || !os.SameFile(original, displaced) {
+		t.Fatalf("entrypoint identity lost displaced original: %v", err)
+	}
+}
+
 func TestAttachCreatesDefaultEntrypoint(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()

@@ -11,6 +11,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/ontopix/engram/internal/fileidentity"
 	"github.com/ontopix/engram/internal/guard"
 	"github.com/ontopix/engram/internal/lifecycle"
 	"github.com/ontopix/engram/internal/managedread"
@@ -246,6 +247,140 @@ func TestCloneRecoveryWithoutLifecycleStateIsANoop(t *testing.T) {
 	}
 	if _, err := os.Lstat(lifecycle.Sidecar(destination, lifecycle.Acquisition) + ".lease"); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("no-op recovery created a lease file: %v", err)
+	}
+	expected := lifecycle.RecoveryExpectation{OwnerToken: strings.Repeat("0", 64), StateSHA256: strings.Repeat("0", 64)}
+	result, err = RecoverExpected(context.Background(), destination, expected)
+	if KindOf(err) != ErrorConcurrency || !errors.Is(err, lifecycle.ErrChanged) || result == nil || !result.Needed || result.Performed || result.RecoveryRequired {
+		t.Fatalf("expected recovery = %#v, %v", result, err)
+	}
+	if _, err := os.Lstat(lifecycle.Sidecar(destination, lifecycle.Acquisition) + ".lease"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing expected recovery created a lease file: %v", err)
+	}
+}
+
+func TestCloneRecoveryConfirmsConcurrentDisappearanceUnderLease(t *testing.T) {
+	for _, phase := range []string{"stable-read", "before-adopt"} {
+		for _, expected := range []bool{false, true} {
+			name := phase + "/unbound"
+			if expected {
+				name = phase + "/expected"
+			}
+			t.Run(name, func(t *testing.T) {
+				destination := canonicalTestDestination(t, "disappeared")
+				handle, err := lifecycle.Begin(destination, lifecycle.Acquisition)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = handle.Remove() })
+				observation, err := lifecycle.ObserveRecovery(destination, lifecycle.Acquisition)
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				operations := recoveryOperations{}
+				sidecar := lifecycle.Sidecar(destination, lifecycle.Acquisition)
+				switch phase {
+				case "stable-read":
+					operations.readLifecycle = func(string, lifecycle.Operation) (lifecycle.State, []byte, error) {
+						if err := os.Remove(sidecar); err != nil {
+							return lifecycle.State{}, nil, err
+						}
+						return lifecycle.State{}, nil, errors.Join(lifecycle.ErrChanged, errors.New("sidecar disappeared during stable read"))
+					}
+				case "before-adopt":
+					operations.acquireRecovery = func(target string, operation lifecycle.Operation) (*lifecycle.RecoveryLease, error) {
+						lease, err := lifecycle.AcquireRecovery(target, operation)
+						if err != nil {
+							return nil, err
+						}
+						if err := os.Remove(sidecar); err != nil {
+							return nil, errors.Join(err, lease.Release())
+						}
+						return lease, nil
+					}
+				}
+
+				var result *RecoveryResult
+				var recoverErr error
+				if expected {
+					result, recoverErr = recover(context.Background(), destination, &observation.Expectation, operations)
+				} else {
+					result, recoverErr = recover(context.Background(), destination, nil, operations)
+				}
+				if expected {
+					if KindOf(recoverErr) != ErrorConcurrency || !errors.Is(recoverErr, lifecycle.ErrChanged) || result == nil || !result.Needed || result.Performed || result.RecoveryRequired {
+						t.Fatalf("expected recovery = %#v, %v", result, recoverErr)
+					}
+				} else if recoverErr != nil || result == nil || *result != (RecoveryResult{}) {
+					t.Fatalf("unbound recovery = %#v, %v", result, recoverErr)
+				}
+				if _, err := os.Lstat(sidecar + ".lease"); err != nil {
+					t.Fatalf("disappearance was not confirmed under a recovery lease: %v", err)
+				}
+			})
+		}
+	}
+}
+
+func TestCloneRecoveryReadFailuresRemainFailClosed(t *testing.T) {
+	destination := canonicalTestDestination(t, "changed-while-adopting")
+	if lifecycleAbsentAtAdopt(destination, lifecycle.Acquisition, errors.Join(lifecycle.ErrChanged, os.ErrNotExist)) {
+		t.Fatal("non-cooperating disappearance was flattened into idempotent success")
+	}
+	for _, test := range []struct {
+		name string
+		err  error
+	}{
+		{name: "malformed", err: lifecycle.ErrMalformed},
+		{name: "io", err: errors.New("injected lifecycle read refusal")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			destination := canonicalTestDestination(t, test.name)
+			result, recoverErr := recover(context.Background(), destination, nil, recoveryOperations{
+				readLifecycle: func(string, lifecycle.Operation) (lifecycle.State, []byte, error) {
+					return lifecycle.State{}, nil, test.err
+				},
+			})
+			if KindOf(recoverErr) != ErrorRecovery || !errors.Is(recoverErr, test.err) || result == nil || !result.Needed || result.Performed || result.RecoveryRequired {
+				t.Fatalf("recovery = %#v, %v", result, recoverErr)
+			}
+			if _, err := os.Lstat(lifecycle.Sidecar(destination, lifecycle.Acquisition) + ".lease"); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("failed read acquired a recovery lease: %v", err)
+			}
+		})
+	}
+}
+
+func TestCloneRecoveryDoesNotFlattenLifecycleReplacement(t *testing.T) {
+	destination := canonicalTestDestination(t, "replacement")
+	original, err := lifecycle.Begin(destination, lifecycle.Acquisition)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = original.Remove() })
+	var replacement *lifecycle.Handle
+	result, recoverErr := recover(context.Background(), destination, nil, recoveryOperations{
+		readLifecycle: func(string, lifecycle.Operation) (lifecycle.State, []byte, error) {
+			if err := os.Remove(lifecycle.Sidecar(destination, lifecycle.Acquisition)); err != nil {
+				return lifecycle.State{}, nil, err
+			}
+			var err error
+			replacement, err = lifecycle.Begin(destination, lifecycle.Acquisition)
+			if err != nil {
+				return lifecycle.State{}, nil, err
+			}
+			return lifecycle.State{}, nil, lifecycle.ErrChanged
+		},
+	})
+	if replacement != nil {
+		t.Cleanup(func() { _ = replacement.Remove() })
+	}
+	if KindOf(recoverErr) != ErrorConcurrency || result == nil || !result.Needed || result.Performed || !result.RecoveryRequired {
+		t.Fatalf("replacement recovery = %#v, %v", result, recoverErr)
+	}
+	state, _, err := lifecycle.Read(destination, lifecycle.Acquisition)
+	if err != nil || replacement == nil || state.Owner.Token != replacement.State().Owner.Token {
+		t.Fatalf("replacement lifecycle = %#v, %v", state, err)
 	}
 }
 
@@ -701,6 +836,77 @@ func TestPublishedCloneRecoveryRetainsPlanUntilLifecycleRemovalSucceeds(t *testi
 	assertNoAcquisitionState(t, destination)
 }
 
+func TestPublishedCloneRecoveryPreservesStageReplacementAfterLifecycleRemoval(t *testing.T) {
+	location := bareFixture(t, false)
+	destination := canonicalTestDestination(t, "published-stage-replacement")
+	runFaultedClone(t, location, destination, PhasePublished, "")
+	state, _, err := lifecycle.Read(destination, lifecycle.Acquisition)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage, err := lifecycle.Stage(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	observation, err := lifecycle.ObserveRecovery(destination, lifecycle.Acquisition)
+	if err != nil {
+		t.Fatal(err)
+	}
+	displaced := stage + ".approved"
+	marker := filepath.Join(stage, "foreign-replacement")
+	cleanupCalls := 0
+	identityExposed := false
+	result, recoverErr := recover(context.Background(), destination, &observation.Expectation, recoveryOperations{
+		removeLifecycle: func(handle *lifecycle.Handle) error {
+			identity, present := handle.RecoveryStageIdentity()
+			identityExposed = present && len(identity) != 0
+			if !identityExposed {
+				return errors.New("approved stage identity is unavailable")
+			}
+			if err := handle.Remove(); err != nil {
+				return err
+			}
+			if err := os.Rename(stage, displaced); err != nil {
+				return err
+			}
+			if err := os.Mkdir(stage, 0o700); err != nil {
+				return err
+			}
+			return os.WriteFile(marker, []byte("preserve replacement exactly\n"), 0o600)
+		},
+		cleanupStage: func(name string) error {
+			cleanupCalls++
+			return cleanupPrivateStage(name)
+		},
+	})
+	if KindOf(recoverErr) != ErrorConcurrency || !errors.Is(recoverErr, lifecycle.ErrChanged) ||
+		result == nil || !result.Needed || !result.Performed || !result.Published || !result.Durable ||
+		result.CheckoutChanged || result.RecoveryRequired || result.Accepted == nil {
+		t.Fatalf("replacement recovery = %#v, %v", result, recoverErr)
+	}
+	mutation, present := MutationOf(recoverErr)
+	if !present || !mutation.Durable || mutation.CheckoutChanged || mutation.RecoveryRequired || mutation.Accepted == nil {
+		t.Fatalf("replacement mutation = %#v, %t", mutation, present)
+	}
+	if !identityExposed {
+		t.Fatal("adopted handle did not expose its approved stage identity")
+	}
+	if cleanupCalls != 0 {
+		t.Fatalf("stage cleanup ran %d times after identity replacement", cleanupCalls)
+	}
+	data, err := os.ReadFile(marker)
+	if err != nil || string(data) != "preserve replacement exactly\n" {
+		t.Fatalf("replacement marker = %q, %v", data, err)
+	}
+	if _, err := os.Lstat(publicationPlanPath(displaced)); err != nil {
+		t.Fatalf("approved stage was not preserved: %v", err)
+	}
+	assertNoAcquisitionState(t, destination)
+	if _, _, err := verifyPublishedStore(context.Background(), destination); err != nil {
+		t.Fatalf("published checkout changed: %v", err)
+	}
+}
+
 func TestPublishedCloneRecoveryRejectsEquivalentTargetReplacement(t *testing.T) {
 	location := bareFixture(t, false)
 	destination := canonicalTestDestination(t, "published-identity")
@@ -712,6 +918,9 @@ func TestPublishedCloneRecoveryRejectsEquivalentTargetReplacement(t *testing.T) 
 	runFaultedClone(t, location, destination, PhasePublished, "")
 	originalInfo, err := os.Lstat(destination)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fileidentity.Pin(originalInfo); err != nil {
 		t.Fatal(err)
 	}
 	observation, err := lifecycle.ObserveRecovery(destination, lifecycle.Acquisition)

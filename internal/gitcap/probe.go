@@ -104,6 +104,7 @@ func probeUpdateRefTransaction(ctx context.Context, git, root string) (bool, err
 
 func run(ctx context.Context, git, repository string, input []byte, args ...string) ([]byte, error) {
 	global := []string{
+		"-c", "core.longpaths=true",
 		"--no-pager", "--no-optional-locks", "--no-replace-objects",
 		"-c", "core.hooksPath=" + os.DevNull,
 		"-c", "core.fsmonitor=false",

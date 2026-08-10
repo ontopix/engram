@@ -17,6 +17,8 @@ import (
 	"runtime"
 	"sort"
 	"time"
+
+	"github.com/ontopix/engram/internal/fileidentity"
 )
 
 type Phase string
@@ -373,7 +375,7 @@ func AcquireRecoveryPath(name string) (*RecoveryLease, error) {
 		return nil, err
 	}
 	defer directory.Close()
-	before, statErr := directory.Lstat(base)
+	before, statErr := pinnedFileInfo(directory.Lstat(base))
 	if statErr == nil && (before.Mode()&os.ModeSymlink != 0 || !before.Mode().IsRegular()) {
 		return nil, fmt.Errorf("unsafe recovery lease file")
 	}
@@ -389,7 +391,7 @@ func AcquireRecoveryPath(name string) (*RecoveryLease, error) {
 		// advisory lock on an unlinked inode.
 		file, err = directory.OpenFile(base, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
 		if errors.Is(err, os.ErrExist) {
-			before, statErr = directory.Lstat(base)
+			before, statErr = pinnedFileInfo(directory.Lstat(base))
 			if statErr != nil {
 				return nil, errors.Join(ErrOwnership, statErr)
 			}
@@ -404,7 +406,7 @@ func AcquireRecoveryPath(name string) (*RecoveryLease, error) {
 	if err != nil {
 		return nil, err
 	}
-	opened, err := file.Stat()
+	opened, err := pinnedFileInfo(file.Stat())
 	if err != nil || !opened.Mode().IsRegular() || before != nil && !os.SameFile(before, opened) {
 		_ = file.Close()
 		if err != nil {
@@ -412,7 +414,7 @@ func AcquireRecoveryPath(name string) (*RecoveryLease, error) {
 		}
 		return nil, fmt.Errorf("recovery lease changed while opening")
 	}
-	named, err := directory.Lstat(base)
+	named, err := pinnedFileInfo(directory.Lstat(base))
 	if err != nil || named.Mode()&os.ModeSymlink != 0 || !os.SameFile(opened, named) {
 		_ = file.Close()
 		if err != nil {
@@ -439,7 +441,7 @@ func AcquireRecoveryPath(name string) (*RecoveryLease, error) {
 	// The advisory lock protects the opened inode, so prove the pathname still
 	// names that inode after acquisition. Otherwise a replacement path could
 	// admit a second controller holding a different lock concurrently.
-	lockedName, err := directory.Lstat(base)
+	lockedName, err := pinnedFileInfo(directory.Lstat(base))
 	if err != nil || lockedName.Mode()&os.ModeSymlink != 0 || !lockedName.Mode().IsRegular() || !os.SameFile(opened, lockedName) {
 		unlockErr := unlockRecoveryFile(file)
 		closeErr := file.Close()
@@ -787,7 +789,7 @@ func lockGitDirectory(parent string) (string, []string, bool) {
 }
 
 func openStableDirectory(name string) (*os.Root, error) {
-	info, err := os.Lstat(name)
+	info, err := pinnedFileInfo(os.Lstat(name))
 	if err != nil {
 		return nil, err
 	}
@@ -798,7 +800,7 @@ func openStableDirectory(name string) (*os.Root, error) {
 	if err != nil {
 		return nil, err
 	}
-	opened, err := root.Stat(".")
+	opened, err := pinnedFileInfo(root.Stat("."))
 	if err != nil || !opened.IsDir() || !os.SameFile(info, opened) {
 		root.Close()
 		if err != nil {
@@ -810,7 +812,7 @@ func openStableDirectory(name string) (*os.Root, error) {
 }
 
 func openStableChild(parent *os.Root, name string, create bool) (*os.Root, error) {
-	info, err := parent.Lstat(name)
+	info, err := pinnedFileInfo(parent.Lstat(name))
 	if errors.Is(err, os.ErrNotExist) && create {
 		mkdirErr := parent.Mkdir(name, 0o700)
 		if mkdirErr != nil && !errors.Is(mkdirErr, os.ErrExist) {
@@ -821,7 +823,7 @@ func openStableChild(parent *os.Root, name string, create bool) (*os.Root, error
 				return nil, err
 			}
 		}
-		info, err = parent.Lstat(name)
+		info, err = pinnedFileInfo(parent.Lstat(name))
 	}
 	if err != nil {
 		return nil, err
@@ -833,7 +835,7 @@ func openStableChild(parent *os.Root, name string, create bool) (*os.Root, error
 	if err != nil {
 		return nil, err
 	}
-	opened, err := root.Stat(".")
+	opened, err := pinnedFileInfo(root.Stat("."))
 	if err != nil || !opened.IsDir() || !os.SameFile(info, opened) {
 		root.Close()
 		if err != nil {
@@ -845,7 +847,7 @@ func openStableChild(parent *os.Root, name string, create bool) (*os.Root, error
 }
 
 func stableLockRead(root *os.Root, name string) ([]byte, error) {
-	info, err := root.Lstat(name)
+	info, err := pinnedFileInfo(root.Lstat(name))
 	if err != nil {
 		return nil, err
 	}
@@ -856,7 +858,7 @@ func stableLockRead(root *os.Root, name string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	opened, err := file.Stat()
+	opened, err := pinnedFileInfo(file.Stat())
 	if err != nil || !opened.Mode().IsRegular() || !os.SameFile(info, opened) {
 		file.Close()
 		if err != nil {
@@ -865,12 +867,12 @@ func stableLockRead(root *os.Root, name string) ([]byte, error) {
 		return nil, fmt.Errorf("rendezvous file changed while opening")
 	}
 	data, readErr := io.ReadAll(file)
-	after, statErr := file.Stat()
+	after, statErr := pinnedFileInfo(file.Stat())
 	closeErr := file.Close()
 	if readErr != nil || statErr != nil || closeErr != nil {
 		return nil, errors.Join(readErr, statErr, closeErr)
 	}
-	named, err := root.Lstat(name)
+	named, err := pinnedFileInfo(root.Lstat(name))
 	if err != nil || named.Mode()&os.ModeSymlink != 0 || !sameFileState(opened, after) || !sameFileState(after, named) {
 		if err != nil {
 			return nil, err
@@ -882,6 +884,16 @@ func stableLockRead(root *os.Root, name string) ([]byte, error) {
 
 func sameFileState(left, right os.FileInfo) bool {
 	return os.SameFile(left, right) && left.Mode() == right.Mode() && left.Size() == right.Size() && left.ModTime() == right.ModTime()
+}
+
+func pinnedFileInfo(info os.FileInfo, err error) (os.FileInfo, error) {
+	if err != nil {
+		return nil, err
+	}
+	if err := fileidentity.Pin(info); err != nil {
+		return nil, err
+	}
+	return info, nil
 }
 
 func readOwnerAt(root *os.Root, name string) (Owner, error) {

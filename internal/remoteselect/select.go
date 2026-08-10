@@ -186,6 +186,7 @@ func gitOutput(ctx context.Context, root string, arguments ...string) ([]byte, i
 		return nil, -1, err
 	}
 	global := []string{
+		"-c", "core.longpaths=true",
 		"--no-pager", "--no-optional-locks", "--no-replace-objects",
 		"-c", "core.hooksPath=" + os.DevNull, "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false",
 		"-c", "maintenance.auto=false", "-c", "gc.auto=0", "-C", root,

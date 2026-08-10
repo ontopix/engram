@@ -121,3 +121,39 @@ func TestJournalRejectsSymlinkedAdministrationAndFinalFile(t *testing.T) {
 		t.Fatal("read followed a symbolic-link journal")
 	}
 }
+
+func TestPinnedJournalIdentityRejectsRenameAndReplacement(t *testing.T) {
+	parent := t.TempDir()
+	root, err := os.OpenRoot(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	if err := os.WriteFile(filepath.Join(parent, "journal"), []byte("same bytes\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	original, err := pinnedFileInfo(root.Lstat("journal"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(filepath.Join(parent, "journal"), filepath.Join(parent, "displaced")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(parent, "journal"), []byte("same bytes\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	replacement, err := pinnedFileInfo(root.Lstat("journal"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	displaced, err := pinnedFileInfo(root.Lstat("displaced"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if os.SameFile(original, replacement) {
+		t.Fatal("pinned journal identity followed the replacement path")
+	}
+	if !os.SameFile(original, displaced) {
+		t.Fatal("pinned journal identity no longer identifies the displaced journal")
+	}
+}
