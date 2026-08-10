@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -86,10 +87,20 @@ func TestPersistentIDComesFromOpenDescriptor(t *testing.T) {
 	if bytes.Equal(firstID, secondID) {
 		t.Fatal("distinct open files received the same persistent identity")
 	}
+	repeated, err := PersistentID(first, firstInfo)
+	if err != nil || !bytes.Equal(firstID, repeated) {
+		t.Fatalf("open descriptor identity changed between reads: %x, %v", repeated, err)
+	}
+	// os.Open does not request FILE_SHARE_DELETE on Windows, so the open
+	// descriptor intentionally prevents the pathname rename tested below.
+	// The descriptor-source and repeated-read guarantees above remain portable.
+	if runtime.GOOS == "windows" {
+		return
+	}
 	if err := os.Rename(firstName, filepath.Join(parent, "moved")); err != nil {
 		t.Fatal(err)
 	}
-	repeated, err := PersistentID(first, firstInfo)
+	repeated, err = PersistentID(first, firstInfo)
 	if err != nil || !bytes.Equal(firstID, repeated) {
 		t.Fatalf("open descriptor identity changed after rename: %x, %v", repeated, err)
 	}

@@ -536,13 +536,25 @@ func TestRecoverInitializationRollbackSyncUsesAnchoredRoot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	approvedRoot, err := os.Lstat(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fileidentity.Pin(approvedRoot); err != nil {
+		t.Fatal(err)
+	}
 	displaced := root + ".rolled-back"
 	marker := filepath.Join(root, ".foreign-replacement")
 	seamCalled := false
+	replacementBlocked := false
 	recovered, recoverErr := recoverWithOperations(t.Context(), root, nil, recoveryOperations{
 		beforeRollbackSync: func(name string) error {
 			seamCalled = true
 			if err := os.Rename(name, displaced); err != nil {
+				if isRenameSharingViolation(err) {
+					replacementBlocked = true
+					return nil
+				}
 				return err
 			}
 			if err := os.Mkdir(name, 0o755); err != nil {
@@ -551,8 +563,38 @@ func TestRecoverInitializationRollbackSyncUsesAnchoredRoot(t *testing.T) {
 			return os.WriteFile(marker, []byte("preserve replacement exactly\n"), 0o600)
 		},
 	})
+	if !seamCalled {
+		t.Fatal("rollback sync seam was not reached")
+	}
+	if replacementBlocked {
+		if recoverErr != nil || !recovered.Needed || !recovered.Performed || !recovered.Durable ||
+			!recovered.CheckoutChanged || recovered.RecoveryRequired || recovered.Accepted != nil {
+			t.Fatalf("sharing-protected rollback recovery = %#v, %v", recovered, recoverErr)
+		}
+		if _, err := os.Lstat(filepath.Join(root, ".engram", "schemas", "person.md")); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("sharing-protected target was not rolled back: %v", err)
+		}
+		if _, err := os.Lstat(displaced); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("blocked replacement was published: %v", err)
+		}
+		if _, err := os.Lstat(marker); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("blocked replacement marker was published: %v", err)
+		}
+		currentRoot, err := os.Lstat(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := fileidentity.Pin(currentRoot); err != nil || !os.SameFile(approvedRoot, currentRoot) {
+			t.Fatalf("sharing-protected root identity changed: %v", err)
+		}
+		assertNoLifecycle(t, root)
+		if _, err := os.Lstat(stage); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("sharing-protected stage remains: %v", err)
+		}
+		return
+	}
 	var typedError *Error
-	if !seamCalled || KindOf(recoverErr) != ErrorConcurrency || !errors.Is(recoverErr, lifecycle.ErrChanged) ||
+	if KindOf(recoverErr) != ErrorConcurrency || !errors.Is(recoverErr, lifecycle.ErrChanged) ||
 		!errors.As(recoverErr, &typedError) || typedError.Operation != "revalidate initialization recovery plan" ||
 		!recovered.Needed || recovered.Performed || !recovered.Durable || !recovered.CheckoutChanged || !recovered.RecoveryRequired {
 		t.Fatalf("anchored rollback recovery = %#v, error = %v, typed = %#v, seam = %t", recovered, recoverErr, typedError, seamCalled)
@@ -560,6 +602,13 @@ func TestRecoverInitializationRollbackSyncUsesAnchoredRoot(t *testing.T) {
 	assertBytes(t, marker, []byte("preserve replacement exactly\n"))
 	if _, err := os.Lstat(filepath.Join(displaced, ".engram", "schemas", "person.md")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("approved target was not rolled back: %v", err)
+	}
+	displacedRoot, err := os.Lstat(displaced)
+	if err != nil {
+		t.Fatalf("approved target was lost: %v", err)
+	}
+	if err := fileidentity.Pin(displacedRoot); err != nil || !os.SameFile(approvedRoot, displacedRoot) {
+		t.Fatalf("approved target identity changed: %v", err)
 	}
 	if _, _, err := lifecycle.Read(root, lifecycle.Initialization); err != nil {
 		t.Fatalf("lifecycle was removed: %v", err)
