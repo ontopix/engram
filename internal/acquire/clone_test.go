@@ -78,7 +78,7 @@ func TestClonePrePublicationFailureCleansExactLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, entry := range entries {
-		if strings.HasPrefix(entry.Name(), "failed.engram-acquisition-v1-") {
+		if strings.HasPrefix(entry.Name(), ".engram-stage-v1-") && strings.HasSuffix(entry.Name(), ".stage") {
 			t.Fatalf("private stage remains: %s", entry.Name())
 		}
 	}
@@ -807,10 +807,12 @@ func TestCloneRecoveryFaultHelper(t *testing.T) {
 	destination := os.Getenv("ENGRAM_ACQUIRE_DESTINATION")
 	wanted := Phase(os.Getenv("ENGRAM_ACQUIRE_PHASE"))
 	mode := os.Getenv("ENGRAM_ACQUIRE_MODE")
+	reached := false
 	cloner := &Cloner{Fault: func(phase Phase) error {
 		if phase != wanted {
 			return nil
 		}
+		reached = true
 		if mode == "race" {
 			if err := os.Mkdir(destination, 0o755); err != nil {
 				return err
@@ -823,6 +825,9 @@ func TestCloneRecoveryFaultHelper(t *testing.T) {
 		return errors.New("injected helper fault")
 	}}
 	_, err := cloner.Run(context.Background(), location, Options{Destination: destination, DestinationProvided: true})
+	if !reached {
+		t.Fatalf("clone failed before requested phase %q: %v", wanted, err)
+	}
 	if err == nil {
 		t.Fatal("faulted clone unexpectedly succeeded")
 	}

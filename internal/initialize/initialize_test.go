@@ -746,7 +746,7 @@ func assertNoLifecycle(t *testing.T, target string) {
 	if _, err := os.Lstat(lifecycle.Sidecar(target, lifecycle.Initialization)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("lifecycle remains: %v", err)
 	}
-	matches, err := filepath.Glob(target + ".engram-initialization-v1-*.stage")
+	matches, err := filepath.Glob(filepath.Join(filepath.Dir(target), ".engram-stage-v1-*.stage"))
 	if err != nil || len(matches) != 0 {
 		t.Fatalf("staging remains: %v, %v", matches, err)
 	}

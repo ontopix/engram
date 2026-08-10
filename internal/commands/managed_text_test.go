@@ -75,10 +75,18 @@ func assertGolden(t *testing.T, name string, got []byte) {
 
 var (
 	logOID  = regexp.MustCompile(`\b[0-9a-f]{40}(?:[0-9a-f]{24})?\b`)
-	logTime = regexp.MustCompile(`\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}`)
+	logTime = regexp.MustCompile(`\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.[0-9]+)?(Z|[+-]\d{2}:\d{2})`)
 )
 
 func normalizeLogGolden(value []byte) []byte {
 	value = logOID.ReplaceAll(value, []byte("<oid>"))
 	return logTime.ReplaceAll(value, []byte("<time>"))
+}
+
+func TestNormalizeLogGoldenAcceptsRFC3339Zones(t *testing.T) {
+	input := []byte("utc=2026-08-10T13:37:01Z offset=2026-08-10T15:37:01+02:00 fractional=2026-08-10T13:37:01.125Z\n")
+	want := []byte("utc=<time> offset=<time> fractional=<time>\n")
+	if got := normalizeLogGolden(input); !bytes.Equal(got, want) {
+		t.Fatalf("normalized log = %q, want %q", got, want)
+	}
 }

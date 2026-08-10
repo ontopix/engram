@@ -24,6 +24,7 @@ import (
 	"github.com/ontopix/engram/internal/hooks"
 	"github.com/ontopix/engram/internal/journal"
 	"github.com/ontopix/engram/internal/rendezvous"
+	"github.com/ontopix/engram/internal/treeimage"
 )
 
 type acceptingTrust struct {
@@ -89,6 +90,35 @@ func TestCommitMessageLineFeedContract(t *testing.T) {
 	}
 	if err := validateMessage("subject\n"); err == nil {
 		t.Fatal("final LF accepted")
+	}
+}
+
+func TestCreateCandidateIndexErrorCleansPrivateRootWithoutPanic(t *testing.T) {
+	fixture := newManagedFixtureWithoutGuard(t, gitraw.SHA1, "")
+	repository, err := gitraw.Discover(t.Context(), fixture.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	git, err := newGitClient(fixture.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	temporaryRoot := t.TempDir()
+	_, _, _, cleanup, err := createCandidateIndex(t.Context(), git, repository, treeimage.Image{
+		"unsupported": {Kind: treeimage.Symlink},
+	}, temporaryRoot)
+	if err == nil || !strings.Contains(err.Error(), "non-regular path") {
+		t.Fatalf("error = %v", err)
+	}
+	if cleanup != nil {
+		t.Fatal("failed candidate index returned a cleanup handle")
+	}
+	entries, err := os.ReadDir(temporaryRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("private candidate root remains: %v", entries)
 	}
 }
 

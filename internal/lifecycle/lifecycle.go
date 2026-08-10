@@ -261,13 +261,16 @@ func Stage(state State) (string, error) {
 	if err := validateState(state); err != nil {
 		return "", err
 	}
-	// The authoritative sidecar retains the complete 256-bit owner token. The
-	// sibling name needs only a deterministic collision-resistant derivative:
-	// one target cannot have two live owners because sidecar publication is
-	// exclusive. Keeping 80 token bits avoids Git for Windows' legacy MAX_PATH
-	// boundary when it creates hook-template files below this private stage.
-	const stageTokenHex = 20
-	return state.Target + ".engram-" + string(state.Operation) + "-v1-" + state.Owner.Token[:stageTokenHex] + ".stage", nil
+	// The authoritative sidecar retains the complete target, operation, and
+	// 256-bit owner token. The sibling name needs only a deterministic,
+	// collision-resistant derivative of that tuple: one target cannot have two
+	// live owners because sidecar publication is exclusive. A fixed-size base
+	// name also avoids repeating an arbitrarily long target name below Git for
+	// Windows' legacy MAX_PATH boundary.
+	const stageDigestHex = 32
+	identity := sha256.Sum256([]byte(state.Target + "\x00" + string(state.Operation) + "\x00" + state.Owner.Token))
+	name := ".engram-stage-v1-" + hex.EncodeToString(identity[:])[:stageDigestHex] + ".stage"
+	return filepath.Join(filepath.Dir(state.Target), name), nil
 }
 
 // Begin durably publishes one running state without creating the target.

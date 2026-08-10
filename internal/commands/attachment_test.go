@@ -37,8 +37,9 @@ func TestAttachAndDetachJSON(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Contains(data, []byte(attachment.OpenMarker)) || !bytes.Contains(data, []byte(canonicalStore)) {
-		t.Fatalf("entrypoint = %q", data)
+	stores := decodeAttachmentStores(t, data)
+	if len(stores) != 1 || stores[0] != canonicalStore {
+		t.Fatalf("attached stores = %#v, want [%q]", stores, canonicalStore)
 	}
 
 	unchanged := runAttachmentJSON(t, "attach", store, "--project", project, "--format", "json")
@@ -53,6 +54,55 @@ func TestAttachAndDetachJSON(t *testing.T) {
 	assertExactKeys(t, detachResult, "project", "store", "entrypoint", "changed")
 	if detachResult["changed"] != true {
 		t.Fatalf("detach result = %#v", detachResult)
+	}
+}
+
+func decodeAttachmentStores(t *testing.T, data []byte) []string {
+	t.Helper()
+	open := []byte(attachment.OpenMarker + "\n")
+	close := []byte(attachment.CloseMarker)
+	if bytes.Count(data, open) != 1 || bytes.Count(data, close) != 1 {
+		t.Fatalf("entrypoint has invalid owned markers: %q", data)
+	}
+	blockStart := bytes.Index(data, open) + len(open)
+	blockEnd := bytes.Index(data[blockStart:], close)
+	if blockEnd < 0 {
+		t.Fatalf("entrypoint has no complete owned block: %q", data)
+	}
+	block := data[blockStart : blockStart+blockEnd]
+	const fenceOpen = "```json\n"
+	const fenceClose = "\n```\n"
+	payloadStart := bytes.Index(block, []byte(fenceOpen))
+	if payloadStart < 0 {
+		t.Fatalf("owned block has no JSON fence: %q", block)
+	}
+	payloadStart += len(fenceOpen)
+	payloadEnd := bytes.Index(block[payloadStart:], []byte(fenceClose))
+	if payloadEnd < 0 {
+		t.Fatalf("owned block has no complete JSON fence: %q", block)
+	}
+
+	var document map[string]json.RawMessage
+	if err := json.Unmarshal(block[payloadStart:payloadStart+payloadEnd], &document); err != nil {
+		t.Fatalf("decode owned block JSON: %v", err)
+	}
+	storesJSON, ok := document["stores"]
+	if !ok || len(document) != 1 {
+		t.Fatalf("owned block JSON keys = %#v, want only stores", document)
+	}
+	var stores []string
+	if err := json.Unmarshal(storesJSON, &stores); err != nil || stores == nil {
+		t.Fatalf("decode owned block stores: %v", err)
+	}
+	return stores
+}
+
+func TestDecodeAttachmentStoresDecodesEscapedWindowsPath(t *testing.T) {
+	const want = `C:\Users\Ada\engram`
+	data := []byte(attachment.OpenMarker + "\n```json\n{\"stores\":[\"C:\\\\Users\\\\Ada\\\\engram\"]}\n```\n" + attachment.CloseMarker + "\n")
+	stores := decodeAttachmentStores(t, data)
+	if len(stores) != 1 || stores[0] != want {
+		t.Fatalf("stores = %#v, want [%q]", stores, want)
 	}
 }
 

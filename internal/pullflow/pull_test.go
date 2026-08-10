@@ -627,7 +627,7 @@ func TestPullDivergentConflictLeavesExactActiveStateAndAbortRestores(t *testing.
 	if err != nil {
 		t.Fatalf("divergent pull: %v", err)
 	}
-	if result.State != Conflict || result.Replayed != 0 || len(result.Conflicts) != 1 || result.Conflicts[0] != name {
+	if result.State != Conflict || result.Replayed != 0 || len(result.Conflicts) != 1 || result.Conflicts[0] != filepath.ToSlash(name) {
 		t.Fatalf("conflict result = %#v", result)
 	}
 	privateStore := openStore(t, fixture.local)

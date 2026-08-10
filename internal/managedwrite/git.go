@@ -239,11 +239,12 @@ func createCandidateIndex(ctx context.Context, git *gitClient, repository *gitra
 	if err != nil {
 		return "", nil, "", nil, err
 	}
-	cleanup = func() error { return os.RemoveAll(parent) }
+	removeParent := func() error { return os.RemoveAll(parent) }
+	cleanup = removeParent
 	failed := true
 	defer func() {
 		if failed {
-			_ = cleanup()
+			_ = removeParent()
 		}
 	}()
 	indexPath = filepath.Join(parent, "index")

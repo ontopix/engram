@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/ontopix/engram/internal/rendezvous"
@@ -28,9 +29,19 @@ func TestBeginTransitionAndRemoveExactState(t *testing.T) {
 		t.Fatalf("state = %#v, raw = %q", state, raw)
 	}
 	stage, err := Stage(state)
-	wantStage := target + ".engram-initialization-v1-" + state.Owner.Token[:20] + ".stage"
-	if err != nil || stage != wantStage || filepath.Dir(stage) != filepath.Dir(target) || bytes.Contains([]byte(filepath.Base(stage)), []byte("..")) || len(filepath.Base(stage)) >= len(filepath.Base(target))+64 {
+	repeatedStage, repeatedErr := Stage(state)
+	if err != nil || repeatedErr != nil || stage != repeatedStage || filepath.Dir(stage) != filepath.Dir(target) || !strings.HasPrefix(filepath.Base(stage), ".engram-stage-v1-") || !strings.HasSuffix(filepath.Base(stage), ".stage") || bytes.Contains([]byte(filepath.Base(stage)), []byte("..")) || len(filepath.Base(stage)) != len(".engram-stage-v1-")+32+len(".stage") {
 		t.Fatalf("stage = %q, %v", stage, err)
+	}
+	otherState := state
+	replacement := byte('a')
+	if state.Owner.Token[0] == replacement {
+		replacement = 'b'
+	}
+	otherState.Owner.Token = string(replacement) + state.Owner.Token[1:]
+	otherStage, err := Stage(otherState)
+	if err != nil || otherStage == stage {
+		t.Fatalf("other stage = %q, %v; want a distinct token-derived path", otherStage, err)
 	}
 	if err := handle.RequireCleanup(); err != nil {
 		t.Fatal(err)
@@ -143,10 +154,12 @@ func TestBeginCleanupFailureRetainsOnlyExactOwnedSidecar(t *testing.T) {
 				if err := os.WriteFile(replacement, replacementBytes, 0o600); err != nil {
 					return written, errors.Join(writeErr, err)
 				}
-				// Windows cannot replace this still-open pathname with Rename. The
-				// created handle permits delete sharing, so unlinking the name first
-				// models the same foreign inode substitution tested on Unix.
+				// Windows cannot replace this still-open pathname with Rename, so
+				// close the injected writer before substituting the foreign inode.
 				if runtime.GOOS == "windows" {
+					if err := file.Close(); err != nil {
+						return written, errors.Join(writeErr, err)
+					}
 					if err := os.Remove(file.Name()); err != nil {
 						return written, errors.Join(writeErr, err)
 					}
@@ -155,6 +168,13 @@ func TestBeginCleanupFailureRetainsOnlyExactOwnedSidecar(t *testing.T) {
 					return written, errors.Join(writeErr, err)
 				}
 				return written, errors.Join(writeErr, injected)
+			},
+			closeFile: func(file *os.File) error {
+				err := file.Close()
+				if runtime.GOOS == "windows" && errors.Is(err, os.ErrClosed) {
+					return nil
+				}
+				return err
 			},
 		})
 		mutation, present := MutationOf(err)
