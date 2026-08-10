@@ -26,3 +26,12 @@ func TestAcquireRecoveryFailureCarriesClosedMutationResult(t *testing.T) {
 		t.Fatalf("mutation = %#v", result.Value)
 	}
 }
+
+func TestAcquisitionRecoveryDoesNotTurnObservedPublicationIntoANewCheckoutEffect(t *testing.T) {
+	response := acquisitionRecoveryResponse(&acquire.RecoveryResult{
+		Needed: true, Published: true, Durable: true, RecoveryRequired: true,
+	}, nil)
+	if response.CheckoutChanged || !response.Durable || !response.RecoveryRequired {
+		t.Fatalf("recovery response = %#v", response)
+	}
+}

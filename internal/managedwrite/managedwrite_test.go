@@ -3,6 +3,8 @@ package managedwrite
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"io/fs"
 	"os"
@@ -313,7 +315,7 @@ func TestPostCASFaultRecoversWithoutRerunningHook(t *testing.T) {
 	if recoverErr != nil {
 		t.Fatalf("Recover: %v", recoverErr)
 	}
-	if recovered == nil || !recovered.Needed || !recovered.Performed || recovered.Action != RecoveryReconciled || recovered.Accepted == nil || *recovered.Accepted != detail.Commit {
+	if recovered == nil || !recovered.Needed || !recovered.Performed || recovered.Action != RecoveryReconciled || recovered.Accepted == nil || *recovered.Accepted != detail.Commit || !recovered.CheckoutChanged {
 		t.Fatalf("recovery result = %#v", recovered)
 	}
 	assertBytes(t, counter, []byte("1\n"))
@@ -335,8 +337,109 @@ func TestPreCASFaultCancelsAndCleansTransaction(t *testing.T) {
 	if result == nil || err == nil {
 		t.Fatalf("pre-CAS result, error = %#v, %v", result, err)
 	}
+	var detail *Error
+	if !errors.As(err, &detail) || !detail.Durable || detail.Accepted || detail.CheckoutChanged || detail.RecoveryRequired {
+		t.Fatalf("cleaned pre-CAS effects = %#v (%v)", detail, err)
+	}
 	if got := gitOutput(t, fixture.root, "rev-parse", "HEAD"); got != before {
 		t.Fatalf("pre-CAS fault moved HEAD: %s -> %s", before, got)
+	}
+	assertNoTransactionArtifacts(t, fixture.root)
+}
+
+func TestWritePendingPostPublicationErrorRetainsRecoverableEvidence(t *testing.T) {
+	fixture := newManagedFixture(t, gitraw.SHA1, "")
+	appendFile(t, filepath.Join(fixture.root, "topics", "why-files.md"), "\nPublished journal with failed acknowledgement.\n")
+	gitRun(t, fixture.root, "add", "topics/why-files.md")
+	injected := errors.New("journal publication acknowledgement failed")
+	fixture.engine.WritePending = func(name string, record journal.Record) error {
+		if err := journal.WritePending(name, record); err != nil {
+			return err
+		}
+		return &journal.EffectError{Effect: journal.Effect{Visible: true, Durable: true}, Err: injected}
+	}
+	result, err := fixture.engine.Commit(t.Context(), Request{Store: fixture.root, Message: "retain pre-CAS journal"})
+	var detail *Error
+	if result == nil || !errors.Is(err, injected) || !errors.As(err, &detail) || !detail.Durable || detail.Accepted || detail.CheckoutChanged || !detail.RecoveryRequired || detail.Phase != PhaseJournalPending {
+		t.Fatalf("post-publication error = %#v, %v; result = %#v", detail, err, result)
+	}
+	assertTransactionArtifacts(t, fixture.root)
+	recovery := &Engine{OwnerAlive: func(context.Context, rendezvous.Owner) (bool, error) { return false, nil }}
+	recovered, recoverErr := recovery.Recover(t.Context(), fixture.root)
+	if recoverErr != nil || recovered == nil || !recovered.Needed || !recovered.Performed || recovered.Action != RecoveryCancelled || recovered.RecoveryRequired {
+		t.Fatalf("pre-CAS journal recovery = %#v, %v", recovered, recoverErr)
+	}
+	assertNoTransactionArtifacts(t, fixture.root)
+}
+
+func TestWritePendingVisiblePreSyncErrorDoesNotClaimDurability(t *testing.T) {
+	fixture := newManagedFixture(t, gitraw.SHA1, "")
+	appendFile(t, filepath.Join(fixture.root, "topics", "why-files.md"), "\nVisible journal without durability acknowledgement.\n")
+	gitRun(t, fixture.root, "add", "topics/why-files.md")
+	injected := errors.New("journal directory sync failed")
+	fixture.engine.WritePending = func(name string, record journal.Record) error {
+		if err := journal.WritePending(name, record); err != nil {
+			return err
+		}
+		return &journal.EffectError{Effect: journal.Effect{Visible: true, Durable: false}, Err: injected}
+	}
+	result, err := fixture.engine.Commit(t.Context(), Request{Store: fixture.root, Message: "retain visible pre-sync journal"})
+	var detail *Error
+	if result == nil || !errors.Is(err, injected) || !errors.As(err, &detail) || detail.Durable || detail.Accepted || detail.CheckoutChanged || !detail.RecoveryRequired || detail.Phase != PhaseJournalPending {
+		t.Fatalf("visible pre-sync error = %#v, %v; result = %#v", detail, err, result)
+	}
+	assertTransactionArtifacts(t, fixture.root)
+}
+
+func TestReleaseFailureRetainsPreJournalDurabilityEvidence(t *testing.T) {
+	fixture := newManagedFixture(t, gitraw.SHA1, "")
+	appendFile(t, filepath.Join(fixture.root, "topics", "why-files.md"), "\nRelease failure before journal.\n")
+	gitRun(t, fixture.root, "add", "topics/why-files.md")
+	fixture.engine.Fault = failOnceAt(PhaseLocked)
+	injected := errors.New("rendezvous release failed")
+	fixture.engine.ReleaseLock = func(*rendezvous.Handle) error { return injected }
+	_, err := fixture.engine.Commit(t.Context(), Request{Store: fixture.root, Message: "retain pre-journal locks"})
+	var detail *Error
+	if !errors.Is(err, injected) || !errors.As(err, &detail) || !detail.Durable || detail.Accepted || detail.CheckoutChanged || !detail.RecoveryRequired {
+		t.Fatalf("release error = %#v, %v", detail, err)
+	}
+	if _, err := os.Lstat(rendezvous.WorktreePath(fixture.gitDir)); err != nil {
+		t.Fatalf("worktree lock was not retained: %v", err)
+	}
+	recovery := &Engine{OwnerAlive: func(context.Context, rendezvous.Owner) (bool, error) { return false, nil }}
+	recovered, recoverErr := recovery.Recover(t.Context(), fixture.root)
+	if recoverErr != nil || recovered == nil || !recovered.Performed || recovered.Action != RecoveryStaleLock {
+		t.Fatalf("pre-journal lock recovery = %#v, %v", recovered, recoverErr)
+	}
+}
+
+func TestRecoverCancelledJournalAfterPartialLockRelease(t *testing.T) {
+	fixture := newManagedFixture(t, gitraw.SHA1, "")
+	appendFile(t, filepath.Join(fixture.root, "topics", "why-files.md"), "\nPartial cancelled-lock cleanup.\n")
+	gitRun(t, fixture.root, "add", "topics/why-files.md")
+	fixture.engine.Fault = failOnceAt(PhaseFinalRecheck)
+	fixture.engine.ReleaseLock = func(*rendezvous.Handle) error {
+		return errors.New("interrupt cancelled lock release")
+	}
+	_, err := fixture.engine.Commit(t.Context(), Request{Store: fixture.root, Message: "retain cancelled journal"})
+	var detail *Error
+	if !errors.As(err, &detail) || !detail.Durable || !detail.RecoveryRequired || detail.Accepted {
+		t.Fatalf("cancelled release error = %#v, %v", detail, err)
+	}
+	record, _, err := journal.Read(journal.Path(fixture.gitDir))
+	if err != nil || record.State != journal.Cancelled {
+		t.Fatalf("cancelled journal = %#v, %v", record, err)
+	}
+	// A production Release can remove the worktree lock and then fail while
+	// syncing its directory. Recovery must adopt and remove the exact remaining
+	// ref-lock subset instead of demanding that both original files survive.
+	if err := os.Remove(rendezvous.WorktreePath(fixture.gitDir)); err != nil {
+		t.Fatal(err)
+	}
+	recovery := &Engine{OwnerAlive: func(context.Context, rendezvous.Owner) (bool, error) { return false, nil }}
+	result, recoverErr := recovery.Recover(t.Context(), fixture.root)
+	if recoverErr != nil || result == nil || !result.Needed || !result.Performed || result.Action != RecoveryCancelled || result.RecoveryRequired {
+		t.Fatalf("partial cancelled cleanup = %#v, %v", result, recoverErr)
 	}
 	assertNoTransactionArtifacts(t, fixture.root)
 }
@@ -381,6 +484,14 @@ func TestEveryAcceptanceBoundaryHasCrashSafeOutcome(t *testing.T) {
 			var detail *Error
 			if !errors.As(commitErr, &detail) || !detail.Accepted || detail.Commit == "" {
 				t.Fatalf("fault at %s = %#v (%v), want known accepted outcome", phase, detail, commitErr)
+			}
+			// Even without a preparation hook, the final raw index can differ
+			// from the captured index through controller-owned stat-cache bytes.
+			// The reconciliation primitive, not the phase name, supplies this
+			// exact mutation evidence.
+			wantCheckout := phase != PhaseRefUpdated
+			if detail.CheckoutChanged != wantCheckout || !detail.Durable || detail.RecoveryRequired != (phase != PhaseJournalRemoved) {
+				t.Fatalf("fault at %s effects = %#v, want checkout=%t", phase, detail, wantCheckout)
 			}
 			if got := gitOutput(t, fixture.root, "rev-parse", "HEAD"); got != detail.Commit {
 				t.Fatalf("fault at %s left HEAD %s, want %s", phase, got, detail.Commit)
@@ -430,6 +541,86 @@ func TestRecoverPendingOldRemainsBlocked(t *testing.T) {
 	}
 	assertBytes(t, journalName, journalBefore)
 	assertTransactionArtifacts(t, fixture.root)
+}
+
+func TestRecoverExpectedRejectsChangedApprovalAndReportsPartialCheckout(t *testing.T) {
+	fixture := newManagedFixture(t, gitraw.SHA1, "")
+	appendFile(t, filepath.Join(fixture.root, "topics", "why-files.md"), "\nApproved recovery evidence.\n")
+	gitRun(t, fixture.root, "add", "topics/why-files.md")
+	fixture.engine.Fault = failOnceAt(PhaseRefUpdated)
+	_, commitErr := fixture.engine.Commit(t.Context(), Request{Store: fixture.root, Message: "approved recovery"})
+	if commitErr == nil {
+		t.Fatal("commit did not retain recovery state")
+	}
+	record, raw, err := journal.Read(journal.Path(fixture.gitDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(raw)
+	expected := RecoveryExpectation{OwnerToken: record.OwnerToken, StateSHA256: hex.EncodeToString(digest[:])}
+
+	wrong := expected
+	wrong.StateSHA256 = strings.Repeat("0", 64)
+	recovery := &Engine{OwnerAlive: func(context.Context, rendezvous.Owner) (bool, error) { return false, nil }}
+	result, err := recovery.RecoverExpected(t.Context(), fixture.root, wrong)
+	if result == nil || !result.Needed || !result.RecoveryRequired || err == nil || KindOf(err) != FailureConcurrency {
+		t.Fatalf("changed approval = %#v, %v", result, err)
+	}
+	assertBytes(t, journal.Path(fixture.gitDir), raw)
+	refLock := rendezvous.RefPath(fixture.gitDir, record.Ref.Ref)
+	worktreeLock := rendezvous.WorktreePath(fixture.gitDir)
+	refOwnerBefore := readFile(t, refLock)
+	worktreeOwnerBefore := readFile(t, worktreeLock)
+	recovery.Fault = func(phase Phase) error {
+		if phase == PhaseRecoveryLeased {
+			return os.Remove(journal.Path(fixture.gitDir))
+		}
+		return nil
+	}
+	result, err = recovery.RecoverExpected(t.Context(), fixture.root, expected)
+	if result == nil || !result.Needed || result.Durable || !result.RecoveryRequired || err == nil || KindOf(err) != FailureConcurrency {
+		t.Fatalf("lease recheck = %#v, %v", result, err)
+	}
+	assertBytes(t, refLock, refOwnerBefore)
+	assertBytes(t, worktreeLock, worktreeOwnerBefore)
+	writeFile(t, journal.Path(fixture.gitDir), raw, 0o600)
+
+	recovery.Fault = failOnceAt(PhaseIndexReconciled)
+	result, err = recovery.RecoverExpected(t.Context(), fixture.root, expected)
+	if result == nil || !result.Needed || result.Performed || !result.Durable || !result.CheckoutChanged || !result.RecoveryRequired || err == nil || KindOf(err) != FailureRecovery {
+		t.Fatalf("partial recovery = %#v, %v", result, err)
+	}
+	recovery.Fault = nil
+	result, err = recovery.RecoverExpected(t.Context(), fixture.root, expected)
+	if err != nil || result == nil || !result.Performed || !result.Durable || result.CheckoutChanged || result.RecoveryRequired {
+		t.Fatalf("completed recovery = %#v, %v", result, err)
+	}
+}
+
+func TestRecoveryDoesNotInventCheckoutMutationForAlreadyReconciledImages(t *testing.T) {
+	fixture := newManagedFixture(t, gitraw.SHA1, "")
+	appendFile(t, filepath.Join(fixture.root, "topics", "why-files.md"), "\nAlready reconciled recovery image.\n")
+	gitRun(t, fixture.root, "add", "topics/why-files.md")
+	fixture.engine.Fault = failOnceAt(PhaseIndexReconciled)
+	_, commitErr := fixture.engine.Commit(t.Context(), Request{Store: fixture.root, Message: "stop after index reconciliation"})
+	var commitDetail *Error
+	if !errors.As(commitErr, &commitDetail) || !commitDetail.CheckoutChanged || !commitDetail.RecoveryRequired {
+		t.Fatalf("initial reconciliation effects = %#v, %v", commitDetail, commitErr)
+	}
+
+	recovery := &Engine{
+		OwnerAlive: func(context.Context, rendezvous.Owner) (bool, error) { return false, nil },
+		Fault:      failOnceAt(PhaseIndexReconciled),
+	}
+	result, err := recovery.Recover(t.Context(), fixture.root)
+	if result == nil || !result.Needed || result.Performed || result.CheckoutChanged || !result.RecoveryRequired || err == nil {
+		t.Fatalf("already-reconciled fault effects = %#v, %v", result, err)
+	}
+	recovery.Fault = nil
+	result, err = recovery.Recover(t.Context(), fixture.root)
+	if err != nil || result == nil || !result.Performed || result.CheckoutChanged || result.RecoveryRequired {
+		t.Fatalf("already-reconciled completion effects = %#v, %v", result, err)
+	}
 }
 
 func TestRecoverLeavesForeignOrMalformedStateUntouched(t *testing.T) {

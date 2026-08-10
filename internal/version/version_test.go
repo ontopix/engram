@@ -20,7 +20,7 @@ func TestProviderInfo(t *testing.T) {
 	gitVersion := "git version test"
 	provider := Provider{Git: staticGitProber{capability: GitCapability{Version: &gitVersion, Supported: true}}}
 	info := provider.Info(context.Background())
-	if info.CLIVersion == "" || len(info.CoreVersions) != 1 || len(info.AnnexVersions) != 1 {
+	if info.CLIVersion != "1.0.0-rc.1" || len(info.CoreVersions) != 1 || len(info.AnnexVersions) != 1 {
 		t.Fatalf("info = %#v", info)
 	}
 	if info.CoreVersions[0].ID != "core" || info.AnnexVersions[0].ID != "git" {

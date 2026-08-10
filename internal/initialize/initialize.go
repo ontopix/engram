@@ -22,12 +22,14 @@ import (
 	"github.com/ontopix/engram/internal/bootstrap"
 	"github.com/ontopix/engram/internal/changeset"
 	"github.com/ontopix/engram/internal/checker"
+	"github.com/ontopix/engram/internal/fsatomic"
 	"github.com/ontopix/engram/internal/gitpresent"
 	"github.com/ontopix/engram/internal/gitraw"
 	"github.com/ontopix/engram/internal/guard"
 	"github.com/ontopix/engram/internal/lifecycle"
 	"github.com/ontopix/engram/internal/managedread"
 	"github.com/ontopix/engram/internal/managedwrite"
+	"github.com/ontopix/engram/internal/rendezvous"
 	"github.com/ontopix/engram/internal/treeimage"
 )
 
@@ -50,11 +52,22 @@ const (
 type Error struct {
 	Kind             ErrorKind
 	Operation        string
+	MutationKnown    bool
 	Durable          bool
 	Commit           *string
 	CheckoutChanged  bool
 	RecoveryRequired bool
 	Underlying       error
+}
+
+// Mutation is the closed set of local effects known when initialization
+// returns an error. Commit names the accepted or still-private main ref when
+// that update completed.
+type Mutation struct {
+	Durable          bool
+	Commit           *string
+	CheckoutChanged  bool
+	RecoveryRequired bool
 }
 
 func (e *Error) Error() string {
@@ -86,6 +99,60 @@ func KindOf(err error) ErrorKind {
 	return ""
 }
 
+// MutationOf merges mutation evidence across joined initialization errors.
+// Cleanup failures are commonly joined to the operation error, so using a
+// single errors.As result would lose whichever half appears later. Durable,
+// Commit, and CheckoutChanged are monotonic; RecoveryRequired is the final
+// snapshot carried by the outer mutation or last joined mutation.
+func MutationOf(err error) (Mutation, bool) {
+	var visit func(error) (Mutation, bool)
+	visit = func(current error) (Mutation, bool) {
+		if current == nil {
+			return Mutation{}, false
+		}
+		if typedError, ok := current.(*Error); ok {
+			if typedError.MutationKnown || typedError.Durable || typedError.Commit != nil || typedError.CheckoutChanged || typedError.RecoveryRequired {
+				result := Mutation{
+					Durable: typedError.Durable, Commit: cloneString(typedError.Commit),
+					CheckoutChanged: typedError.CheckoutChanged, RecoveryRequired: typedError.RecoveryRequired,
+				}
+				if nested, present := visit(typedError.Underlying); present {
+					result.Durable = result.Durable || nested.Durable
+					result.CheckoutChanged = result.CheckoutChanged || nested.CheckoutChanged
+					if result.Commit == nil {
+						result.Commit = cloneString(nested.Commit)
+					}
+				}
+				return result, true
+			}
+		}
+		switch unwrapped := current.(type) {
+		case interface{ Unwrap() []error }:
+			result := Mutation{}
+			present := false
+			for _, child := range unwrapped.Unwrap() {
+				childMutation, childPresent := visit(child)
+				if !childPresent {
+					continue
+				}
+				result.Durable = result.Durable || childMutation.Durable
+				result.CheckoutChanged = result.CheckoutChanged || childMutation.CheckoutChanged
+				result.RecoveryRequired = childMutation.RecoveryRequired
+				if childMutation.Commit != nil {
+					result.Commit = cloneString(childMutation.Commit)
+				}
+				present = true
+			}
+			return result, present
+		case interface{ Unwrap() error }:
+			return visit(unwrapped.Unwrap())
+		default:
+			return Mutation{}, false
+		}
+	}
+	return visit(err)
+}
+
 type Identity struct {
 	Name  string
 	Email string
@@ -111,10 +178,12 @@ type Result struct {
 // recovery can establish. Accepted is populated when publication had already
 // completed and the exact accepted state was re-audited.
 type RecoveryResult struct {
-	Needed    bool                  `json:"needed"`
-	Performed bool                  `json:"performed"`
-	Durable   bool                  `json:"durable"`
-	Accepted  *managedread.GitState `json:"accepted"`
+	Needed           bool                  `json:"needed"`
+	Performed        bool                  `json:"performed"`
+	Durable          bool                  `json:"durable"`
+	CheckoutChanged  bool                  `json:"checkout_changed"`
+	RecoveryRequired bool                  `json:"recovery_required"`
+	Accepted         *managedread.GitState `json:"accepted"`
 }
 
 type Writer interface {
@@ -124,19 +193,34 @@ type Writer interface {
 type Phase string
 
 const (
+	PhaseLifecycleBegun      Phase = "lifecycle-begun"
 	PhaseStaged              Phase = "staged"
 	PhaseAccepted            Phase = "accepted"
 	PhaseCleanupRequired     Phase = "cleanup-required"
 	PhaseFilesPublished      Phase = "files-published"
 	PhaseRepositoryPublished Phase = "repository-published"
+	PhaseStageCleaned        Phase = "stage-cleaned"
 	PhaseCleaned             Phase = "cleaned"
 )
+
+type initializationLifecycle interface {
+	State() lifecycle.State
+	RequireCleanup() error
+	Remove() error
+	RecoveryRequired() bool
+}
 
 // Initializer owns fault seams and the managed writer used only inside the
 // unpublished staging repository.
 type Initializer struct {
 	Writer Writer
 	Fault  func(Phase) error
+
+	beginLifecycle func(string, lifecycle.Operation) (initializationLifecycle, error)
+	deriveStage    func(lifecycle.State) (string, error)
+	cleanupStage   func(string) error
+	renamePath     func(string, string) error
+	syncPath       func(string) error
 }
 
 func New(writer Writer) *Initializer { return &Initializer{Writer: writer} }
@@ -148,81 +232,167 @@ func (i *Initializer) checkpoint(phase Phase) error {
 	return i.Fault(phase)
 }
 
+func (i *Initializer) begin(target string) (initializationLifecycle, error) {
+	if i != nil && i.beginLifecycle != nil {
+		return i.beginLifecycle(target, lifecycle.Initialization)
+	}
+	return lifecycle.Begin(target, lifecycle.Initialization)
+}
+
+func (i *Initializer) stage(state lifecycle.State) (string, error) {
+	if i != nil && i.deriveStage != nil {
+		return i.deriveStage(state)
+	}
+	return lifecycle.Stage(state)
+}
+
+func (i *Initializer) cleanup(stage string) error {
+	if i != nil && i.cleanupStage != nil {
+		return i.cleanupStage(stage)
+	}
+	_, err := cleanupPrivateStage(stage)
+	return err
+}
+
+func (i *Initializer) rename(oldPath, newPath string) error {
+	if i != nil && i.renamePath != nil {
+		return i.renamePath(oldPath, newPath)
+	}
+	_, err := fsatomic.RenameNoReplace(oldPath, newPath)
+	return err
+}
+
+func (i *Initializer) sync(name string) error {
+	if i != nil && i.syncPath != nil {
+		return i.syncPath(name)
+	}
+	return syncDirectory(name)
+}
+
 // Recover adopts one exact dead-owner lifecycle and either discards its
 // unpublished private store, rolls back its known additions, or verifies an
 // already-published repository. It never scans siblings, runs hooks, uses the
 // network, or moves an accepted ref.
 func Recover(ctx context.Context, target string) (RecoveryResult, error) {
+	return recover(ctx, target, nil)
+}
+
+// RecoverExpected binds recovery to the exact lifecycle state approved by an
+// external read-only inspector.
+func RecoverExpected(ctx context.Context, target string, expected lifecycle.RecoveryExpectation) (RecoveryResult, error) {
+	return recover(ctx, target, &expected)
+}
+
+func recover(ctx context.Context, target string, expected *lifecycle.RecoveryExpectation) (result RecoveryResult, resultErr error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if err := ctx.Err(); err != nil {
-		return RecoveryResult{Needed: true}, typed(ErrorCancelled, "recover initialization", err)
+		return RecoveryResult{Needed: true, RecoveryRequired: true}, typed(ErrorCancelled, "recover initialization", err)
 	}
 	canonical, err := canonicalTarget(target)
 	if err != nil {
-		return RecoveryResult{Needed: true}, typed(ErrorUsage, "resolve initialization recovery target", err)
+		return RecoveryResult{Needed: true, RecoveryRequired: true}, typed(ErrorUsage, "resolve initialization recovery target", err)
 	}
-	handle, err := lifecycle.Adopt(canonical, lifecycle.Initialization)
+	if _, _, err := lifecycle.Read(canonical, lifecycle.Initialization); errors.Is(err, os.ErrNotExist) {
+		return RecoveryResult{}, nil
+	}
+	lease, err := lifecycle.AcquireRecovery(canonical, lifecycle.Initialization)
 	if err != nil {
+		kind := ErrorRecovery
+		if errors.Is(err, rendezvous.ErrBusy) {
+			kind = ErrorConcurrency
+		}
+		return RecoveryResult{Needed: true, RecoveryRequired: true}, &Error{
+			Kind: kind, Operation: "acquire initialization recovery lease", RecoveryRequired: true, Underlying: err,
+		}
+	}
+	defer func() {
+		if err := lease.Release(); err != nil {
+			resultErr = errors.Join(resultErr, &Error{
+				Kind: ErrorRecovery, Operation: "release initialization recovery lease", Durable: result.Durable,
+				CheckoutChanged: result.CheckoutChanged, RecoveryRequired: result.RecoveryRequired, Underlying: err,
+			})
+		}
+	}()
+	var handle *lifecycle.Handle
+	if expected == nil {
+		handle, err = lifecycle.Adopt(canonical, lifecycle.Initialization)
+	} else {
+		handle, err = lifecycle.AdoptExpected(canonical, lifecycle.Initialization, *expected)
+	}
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return RecoveryResult{}, nil
+		}
 		kind := ErrorRecovery
 		if errors.Is(err, lifecycle.ErrOwnerLive) || errors.Is(err, lifecycle.ErrChanged) {
 			kind = ErrorConcurrency
 		}
-		return RecoveryResult{Needed: true}, typed(kind, "adopt initialization lifecycle", err)
+		return RecoveryResult{Needed: true, RecoveryRequired: true}, typed(kind, "adopt initialization lifecycle", err)
 	}
 	stage, err := lifecycle.Stage(handle.State())
 	if err != nil {
-		return RecoveryResult{Needed: true}, typed(ErrorRecovery, "derive initialization recovery staging", err)
+		return RecoveryResult{Needed: true, RecoveryRequired: true}, typed(ErrorRecovery, "derive initialization recovery staging", err)
 	}
 	if handle.State().Phase == lifecycle.Running {
-		return finishRecovery(stage, handle, nil, false)
+		return finishRecovery(stage, handle, nil, false, false)
 	}
 	if handle.State().Phase != lifecycle.CleanupRequired {
-		return RecoveryResult{Needed: true}, typed(ErrorRecovery, "recognize initialization lifecycle", errors.New("unsupported initialization recovery phase"))
+		return RecoveryResult{Needed: true, RecoveryRequired: true}, typed(ErrorRecovery, "recognize initialization lifecycle", errors.New("unsupported initialization recovery phase"))
 	}
 	record, err := readPublicationPlan(stage, handle.State())
 	if err != nil {
-		return RecoveryResult{Needed: true}, typed(ErrorRecovery, "read initialization recovery plan", err)
+		if _, stageErr := os.Lstat(stage); errors.Is(stageErr, os.ErrNotExist) {
+			return finishSidecarLastRecovery(ctx, canonical, handle)
+		}
+		return RecoveryResult{Needed: true, RecoveryRequired: true}, typed(ErrorRecovery, "read initialization recovery plan", err)
 	}
 	if err := ctx.Err(); err != nil {
-		return RecoveryResult{Needed: true}, typed(ErrorCancelled, "recover initialization", err)
+		return RecoveryResult{Needed: true, RecoveryRequired: true}, typed(ErrorCancelled, "recover initialization", err)
 	}
 
 	gitPath := filepath.Join(canonical, ".git")
 	if _, err := os.Lstat(gitPath); err == nil {
+		publishedInfo, statErr := os.Lstat(canonical)
+		if statErr != nil || publishedInfo.Mode()&os.ModeSymlink != 0 || !publishedInfo.IsDir() {
+			return RecoveryResult{Needed: true, RecoveryRequired: true}, typed(ErrorConflict, "inspect published initialization target", errors.Join(statErr, errors.New("published target is not one real directory")))
+		}
 		accepted, verifyErr := acceptedPublishedState(ctx, canonical, record.Commit)
 		if verifyErr != nil {
-			return RecoveryResult{Needed: true}, typed(ErrorRecovery, "verify recovered initialization", verifyErr)
+			return RecoveryResult{Needed: true, RecoveryRequired: true}, typed(ErrorRecovery, "verify recovered initialization", verifyErr)
 		}
-		return finishRecovery(stage, handle, accepted, true)
+		return finishPublishedRecovery(ctx, stage, handle, accepted, record.Commit, publishedInfo)
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return RecoveryResult{Needed: true}, typed(ErrorRecovery, "inspect recovered initialization", err)
+		return RecoveryResult{Needed: true, RecoveryRequired: true}, typed(ErrorRecovery, "inspect recovered initialization", err)
 	}
 
 	if !record.RootExists {
 		if _, err := os.Lstat(canonical); err == nil {
-			return RecoveryResult{Needed: true}, typed(ErrorConflict, "recover initialization publication", errors.New("target exists without the recorded managed repository"))
+			return RecoveryResult{Needed: true, RecoveryRequired: true}, typed(ErrorConflict, "recover initialization publication", errors.New("target exists without the recorded managed repository"))
 		} else if !errors.Is(err, os.ErrNotExist) {
-			return RecoveryResult{Needed: true}, typed(ErrorRecovery, "inspect initialization target", err)
+			return RecoveryResult{Needed: true, RecoveryRequired: true}, typed(ErrorRecovery, "inspect initialization target", err)
 		}
-		return finishRecovery(stage, handle, nil, false)
+		return finishRecovery(stage, handle, nil, false, false)
 	}
 
 	info, err := os.Lstat(canonical)
 	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-		return RecoveryResult{Needed: true}, typed(ErrorConflict, "recover initialization target", errors.Join(err, errors.New("existing initialization target is no longer one real directory")))
+		return RecoveryResult{Needed: true, RecoveryRequired: true}, typed(ErrorConflict, "recover initialization target", errors.Join(err, errors.New("existing initialization target is no longer one real directory")))
 	}
 	// Before removing a single published addition, prove that the private
 	// accepted store and the recorded commit are still exact.
 	if _, err := acceptedPublishedState(ctx, filepath.Join(stage, "store"), record.Commit); err != nil {
-		return RecoveryResult{Needed: true}, typed(ErrorRecovery, "verify private initialization store", err)
+		return RecoveryResult{Needed: true, RecoveryRequired: true}, typed(ErrorRecovery, "verify private initialization store", err)
 	}
-	changed, err := rollbackPublishedAdditions(ctx, canonical, record)
+	if err := handle.RevalidateRecovery(); err != nil {
+		return RecoveryResult{Needed: true, RecoveryRequired: true}, typed(ErrorConcurrency, "revalidate initialization recovery plan", err)
+	}
+	changed, durable, err := rollbackPublishedAdditions(ctx, canonical, record)
 	if err != nil {
-		return RecoveryResult{Needed: true, Durable: changed}, &Error{Kind: ErrorRecovery, Operation: "roll back initialization publication", Durable: changed, CheckoutChanged: changed, RecoveryRequired: true, Underlying: err}
+		return RecoveryResult{Needed: true, Durable: durable, CheckoutChanged: changed, RecoveryRequired: true}, &Error{Kind: ErrorRecovery, Operation: "roll back initialization publication", Durable: durable, CheckoutChanged: changed, RecoveryRequired: true, Underlying: err}
 	}
-	return finishRecovery(stage, handle, nil, changed)
+	return finishRecovery(stage, handle, nil, changed, durable)
 }
 
 // Run plans, accepts, and publishes one initialization. Dry-run stops after
@@ -270,26 +440,60 @@ func (i *Initializer) Run(ctx context.Context, target string, options Options) (
 		return result, typed(ErrorUsage, "validate Git author identity", errors.New("Git author name or email is not representable"))
 	}
 
-	handle, err := lifecycle.Begin(plan.Root, lifecycle.Initialization)
+	handle, err := i.begin(plan.Root)
 	if err != nil {
+		if mutation, present := lifecycle.MutationOf(err); present {
+			return result, &Error{
+				Kind: ErrorRecovery, Operation: "begin initialization lifecycle", MutationKnown: true,
+				Durable: mutation.Durable, RecoveryRequired: mutation.RecoveryRequired, Underlying: err,
+			}
+		}
+		// Begin can fail after the sidecar file itself was synced but before its
+		// parent-directory sync completed. If the exact closed state is visible,
+		// retain it for bounded recovery and report the uncertain durability.
+		if !errors.Is(err, lifecycle.ErrExists) {
+			if _, _, stateErr := lifecycle.Read(plan.Root, lifecycle.Initialization); stateErr == nil {
+				return result, &Error{Kind: ErrorRecovery, Operation: "begin initialization lifecycle", MutationKnown: true, RecoveryRequired: true, Underlying: err}
+			}
+		}
 		return result, classify("begin initialization lifecycle", err)
 	}
-	stage, err := lifecycle.Stage(handle.State())
+	stage, err := i.stage(handle.State())
 	if err != nil {
-		_ = handle.Remove()
+		removeErr := removeInitializationLifecycle(handle)
+		if removeErr != nil {
+			return result, &Error{
+				Kind: ErrorRecovery, Operation: "derive initialization staging", Durable: true,
+				RecoveryRequired: lifecycleResidual(handle), Underlying: errors.Join(err, fmt.Errorf("clean initialization lifecycle: %w", removeErr)),
+			}
+		}
 		return result, typed(ErrorRecovery, "derive initialization staging", err)
 	}
+	var privateCommit *string
 	cleanupRunning := true
 	defer func() {
 		if !cleanupRunning {
 			return
 		}
-		cleanupErr := cleanupPrivateStage(stage)
-		stateErr := handle.Remove()
+		cleanupErr := i.cleanup(stage)
+		var stateErr error
+		if cleanupErr == nil {
+			stateErr = removeInitializationLifecycle(handle)
+		}
 		if cleanupErr != nil || stateErr != nil {
-			resultErr = errors.Join(resultErr, &Error{Kind: ErrorRecovery, Operation: "clean pre-publication initialization", RecoveryRequired: true, Underlying: errors.Join(cleanupErr, stateErr)})
+			var commit *string
+			if privateCommit != nil && privateAcceptedRefPresent(stage, *privateCommit) {
+				commit = cloneString(privateCommit)
+			}
+			resultErr = errors.Join(resultErr, &Error{
+				Kind: ErrorRecovery, Operation: "clean pre-publication initialization", Durable: true, Commit: commit,
+				RecoveryRequired: lifecycleResidual(handle), Underlying: errors.Join(cleanupErr, stateErr),
+			})
 		}
 	}()
+	if err := i.checkpoint(PhaseLifecycleBegun); err != nil {
+		return result, typed(ErrorIO, "fault after initialization lifecycle begin", err)
+	}
 
 	if err := os.Mkdir(stage, 0o700); err != nil {
 		return result, classify("create initialization staging", err)
@@ -342,6 +546,7 @@ func (i *Initializer) Run(ctx context.Context, target string, options Options) (
 	result.Validation = cloneValidation(*written.Validation)
 	result.Files = cloneChanges(written.Changes)
 	result.Accepted.Commit = cloneString(written.Commit)
+	privateCommit = cloneString(written.Commit)
 	result.Launcher = launcher
 	if err := i.checkpoint(PhaseAccepted); err != nil {
 		return result, typed(ErrorIO, "fault after initialization acceptance", err)
@@ -361,7 +566,13 @@ func (i *Initializer) Run(ctx context.Context, target string, options Options) (
 		}
 	}
 	if err := handle.RequireCleanup(); err != nil {
-		return result, &Error{Kind: ErrorRecovery, Operation: "advance initialization lifecycle", Commit: cloneString(written.Commit), RecoveryRequired: true, Underlying: err}
+		// The deferred pre-publication cleanup still owns this failure path. It
+		// removes the exact lifecycle inode after removing the private stage, so
+		// recovery is required only if that cleanup itself reports a residual.
+		return result, &Error{
+			Kind: ErrorRecovery, Operation: "advance initialization lifecycle", MutationKnown: true,
+			Durable: true, Commit: cloneString(written.Commit), Underlying: err,
+		}
 	}
 	cleanupRunning = false
 	if err := i.checkpoint(PhaseCleanupRequired); err != nil {
@@ -370,28 +581,30 @@ func (i *Initializer) Run(ctx context.Context, target string, options Options) (
 
 	checkoutChanged := false
 	if plan.RootExists {
-		if err := publishIntoExisting(ctx, plan, record); err != nil {
-			return result, recoveryError("publish initialization files", *written.Commit, checkoutChanged || publicationMayHaveStarted(err), err)
+		filesChanged, err := i.publishIntoExisting(ctx, plan, record)
+		checkoutChanged = checkoutChanged || filesChanged
+		if err != nil {
+			return result, recoveryError("publish initialization files", *written.Commit, checkoutChanged, err)
 		}
-		checkoutChanged = len(record.Files) != 0
 		if err := i.checkpoint(PhaseFilesPublished); err != nil {
 			return result, recoveryError("fault after initialization files", *written.Commit, checkoutChanged, err)
 		}
-		if err := publishGitDirectory(stageStore, plan.Root); err != nil {
+		repositoryChanged, err := i.publishGitDirectory(stageStore, plan.Root)
+		checkoutChanged = checkoutChanged || repositoryChanged
+		if err != nil {
 			return result, recoveryError("publish initialization repository", *written.Commit, checkoutChanged, err)
 		}
-		checkoutChanged = true
 	} else {
 		if _, err := os.Lstat(plan.Root); err == nil {
 			return result, recoveryError("publish initialization target", *written.Commit, false, errors.New("target appeared concurrently"))
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return result, recoveryError("inspect initialization target", *written.Commit, false, err)
 		}
-		if err := os.Rename(stageStore, plan.Root); err != nil {
+		if err := i.rename(stageStore, plan.Root); err != nil {
 			return result, recoveryError("publish initialization target", *written.Commit, false, err)
 		}
 		checkoutChanged = true
-		if err := syncDirectory(filepath.Dir(plan.Root)); err != nil {
+		if err := i.sync(filepath.Dir(plan.Root)); err != nil {
 			return result, recoveryError("durably publish initialization target", *written.Commit, true, err)
 		}
 	}
@@ -401,11 +614,17 @@ func (i *Initializer) Run(ctx context.Context, target string, options Options) (
 	if err := verifyPublished(ctx, plan.Root, *written.Commit); err != nil {
 		return result, recoveryError("verify published initialization", *written.Commit, checkoutChanged, err)
 	}
-	if err := cleanupPrivateStage(stage); err != nil {
+	if err := i.cleanup(stage); err != nil {
 		return result, recoveryError("clean initialization staging", *written.Commit, checkoutChanged, err)
 	}
-	if err := handle.Remove(); err != nil {
-		return result, recoveryError("clean initialization lifecycle", *written.Commit, checkoutChanged, err)
+	if err := i.checkpoint(PhaseStageCleaned); err != nil {
+		return result, recoveryError("fault after initialization stage cleanup", *written.Commit, checkoutChanged, err)
+	}
+	if err := removeInitializationLifecycle(handle); err != nil {
+		return result, &Error{
+			Kind: ErrorRecovery, Operation: "clean initialization lifecycle", Durable: true, Commit: cloneString(written.Commit),
+			CheckoutChanged: checkoutChanged, RecoveryRequired: lifecycleResidual(handle), Underlying: err,
+		}
 	}
 	if err := i.checkpoint(PhaseCleaned); err != nil {
 		return result, &Error{Kind: ErrorIO, Operation: "fault after initialization cleanup", Durable: true, Commit: cloneString(written.Commit), CheckoutChanged: checkoutChanged, Underlying: err}
@@ -437,37 +656,195 @@ func acceptedPublishedState(ctx context.Context, root, commit string) (*managedr
 	return &managedread.GitState{Ref: &ref, Commit: cloneString(&commit)}, nil
 }
 
-func finishRecovery(stage string, handle *lifecycle.Handle, accepted *managedread.GitState, alreadyDurable bool) (RecoveryResult, error) {
-	if err := cleanupPrivateStage(stage); err != nil {
-		return RecoveryResult{Needed: true, Durable: alreadyDurable, Accepted: accepted}, &Error{
-			Kind: ErrorRecovery, Operation: "clean initialization recovery staging", Durable: alreadyDurable,
+func finishRecovery(stage string, handle *lifecycle.Handle, accepted *managedread.GitState, checkoutChanged, durableEffect bool) (RecoveryResult, error) {
+	if err := handle.RevalidateRecovery(); err != nil {
+		return RecoveryResult{Needed: true, Durable: durableEffect, CheckoutChanged: checkoutChanged, RecoveryRequired: true, Accepted: accepted}, &Error{
+			Kind: ErrorConcurrency, Operation: "revalidate initialization recovery plan", Durable: durableEffect,
+			CheckoutChanged: checkoutChanged, RecoveryRequired: true, Underlying: err,
+		}
+	}
+	cleanupDurable, err := cleanupPrivateStage(stage)
+	durable := durableEffect || cleanupDurable
+	if err != nil {
+		return RecoveryResult{Needed: true, Durable: durable, CheckoutChanged: checkoutChanged, RecoveryRequired: true, Accepted: accepted}, &Error{
+			Kind: ErrorRecovery, Operation: "clean initialization recovery staging", Durable: durable,
+			CheckoutChanged: checkoutChanged, RecoveryRequired: true, Underlying: err,
+		}
+	}
+	if err := removeInitializationLifecycle(handle); err != nil {
+		// A concurrent successful recovery is idempotent. Do not attribute a
+		// replacement owner's sidecar to this recovery attempt.
+		if !lifecycleResidual(handle) {
+			return RecoveryResult{Needed: true, Performed: true, Durable: durable, CheckoutChanged: checkoutChanged, Accepted: accepted}, nil
+		}
+		return RecoveryResult{Needed: true, Durable: durable, CheckoutChanged: checkoutChanged, RecoveryRequired: true, Accepted: accepted}, &Error{
+			Kind: ErrorRecovery, Operation: "clean initialization recovery lifecycle", Durable: durable,
+			CheckoutChanged: checkoutChanged, RecoveryRequired: true, Underlying: err,
+		}
+	}
+	return RecoveryResult{Needed: true, Performed: true, Durable: true, CheckoutChanged: checkoutChanged, Accepted: accepted}, nil
+}
+
+func finishPublishedRecovery(ctx context.Context, stage string, handle *lifecycle.Handle, accepted *managedread.GitState, commit string, publishedInfo os.FileInfo) (RecoveryResult, error) {
+	if err := handle.RevalidateRecovery(); err != nil {
+		return RecoveryResult{Needed: true, RecoveryRequired: true, Accepted: accepted}, &Error{
+			Kind: ErrorConcurrency, Operation: "revalidate published initialization recovery",
 			RecoveryRequired: true, Underlying: err,
 		}
 	}
-	if err := handle.Remove(); err != nil {
-		// A concurrent successful recovery is idempotent. Only accept that case
-		// after the exact sidecar is observed absent.
-		if _, statErr := os.Lstat(lifecycle.Sidecar(handle.State().Target, lifecycle.Initialization)); errors.Is(statErr, os.ErrNotExist) {
-			return RecoveryResult{Needed: true, Performed: true, Durable: true, Accepted: accepted}, nil
+	cleanupDurable, err := cleanupPrivateStage(stage)
+	if err != nil {
+		return RecoveryResult{Needed: true, Durable: cleanupDurable, RecoveryRequired: true, Accepted: accepted}, &Error{
+			Kind: ErrorRecovery, Operation: "clean published initialization recovery staging", Durable: cleanupDurable,
+			RecoveryRequired: true, Underlying: err,
 		}
-		return RecoveryResult{Needed: true, Durable: true, Accepted: accepted}, &Error{
-			Kind: ErrorRecovery, Operation: "clean initialization recovery lifecycle", Durable: true,
+	}
+	if err := requireSameRealDirectory(publishedInfo, handle.State().Target); err != nil {
+		return RecoveryResult{Needed: true, Durable: cleanupDurable, RecoveryRequired: true}, &Error{
+			Kind: ErrorConcurrency, Operation: "recheck published initialization target", Durable: cleanupDurable,
+			RecoveryRequired: true, Underlying: err,
+		}
+	}
+	rechecked, err := acceptedPublishedState(ctx, handle.State().Target, commit)
+	if err != nil || !reflect.DeepEqual(accepted, rechecked) {
+		return RecoveryResult{Needed: true, Durable: cleanupDurable, RecoveryRequired: true}, &Error{
+			Kind: ErrorConcurrency, Operation: "recheck published initialization recovery", Durable: cleanupDurable,
+			RecoveryRequired: true, Underlying: errors.Join(err, errors.New("published initialization changed during recovery")),
+		}
+	}
+	if err := requireSameRealDirectory(publishedInfo, handle.State().Target); err != nil {
+		return RecoveryResult{Needed: true, Durable: cleanupDurable, RecoveryRequired: true}, &Error{
+			Kind: ErrorConcurrency, Operation: "finalize published initialization recovery", Durable: cleanupDurable,
+			RecoveryRequired: true, Underlying: err,
+		}
+	}
+	if err := removeInitializationLifecycle(handle); err != nil {
+		if !lifecycleResidual(handle) {
+			return RecoveryResult{Needed: true, Performed: true, Durable: cleanupDurable, Accepted: rechecked}, nil
+		}
+		return RecoveryResult{Needed: true, Durable: cleanupDurable, RecoveryRequired: true, Accepted: rechecked}, &Error{
+			Kind: ErrorRecovery, Operation: "clean published initialization recovery lifecycle", Durable: cleanupDurable,
+			RecoveryRequired: true, Underlying: err,
+		}
+	}
+	return RecoveryResult{Needed: true, Performed: true, Durable: true, Accepted: rechecked}, nil
+}
+
+func requireSameRealDirectory(before os.FileInfo, name string) error {
+	after, err := os.Lstat(name)
+	if err != nil || before == nil || after.Mode()&os.ModeSymlink != 0 || !after.IsDir() || !os.SameFile(before, after) {
+		return errors.Join(err, errors.New("published initialization target changed during recovery"))
+	}
+	return nil
+}
+
+// finishSidecarLastRecovery handles the sole legitimate cleanup tail where
+// the exact private stage (and therefore its plan) has already been removed.
+// It never removes target bytes or changes Git; it only revalidates the target
+// around the approved absent-stage observation and then removes the sidecar.
+func finishSidecarLastRecovery(ctx context.Context, target string, handle *lifecycle.Handle) (RecoveryResult, error) {
+	if err := ctx.Err(); err != nil {
+		return RecoveryResult{Needed: true, RecoveryRequired: true}, typed(ErrorCancelled, "recover sidecar-last initialization", err)
+	}
+	before, statErr := os.Lstat(target)
+	if errors.Is(statErr, os.ErrNotExist) {
+		if err := handle.RevalidateRecovery(); err != nil {
+			return RecoveryResult{Needed: true, RecoveryRequired: true}, typed(ErrorConcurrency, "revalidate absent initialization target", err)
+		}
+		if _, err := os.Lstat(target); !errors.Is(err, os.ErrNotExist) {
+			return RecoveryResult{Needed: true, RecoveryRequired: true}, typed(ErrorConcurrency, "recheck absent initialization target", errors.Join(err, errors.New("initialization target appeared during recovery")))
+		}
+		return finishSidecarOnly(handle, nil)
+	}
+	if statErr != nil || before.Mode()&os.ModeSymlink != 0 || !before.IsDir() {
+		return RecoveryResult{Needed: true, RecoveryRequired: true}, typed(ErrorConflict, "inspect sidecar-last initialization target", errors.Join(statErr, errors.New("initialization target is not absent or one real directory")))
+	}
+
+	gitPath := filepath.Join(target, ".git")
+	_, gitErr := os.Lstat(gitPath)
+	if errors.Is(gitErr, os.ErrNotExist) {
+		if err := handle.RevalidateRecovery(); err != nil {
+			return RecoveryResult{Needed: true, RecoveryRequired: true}, typed(ErrorConcurrency, "revalidate existing initialization target", err)
+		}
+		after, err := os.Lstat(target)
+		if err != nil || after.Mode()&os.ModeSymlink != 0 || !after.IsDir() || !os.SameFile(before, after) {
+			return RecoveryResult{Needed: true, RecoveryRequired: true}, typed(ErrorConcurrency, "recheck existing initialization target", errors.Join(err, errors.New("initialization target changed during recovery")))
+		}
+		if _, err := os.Lstat(gitPath); !errors.Is(err, os.ErrNotExist) {
+			return RecoveryResult{Needed: true, RecoveryRequired: true}, typed(ErrorConcurrency, "recheck unpublished initialization target", errors.Join(err, errors.New("repository appeared during recovery")))
+		}
+		return finishSidecarOnly(handle, nil)
+	}
+	if gitErr != nil {
+		return RecoveryResult{Needed: true, RecoveryRequired: true}, typed(ErrorRecovery, "inspect sidecar-last initialization repository", gitErr)
+	}
+	accepted, err := acceptedPublishedStateWithoutPlan(ctx, target)
+	if err != nil {
+		return RecoveryResult{Needed: true, RecoveryRequired: true}, typed(ErrorConflict, "verify sidecar-last initialization repository", err)
+	}
+	if err := handle.RevalidateRecovery(); err != nil {
+		return RecoveryResult{Needed: true, RecoveryRequired: true, Accepted: accepted}, &Error{
+			Kind: ErrorConcurrency, Operation: "revalidate sidecar-last initialization repository",
+			RecoveryRequired: true, Underlying: err,
+		}
+	}
+	after, err := os.Lstat(target)
+	if err != nil || after.Mode()&os.ModeSymlink != 0 || !after.IsDir() || !os.SameFile(before, after) {
+		return RecoveryResult{Needed: true, RecoveryRequired: true}, &Error{
+			Kind: ErrorConcurrency, Operation: "recheck sidecar-last initialization target", RecoveryRequired: true,
+			Underlying: errors.Join(err, errors.New("initialization target changed during recovery")),
+		}
+	}
+	rechecked, err := acceptedPublishedStateWithoutPlan(ctx, target)
+	if err != nil || !reflect.DeepEqual(accepted, rechecked) {
+		return RecoveryResult{Needed: true, RecoveryRequired: true}, &Error{
+			Kind: ErrorConcurrency, Operation: "recheck sidecar-last initialization repository", RecoveryRequired: true,
+			Underlying: errors.Join(err, errors.New("accepted initialization state changed during recovery")),
+		}
+	}
+	return finishSidecarOnly(handle, rechecked)
+}
+
+func finishSidecarOnly(handle *lifecycle.Handle, accepted *managedread.GitState) (RecoveryResult, error) {
+	if err := removeInitializationLifecycle(handle); err != nil {
+		if !lifecycleResidual(handle) {
+			return RecoveryResult{Needed: true, Performed: true, Accepted: accepted}, nil
+		}
+		return RecoveryResult{Needed: true, RecoveryRequired: true, Accepted: accepted}, &Error{
+			Kind: ErrorRecovery, Operation: "clean sidecar-last initialization lifecycle",
 			RecoveryRequired: true, Underlying: err,
 		}
 	}
 	return RecoveryResult{Needed: true, Performed: true, Durable: true, Accepted: accepted}, nil
 }
 
-func rollbackPublishedAdditions(ctx context.Context, rootPath string, record publicationPlan) (bool, error) {
+func acceptedPublishedStateWithoutPlan(ctx context.Context, root string) (*managedread.GitState, error) {
+	store, err := managedread.Open(ctx, root)
+	if err != nil {
+		return nil, err
+	}
+	repository := store.Repository()
+	if repository.HeadRef != "refs/heads/main" || repository.Head == nil {
+		return nil, errors.New("published initialization has no accepted main state")
+	}
+	return acceptedPublishedState(ctx, root, repository.Head.String())
+}
+
+func rollbackPublishedAdditions(ctx context.Context, rootPath string, record publicationPlan) (changed, durable bool, resultErr error) {
 	root, err := os.OpenRoot(rootPath)
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
-	defer root.Close()
-	present := make([]string, 0, len(record.Files))
+	defer func() { resultErr = errors.Join(resultErr, root.Close()) }()
+	type ownedFile struct {
+		path string
+		info os.FileInfo
+		data []byte
+	}
+	present := make([]ownedFile, 0, len(record.Files))
 	for _, planned := range record.Files {
 		if err := ctx.Err(); err != nil {
-			return false, err
+			return false, false, err
 		}
 		logical := filepath.FromSlash(planned.Path)
 		info, err := root.Lstat(logical)
@@ -475,30 +852,49 @@ func rollbackPublishedAdditions(ctx context.Context, rootPath string, record pub
 			continue
 		}
 		if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-			return false, errors.Join(err, fmt.Errorf("published path %s no longer has its owned shape", planned.Path))
+			return false, false, errors.Join(err, fmt.Errorf("published path %s no longer has its owned shape", planned.Path))
 		}
 		file, err := root.Open(logical)
 		if err != nil {
-			return false, err
+			return false, false, err
 		}
 		data, readErr := io.ReadAll(io.LimitReader(file, int64(len(planned.Data))+1))
 		opened, statErr := file.Stat()
 		closeErr := file.Close()
 		after, afterErr := root.Lstat(logical)
 		if readErr != nil || statErr != nil || closeErr != nil || afterErr != nil || !os.SameFile(info, opened) || !os.SameFile(opened, after) || !bytes.Equal(data, planned.Data) {
-			return false, errors.Join(readErr, statErr, closeErr, afterErr, fmt.Errorf("published path %s differs from its recovery record", planned.Path))
+			return false, false, errors.Join(readErr, statErr, closeErr, afterErr, fmt.Errorf("published path %s differs from its recovery record", planned.Path))
 		}
-		present = append(present, planned.Path)
+		present = append(present, ownedFile{path: planned.Path, info: after, data: append([]byte(nil), planned.Data...)})
 	}
-	changed := false
+	dirtyDirectories := make(map[string]struct{})
 	for index := len(present) - 1; index >= 0; index-- {
 		if err := ctx.Err(); err != nil {
-			return changed, err
+			return changed, durable, err
 		}
-		if err := root.Remove(filepath.FromSlash(present[index])); err != nil {
-			return changed, err
+		owned := present[index]
+		logical := filepath.FromSlash(owned.path)
+		before, err := root.Lstat(logical)
+		if err != nil || before.Mode()&os.ModeSymlink != 0 || !before.Mode().IsRegular() || !os.SameFile(owned.info, before) {
+			return changed, durable, errors.Join(err, fmt.Errorf("published path %s changed after recovery preflight", owned.path))
+		}
+		file, err := root.Open(logical)
+		if err != nil {
+			return changed, durable, err
+		}
+		data, readErr := io.ReadAll(io.LimitReader(file, int64(len(owned.data))+1))
+		opened, statErr := file.Stat()
+		closeErr := file.Close()
+		after, afterErr := root.Lstat(logical)
+		if readErr != nil || statErr != nil || closeErr != nil || afterErr != nil ||
+			!os.SameFile(owned.info, opened) || !os.SameFile(opened, after) || !bytes.Equal(data, owned.data) {
+			return changed, durable, errors.Join(readErr, statErr, closeErr, afterErr, fmt.Errorf("published path %s changed immediately before rollback", owned.path))
+		}
+		if err := root.Remove(logical); err != nil {
+			return changed, durable, err
 		}
 		changed = true
+		dirtyDirectories[filepath.Dir(filepath.Join(rootPath, logical))] = struct{}{}
 	}
 	for index := len(record.Directories) - 1; index >= 0; index-- {
 		logical := filepath.FromSlash(record.Directories[index])
@@ -507,31 +903,40 @@ func rollbackPublishedAdditions(ctx context.Context, rootPath string, record pub
 			continue
 		}
 		if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-			return changed, errors.Join(err, fmt.Errorf("publication directory %s changed shape", record.Directories[index]))
+			return changed, durable, errors.Join(err, fmt.Errorf("publication directory %s changed shape", record.Directories[index]))
 		}
 		directory, err := root.Open(logical)
 		if err != nil {
-			return changed, err
+			return changed, durable, err
 		}
 		entries, readErr := directory.ReadDir(1)
+		opened, statErr := directory.Stat()
 		closeErr := directory.Close()
-		if readErr != nil && !errors.Is(readErr, io.EOF) || closeErr != nil {
-			return changed, errors.Join(readErr, closeErr)
+		after, afterErr := root.Lstat(logical)
+		if readErr != nil && !errors.Is(readErr, io.EOF) || statErr != nil || closeErr != nil || afterErr != nil ||
+			after.Mode()&os.ModeSymlink != 0 || !after.IsDir() || !os.SameFile(info, opened) || !os.SameFile(opened, after) {
+			return changed, durable, errors.Join(readErr, statErr, closeErr, afterErr, fmt.Errorf("publication directory %s changed immediately before rollback", record.Directories[index]))
 		}
 		if len(entries) != 0 {
 			continue // Preserve a directory now containing unrelated bytes.
 		}
-		if err := root.Remove(logical); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return changed, err
+		removeErr := root.Remove(logical)
+		if removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			return changed, durable, removeErr
 		}
-		changed = true
+		if removeErr == nil {
+			changed = true
+			dirtyDirectories[filepath.Dir(filepath.Join(rootPath, logical))] = struct{}{}
+		}
 	}
 	if changed {
-		if err := syncDirectory(rootPath); err != nil {
-			return true, err
+		var err error
+		durable, err = syncChangedDirectoriesWithEvidence(dirtyDirectories, syncDirectory)
+		if err != nil {
+			return true, durable, err
 		}
 	}
-	return changed, nil
+	return changed, durable, nil
 }
 
 func resultFromPlan(plan *bootstrap.Plan, dryRun bool) Result {
@@ -613,12 +1018,10 @@ func writePublicationPlan(stage string, record publicationPlan) error {
 		return err
 	}
 	if _, err := file.Write(data); err != nil {
-		_ = file.Close()
-		return err
+		return errors.Join(err, file.Close())
 	}
 	if err := file.Sync(); err != nil {
-		_ = file.Close()
-		return err
+		return errors.Join(err, file.Close())
 	}
 	if err := file.Close(); err != nil {
 		return err
@@ -638,8 +1041,8 @@ func encodePlan(record publicationPlan) ([]byte, error) {
 
 func readPublicationPlan(stage string, state lifecycle.State) (publicationPlan, error) {
 	name := filepath.Join(stage, "plan-v1.json")
-	info, err := os.Lstat(name)
-	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+	before, err := os.Lstat(name)
+	if err != nil || before.Mode()&os.ModeSymlink != 0 || !before.Mode().IsRegular() {
 		return publicationPlan{}, errors.Join(err, errors.New("initialization publication plan is unavailable"))
 	}
 	file, err := os.Open(name)
@@ -647,9 +1050,15 @@ func readPublicationPlan(stage string, state lifecycle.State) (publicationPlan, 
 		return publicationPlan{}, err
 	}
 	data, readErr := io.ReadAll(io.LimitReader(file, (16<<20)+1))
+	opened, statErr := file.Stat()
 	closeErr := file.Close()
-	if readErr != nil || closeErr != nil {
-		return publicationPlan{}, errors.Join(readErr, closeErr)
+	if readErr != nil || statErr != nil || closeErr != nil {
+		return publicationPlan{}, errors.Join(readErr, statErr, closeErr)
+	}
+	after, lstatErr := os.Lstat(name)
+	if lstatErr != nil || after.Mode()&os.ModeSymlink != 0 || !after.Mode().IsRegular() ||
+		!os.SameFile(before, opened) || !os.SameFile(opened, after) {
+		return publicationPlan{}, errors.Join(lstatErr, errors.New("initialization publication plan changed concurrently"))
 	}
 	if len(data) > 16<<20 {
 		return publicationPlan{}, errors.New("initialization publication plan is too large")
@@ -712,77 +1121,97 @@ func validatePlan(record publicationPlan, state lifecycle.State) error {
 	return nil
 }
 
-func publishIntoExisting(ctx context.Context, plan *bootstrap.Plan, record publicationPlan) error {
+func (i *Initializer) publishIntoExisting(ctx context.Context, plan *bootstrap.Plan, record publicationPlan) (changed bool, resultErr error) {
 	if err := ctx.Err(); err != nil {
-		return err
+		return false, err
 	}
 	if _, err := os.Lstat(filepath.Join(plan.Root, ".git")); err == nil {
-		return errors.New("target acquired Git administration concurrently")
+		return false, errors.New("target acquired Git administration concurrently")
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
+		return false, err
 	}
 	root, err := os.OpenRoot(plan.Root)
 	if err != nil {
-		return err
+		return false, err
 	}
-	defer root.Close()
+	defer func() { resultErr = errors.Join(resultErr, root.Close()) }()
+	dirtyDirectories := make(map[string]struct{})
 	for _, directory := range record.Directories {
-		if err := root.Mkdir(filepath.FromSlash(directory), 0o755); err != nil && !errors.Is(err, os.ErrExist) {
-			return &publicationError{started: true, err: err}
+		if err := root.Mkdir(filepath.FromSlash(directory), 0o755); err != nil {
+			return changed, err
 		}
+		changed = true
+		dirtyDirectories[filepath.Dir(filepath.Join(plan.Root, filepath.FromSlash(directory)))] = struct{}{}
 		info, err := root.Lstat(filepath.FromSlash(directory))
 		if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-			return &publicationError{started: true, err: errors.Join(err, errors.New("publication directory changed"))}
+			return changed, errors.Join(err, errors.New("publication directory changed"))
 		}
 	}
 	for _, planned := range record.Files {
 		if err := ctx.Err(); err != nil {
-			return &publicationError{started: true, err: err}
+			return changed, err
 		}
 		file, err := root.OpenFile(filepath.FromSlash(planned.Path), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 		if err != nil {
-			return &publicationError{started: true, err: err}
+			return changed, err
 		}
+		changed = true
+		dirtyDirectories[filepath.Dir(filepath.Join(plan.Root, filepath.FromSlash(planned.Path)))] = struct{}{}
 		if _, err := file.Write(planned.Data); err != nil {
-			_ = file.Close()
-			return &publicationError{started: true, err: err}
+			return changed, errors.Join(err, file.Close())
 		}
 		if err := file.Sync(); err != nil {
-			_ = file.Close()
-			return &publicationError{started: true, err: err}
+			return changed, errors.Join(err, file.Close())
 		}
 		if err := file.Close(); err != nil {
-			return &publicationError{started: true, err: err}
+			return changed, err
 		}
 	}
-	return syncDirectory(plan.Root)
+	if err := syncChangedDirectories(dirtyDirectories, i.sync); err != nil {
+		return changed, err
+	}
+	return changed, nil
 }
 
-type publicationError struct {
-	started bool
-	err     error
+func syncChangedDirectories(dirty map[string]struct{}, syncer func(string) error) error {
+	_, err := syncChangedDirectoriesWithEvidence(dirty, syncer)
+	return err
 }
 
-func (e *publicationError) Error() string { return e.err.Error() }
-func (e *publicationError) Unwrap() error { return e.err }
-
-func publicationMayHaveStarted(err error) bool {
-	var published *publicationError
-	return errors.As(err, &published) && published.started
+func syncChangedDirectoriesWithEvidence(dirty map[string]struct{}, syncer func(string) error) (durable bool, resultErr error) {
+	directories := make([]string, 0, len(dirty))
+	for directory := range dirty {
+		directories = append(directories, directory)
+	}
+	sort.Slice(directories, func(left, right int) bool {
+		leftDepth := strings.Count(filepath.Clean(directories[left]), string(filepath.Separator))
+		rightDepth := strings.Count(filepath.Clean(directories[right]), string(filepath.Separator))
+		if leftDepth != rightDepth {
+			return leftDepth > rightDepth
+		}
+		return directories[left] < directories[right]
+	})
+	for _, directory := range directories {
+		if err := syncer(directory); err != nil {
+			return durable, err
+		}
+		durable = true
+	}
+	return durable, nil
 }
 
-func publishGitDirectory(stageStore, target string) error {
+func (i *Initializer) publishGitDirectory(stageStore, target string) (bool, error) {
 	source := filepath.Join(stageStore, ".git")
 	destination := filepath.Join(target, ".git")
 	if _, err := os.Lstat(destination); err == nil {
-		return errors.New("target Git administration appeared concurrently")
+		return false, errors.New("target Git administration appeared concurrently")
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
+		return false, err
 	}
-	if err := os.Rename(source, destination); err != nil {
-		return err
+	if err := i.rename(source, destination); err != nil {
+		return false, err
 	}
-	return syncDirectory(target)
+	return true, i.sync(target)
 }
 
 func verifyPublished(ctx context.Context, root, commit string) error {
@@ -853,7 +1282,11 @@ func runGit(ctx context.Context, root string, environment []string, isolateGloba
 	if err != nil {
 		return err
 	}
-	global := []string{"--no-pager", "--no-optional-locks", "--no-replace-objects", "-c", "core.hooksPath=" + os.DevNull, "-C", root}
+	global := []string{
+		"--no-pager", "--no-optional-locks", "--no-replace-objects",
+		"-c", "core.hooksPath=" + os.DevNull, "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false",
+		"-c", "maintenance.auto=false", "-c", "gc.auto=0", "-C", root,
+	}
 	command := exec.CommandContext(ctx, git, append(global, arguments...)...)
 	command.Env = gitEnvironment(environment, isolateGlobal)
 	var stderr bytes.Buffer
@@ -899,18 +1332,21 @@ func validIdentityPart(value string, email bool) bool {
 	return !email || strings.TrimSpace(value) == value
 }
 
-func cleanupPrivateStage(stage string) error {
+func cleanupPrivateStage(stage string) (bool, error) {
 	info, err := os.Lstat(stage)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil
+		return false, nil
 	}
 	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-		return errors.Join(err, errors.New("initialization staging is not one real directory"))
+		return false, errors.Join(err, errors.New("initialization staging is not one real directory"))
 	}
 	if err := os.RemoveAll(stage); err != nil {
-		return err
+		return false, err
 	}
-	return syncDirectory(filepath.Dir(stage))
+	if err := syncDirectory(filepath.Dir(stage)); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func cloneValidation(value checker.Result) checker.Result {
@@ -952,6 +1388,28 @@ func bounded(value string) string {
 		value = value[:16<<10]
 	}
 	return strings.TrimSpace(value)
+}
+
+func privateAcceptedRefPresent(stage, commit string) bool {
+	repository, err := gitraw.Discover(context.Background(), filepath.Join(stage, "store"))
+	return err == nil && repository.HeadRef == "refs/heads/main" && repository.Head != nil && repository.Head.String() == commit
+}
+
+func lifecycleResidual(handle initializationLifecycle) bool {
+	return handle != nil && handle.RecoveryRequired()
+}
+
+func removeInitializationLifecycle(handle initializationLifecycle) error {
+	if handle == nil {
+		return nil
+	}
+	if err := handle.Remove(); err != nil {
+		return err
+	}
+	if lifecycleResidual(handle) {
+		return errors.New("initialization lifecycle removal retained its owned sidecar")
+	}
+	return nil
 }
 
 func recoveryError(operation, commit string, checkout bool, err error) error {

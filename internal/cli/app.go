@@ -13,7 +13,22 @@ type Result struct {
 	Outcome Outcome
 	Value   any
 	Error   *ProtocolError
+	// Text optionally replaces the generic human-readable rendering. It is
+	// deliberately ignored by JSON mode, whose envelope is derived only from
+	// Value and Error.
+	Text TextRenderer
 }
+
+// TextRenderer writes one command-specific human presentation. Protocol
+// results stay separate so presentation-only flags cannot change JSON.
+type TextRenderer interface {
+	RenderText(io.Writer) error
+}
+
+// TextRendererFunc adapts a function to TextRenderer.
+type TextRendererFunc func(io.Writer) error
+
+func (f TextRendererFunc) RenderText(output io.Writer) error { return f(output) }
 
 type Handler interface {
 	Run(context.Context, *Invocation) Result
@@ -51,7 +66,7 @@ func NewApp() *App {
 				Outcome: OutcomeError,
 				Error: &ProtocolError{
 					Kind:    ErrorCapability,
-					Message: fmt.Sprintf("%s is not implemented in this foundation build", name),
+					Message: fmt.Sprintf("%s is not registered in this application", name),
 				},
 			}
 		})
@@ -110,6 +125,13 @@ func (a *App) Run(ctx context.Context, arguments []string, stdout, stderr io.Wri
 		return result.Outcome.ExitStatus()
 	}
 	if invocation.Globals.Quiet && result.Outcome == OutcomeOK {
+		return result.Outcome.ExitStatus()
+	}
+	if result.Text != nil {
+		if err := result.Text.RenderText(stdout); err != nil {
+			fmt.Fprintf(stderr, "engram: %s\n", err)
+			return OutcomeError.ExitStatus()
+		}
 		return result.Outcome.ExitStatus()
 	}
 	if result.Value != nil {

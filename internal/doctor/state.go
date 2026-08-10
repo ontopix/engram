@@ -54,13 +54,6 @@ func lifecycleSidecar(target, operation string) string {
 	return target + ".engram-" + operation + "-v1.json"
 }
 
-func lifecycleInternal(repository *gitraw.Repository, operation string) string {
-	if repository == nil {
-		return ""
-	}
-	return filepath.Join(repository.GitDir, "engram", "state", operation+"-v1.json")
-}
-
 func targetStateEvidence(target string) (bool, error) {
 	for _, operation := range []string{"initialization", "acquisition"} {
 		name := lifecycleSidecar(target, operation)
@@ -80,26 +73,13 @@ func inspectLifecycleStates(current *inspection) recoveryPlan {
 	for _, operation := range []string{"initialization", "acquisition"} {
 		name := operation + ".state"
 		sidecar := lifecycleSidecar(current.target, operation)
-		paths := []string{sidecar}
-		if internal := lifecycleInternal(current.repository, operation); internal != "" {
-			paths = append(paths, internal)
-		}
-		paths = sortedUnique(paths)
 		observations := make([]lifecycleObservation, 0, 1)
 		var problem string
-		for _, statePath := range paths {
-			base := filepath.Dir(sidecar)
-			if current.repository != nil && statePath != sidecar {
-				base = current.repository.GitDir
-			}
-			observation, present, err := readLifecycleState(base, statePath, current.target, operation)
-			if err != nil {
-				problem = err.Error()
-				break
-			}
-			if present {
-				observations = append(observations, observation)
-			}
+		observation, present, err := readLifecycleState(filepath.Dir(sidecar), sidecar, current.target, operation)
+		if err != nil {
+			problem = err.Error()
+		} else if present {
+			observations = append(observations, observation)
 		}
 		switch {
 		case problem != "":
@@ -125,9 +105,16 @@ func inspectLifecycleStates(current *inspection) recoveryPlan {
 				combined.needed = true
 				combined.safe = false
 			default:
-				setRequired(&current.result, name, Error, pathPointer(observation.path), "recognized stale "+operation+" state requires bounded recovery")
 				combined.needed = true
+				approval, approvalErr := lifecycleRecoveryApproval(observation)
+				if approvalErr != nil {
+					setRequired(&current.result, name, Error, pathPointer(observation.path), "controller state or publication plan is inconsistent: "+approvalErr.Error())
+					combined.safe = false
+					break
+				}
+				setRequired(&current.result, name, Error, pathPointer(observation.path), "recognized stale "+operation+" state requires bounded recovery")
 				combined.lifecycle = append(combined.lifecycle, observation)
+				combined.approvals = append(combined.approvals, approval)
 			}
 		case operation == "initialization":
 			status, statePath, message, present := inspectInitializationJournal(current.repository)
@@ -135,6 +122,9 @@ func inspectLifecycleStates(current *inspection) recoveryPlan {
 				setRequired(&current.result, name, status, pathPointer(statePath), message)
 			}
 		}
+	}
+	if len(combined.approvals) > 1 {
+		combined.safe = false
 	}
 	if !combined.needed {
 		combined.safe = false

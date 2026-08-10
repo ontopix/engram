@@ -27,6 +27,9 @@ var (
 	// ErrUnsafePermissions identifies controller state writable by another
 	// host account or readable outside its owner.
 	ErrUnsafePermissions = errors.New("unsafe hook trust registry permissions")
+	// ErrInvalidName identifies a caller-supplied direct hook filename which
+	// cannot be addressed by the revoke operation.
+	ErrInvalidName = errors.New("invalid direct hook name")
 )
 
 // Registry owns complete-set grants in one controller-selected external file.
@@ -37,6 +40,55 @@ type Registry struct {
 	// beforePublish is an internal fault/concurrency seam used by tests. It is
 	// called after mutation and before the compare-and-replace publication.
 	beforePublish func()
+	// Publication and release checkpoints are instance-local fault seams.
+	// Production registries leave them nil.
+	afterRename  func(string) error
+	afterSync    func(string) error
+	beforeRemove func(string) error
+	afterRelease func(string) error
+}
+
+type registryPublication struct {
+	visible bool
+	durable bool
+}
+
+// Effect is the closed protocol evidence attached to a failed registry update.
+// The containing EffectError also records that publication may already be
+// visible when Durable is false (rename completed but directory sync did not).
+type Effect struct {
+	Durable          bool
+	RecoveryRequired bool
+}
+
+// EffectError reports an update failure after registry publication or with a
+// cooperating lock still present.
+type EffectError struct {
+	Effect Effect
+	Err    error
+}
+
+func (e *EffectError) Error() string {
+	if e == nil || e.Err == nil {
+		return "hook registry update failed after mutation"
+	}
+	return e.Err.Error()
+}
+
+func (e *EffectError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
+// EffectOf returns the persistent evidence carried by err.
+func EffectOf(err error) (Effect, bool) {
+	var typed *EffectError
+	if !errors.As(err, &typed) || typed == nil {
+		return Effect{}, false
+	}
+	return typed.Effect, true
 }
 
 // Selection reports one complete selected set and its local trust state.
@@ -170,7 +222,7 @@ func (r *Registry) Revoke(store string, names ...string) (RevokeResult, error) {
 	wanted := make(map[string]struct{}, len(names))
 	for _, name := range names {
 		if strings.Contains(name, "/") || strings.Contains(name, "\\") || !validFilename(name) {
-			return RevokeResult{}, fmt.Errorf("invalid direct hook filename %q", name)
+			return RevokeResult{}, fmt.Errorf("%w: %q", ErrInvalidName, name)
 		}
 		wanted[name] = struct{}{}
 	}
@@ -226,7 +278,7 @@ func (r *Registry) prepare(store string, set Set) (Selection, StoreIdentity, err
 	return Selection{SHA256: set.SHA256, Hooks: cloneHooks(set.Hooks)}, identity, nil
 }
 
-func (r *Registry) update(mutate func(*registryDocument) (bool, error)) (bool, error) {
+func (r *Registry) update(mutate func(*registryDocument) (bool, error)) (changed bool, resultErr error) {
 	if err := ensurePrivateDirectory(filepath.Dir(r.path)); err != nil {
 		return false, err
 	}
@@ -234,13 +286,23 @@ func (r *Registry) update(mutate func(*registryDocument) (bool, error)) (bool, e
 	if err != nil {
 		return false, err
 	}
-	defer lock.release()
+	published := registryPublication{}
+	defer func() {
+		residual, releaseErr := lock.release(r.beforeRemove, r.afterRelease)
+		if releaseErr != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("release hook trust registry lock: %w", releaseErr))
+		}
+		if resultErr != nil {
+			changed = false
+			resultErr = registryEffectError(resultErr, published, residual)
+		}
+	}()
 
 	document, original, err := r.read()
 	if err != nil {
 		return false, err
 	}
-	changed, err := mutate(&document)
+	changed, err = mutate(&document)
 	if err != nil || !changed {
 		return changed, err
 	}
@@ -251,10 +313,21 @@ func (r *Registry) update(mutate func(*registryDocument) (bool, error)) (bool, e
 	if r.beforePublish != nil {
 		r.beforePublish()
 	}
-	if err := r.publish(original, serialized); err != nil {
+	published, err = r.publish(original, serialized)
+	if err != nil {
 		return false, err
 	}
 	return true, nil
+}
+
+func registryEffectError(err error, published registryPublication, residual bool) error {
+	if err == nil || !published.visible && !residual {
+		return err
+	}
+	return &EffectError{
+		Effect: Effect{Durable: published.durable, RecoveryRequired: residual},
+		Err:    err,
+	}
 }
 
 func (r *Registry) read() (registryDocument, fileSnapshot, error) {
@@ -486,13 +559,48 @@ func grantContains(existing grant, wanted map[string]struct{}) bool {
 }
 
 func ensurePrivateDirectory(directory string) error {
-	info, err := os.Lstat(directory)
-	if errors.Is(err, os.ErrNotExist) {
-		if err := os.MkdirAll(directory, 0o700); err != nil {
+	missing := []string{}
+	current := filepath.Clean(directory)
+	for {
+		info, err := os.Lstat(current)
+		if err == nil {
+			if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+				return fmt.Errorf("hook trust registry parent is not a real directory")
+			}
+			break
+		}
+		if !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
-		info, err = os.Lstat(directory)
+		missing = append(missing, current)
+		parent := filepath.Dir(current)
+		if parent == current {
+			return err
+		}
+		current = parent
 	}
+	for index := len(missing) - 1; index >= 0; index-- {
+		name := missing[index]
+		if err := os.Mkdir(name, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
+			return err
+		}
+		info, err := os.Lstat(name)
+		if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			if err != nil {
+				return err
+			}
+			return fmt.Errorf("hook trust registry parent is not a real directory")
+		}
+		if !safeRegistryDirectoryMode(info.Mode()) {
+			return ErrUnsafePermissions
+		}
+		// The registry file cannot be called durable unless every newly
+		// created ancestor naming its parent directory is durable too.
+		if err := syncRegistryDirectory(filepath.Dir(name)); err != nil {
+			return err
+		}
+	}
+	info, err := os.Lstat(directory)
 	if err != nil {
 		return err
 	}
@@ -505,18 +613,18 @@ func ensurePrivateDirectory(directory string) error {
 	return nil
 }
 
-func (r *Registry) publish(original fileSnapshot, updated []byte) error {
+func (r *Registry) publish(original fileSnapshot, updated []byte) (registryPublication, error) {
 	current, err := readRegistryFile(r.path)
 	if err != nil {
-		return err
+		return registryPublication{}, err
 	}
 	if !sameFileSnapshot(original, current) {
-		return ErrConcurrent
+		return registryPublication{}, ErrConcurrent
 	}
 	directory := filepath.Dir(r.path)
 	temporary, err := os.CreateTemp(directory, ".engram-hook-trust-*")
 	if err != nil {
-		return err
+		return registryPublication{}, err
 	}
 	temporaryName := temporary.Name()
 	defer os.Remove(temporaryName)
@@ -526,30 +634,45 @@ func (r *Registry) publish(original fileSnapshot, updated []byte) error {
 	}
 	if err := temporary.Chmod(mode); err != nil {
 		temporary.Close()
-		return err
+		return registryPublication{}, err
 	}
 	if _, err := temporary.Write(updated); err != nil {
 		temporary.Close()
-		return err
+		return registryPublication{}, err
 	}
 	if err := temporary.Sync(); err != nil {
 		temporary.Close()
-		return err
+		return registryPublication{}, err
 	}
 	if err := temporary.Close(); err != nil {
-		return err
+		return registryPublication{}, err
 	}
 	current, err = readRegistryFile(r.path)
 	if err != nil {
-		return err
+		return registryPublication{}, err
 	}
 	if !sameFileSnapshot(original, current) {
-		return ErrConcurrent
+		return registryPublication{}, ErrConcurrent
 	}
 	if err := os.Rename(temporaryName, r.path); err != nil {
-		return err
+		return registryPublication{}, err
 	}
-	return syncRegistryDirectory(directory)
+	result := registryPublication{visible: true}
+	if r.afterRename != nil {
+		if err := r.afterRename(r.path); err != nil {
+			return result, err
+		}
+	}
+	result.durable, err = syncRegistryDirectoryState(directory)
+	if err != nil {
+		return result, err
+	}
+	if r.afterSync != nil {
+		if err := r.afterSync(r.path); err != nil {
+			return result, err
+		}
+	}
+	return result, nil
 }
 
 func sameFileSnapshot(left, right fileSnapshot) bool {
@@ -578,12 +701,67 @@ func acquireRegistryLock(name string) (*registryLock, error) {
 	return &registryLock{name: name, file: file}, nil
 }
 
-func (lock *registryLock) release() {
+func (lock *registryLock) release(beforeRemove, afterRelease func(string) error) (bool, error) {
 	if lock == nil {
-		return
+		return false, nil
 	}
+	var ownedInfo os.FileInfo
+	var ownershipErr error
+	var closeErr error
 	if lock.file != nil {
-		_ = lock.file.Close()
+		ownedInfo, ownershipErr = lock.file.Stat()
+		closeErr = lock.file.Close()
 	}
-	_ = os.Remove(lock.name)
+	var beforeRemoveErr error
+	if beforeRemove != nil {
+		beforeRemoveErr = beforeRemove(lock.name)
+	}
+	var removeErr error
+	ownedAtName := false
+	var identityErr error
+	if beforeRemoveErr == nil && ownershipErr == nil && ownedInfo != nil {
+		currentInfo, statErr := os.Lstat(lock.name)
+		switch {
+		case statErr == nil && os.SameFile(ownedInfo, currentInfo):
+			ownedAtName = true
+		case statErr == nil:
+			identityErr = fmt.Errorf("%w: registry lock ownership changed before release", ErrConcurrent)
+		case !errors.Is(statErr, os.ErrNotExist):
+			identityErr = statErr
+		}
+	}
+	if beforeRemoveErr == nil && ownershipErr == nil && ownedInfo == nil {
+		identityErr = fmt.Errorf("%w: registry lock ownership is unavailable", ErrConcurrent)
+	}
+	if ownedAtName {
+		removeErr = os.Remove(lock.name)
+		if errors.Is(removeErr, os.ErrNotExist) {
+			removeErr = nil
+		}
+	}
+	var syncErr error
+	if ownedAtName && removeErr == nil {
+		syncErr = syncRegistryDirectory(filepath.Dir(lock.name))
+	}
+	var faultErr error
+	if beforeRemoveErr == nil && ownershipErr == nil && identityErr == nil && removeErr == nil && afterRelease != nil {
+		faultErr = afterRelease(lock.name)
+	}
+	residual := false
+	var inspectErr error
+	currentInfo, statErr := os.Lstat(lock.name)
+	switch {
+	case statErr == nil && ownedInfo != nil:
+		residual = os.SameFile(ownedInfo, currentInfo)
+	case statErr == nil:
+		residual = true
+	case !errors.Is(statErr, os.ErrNotExist):
+		residual = true
+		inspectErr = statErr
+	}
+	var residualErr error
+	if residual {
+		residualErr = fmt.Errorf("%w: registry lock remains after release", ErrConcurrent)
+	}
+	return residual, errors.Join(ownershipErr, closeErr, beforeRemoveErr, identityErr, removeErr, syncErr, faultErr, inspectErr, residualErr)
 }

@@ -1,10 +1,11 @@
 # engram reference CLI — implementation plan
 
-**Status:** Approved direction; implementation not started
+**Status:** Implemented; `v1.0.0-rc.1` release candidate
 **Revision:** 2026-08-09
 **Normative status:** Non-normative
 
-This plan turns the v1 specification into the reference `engram` CLI. The
+This plan records how the v1 specification was implemented as the reference
+`engram` CLI. The
 [core specification](spec/README.md), its normative annexes, and the
 [observable CLI contract](cli/README.md) remain authoritative when this plan
 disagrees with them.
@@ -88,11 +89,27 @@ process, or network layer. Workflow code composes the portable and managed Git
 layers; the interface only translates their typed results. Tests may exercise
 each layer directly and the compiled binary as a black box.
 
+### Implementation status
+
+| Milestone | Release-candidate status |
+|---|---|
+| M0 — contract harness and dependency proofs | Complete |
+| M1 — portable snapshot engine | Complete |
+| M2 — changesets and managed read paths | Complete |
+| M3 — draft, staging, and attachment helpers | Complete |
+| M4 — hooks, trust, and managed acceptance | Complete |
+| M5 — linear synchronization | Complete |
+| M6 — operations, packaging, and v1 release | Complete; release workflow re-runs all gates before publication |
+
+The final `v1.0.0` tag remains a publication decision. Until then, finding
+identities, the JSON v1 protocol, and other observable interfaces retain
+release-candidate rather than stable status.
+
 ## 3. Delivery roadmap
 
-Milestones are dependency gates, not date promises. “Now” establishes the
-conformance kernel; “Next” adds local authoring and acceptance; “Later” adds
-synchronization and release hardening.
+Milestones were dependency gates, not date promises. The Now/Next/Later labels
+below preserve the implementation sequence: conformance first, then local
+authoring and acceptance, then synchronization and release hardening.
 
 ### Now — conformance kernel and managed reads
 
@@ -241,10 +258,10 @@ normalization, ambient Git configuration, or network access.
 
 ## 6. Work sequencing
 
-M0 → M1 → M2 is the critical path. M3 may begin once M1 rewrite primitives
-and M2 index models stabilize. M4 depends on both managed audits and safe local
-updates. M5 starts only after acceptance fault injection passes. M6 is a
-release gate, not a place to defer conformance defects.
+M0 → M1 → M2 formed the critical path. M3 followed the M1 rewrite primitives
+and M2 index models; M4 followed managed audits and safe local updates; M5
+followed acceptance fault injection. M6 closed the release gates rather than
+deferring conformance defects.
 
 When implementation exposes a normative ambiguity, update the specification
 and changelog before code chooses behavior. When only CLI behavior is unclear,

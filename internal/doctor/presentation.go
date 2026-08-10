@@ -296,7 +296,11 @@ func runGit(ctx context.Context, root string, input []byte, arguments ...string)
 	if err != nil {
 		return gitResult{}, err
 	}
-	global := []string{"--no-pager", "--no-optional-locks", "--no-replace-objects", "-c", "core.hooksPath=" + os.DevNull, "-C", root}
+	global := []string{
+		"--no-pager", "--no-optional-locks", "--no-replace-objects",
+		"-c", "core.hooksPath=" + os.DevNull, "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false",
+		"-c", "maintenance.auto=false", "-c", "gc.auto=0", "-C", root,
+	}
 	command := exec.CommandContext(ctx, git, append(global, arguments...)...)
 	command.Env = isolatedEnvironment(os.Environ())
 	command.Stdin = bytes.NewReader(input)

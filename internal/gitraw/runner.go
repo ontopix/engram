@@ -202,7 +202,11 @@ func (r gitRunner) output(ctx context.Context, input []byte, arguments ...string
 }
 
 func (r gitRunner) outputStatus(ctx context.Context, input []byte, arguments ...string) ([]byte, int, error) {
-	global := []string{"--no-pager", "--no-optional-locks", "--no-replace-objects", "-c", "core.hooksPath=" + os.DevNull}
+	global := []string{
+		"--no-pager", "--no-optional-locks", "--no-replace-objects",
+		"-c", "core.hooksPath=" + os.DevNull, "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false",
+		"-c", "maintenance.auto=false", "-c", "gc.auto=0",
+	}
 	if r.directory != "" {
 		global = append(global, "-C", r.directory)
 	}

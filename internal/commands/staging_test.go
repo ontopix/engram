@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"testing"
 
 	"github.com/ontopix/engram/internal/cli"
+	"github.com/ontopix/engram/internal/staging"
 )
 
 func TestAddCommandJSON(t *testing.T) {
@@ -29,6 +31,24 @@ func TestAddCommandInvalidSelectionIsUsage(t *testing.T) {
 	assertEnvelope(t, envelope, "add", cli.OutcomeError, 2)
 	if envelope.Error == nil || envelope.Error.Kind != cli.ErrorUsage {
 		t.Fatalf("error = %#v", envelope.Error)
+	}
+}
+
+func TestAddMutationFailureHasExactClosedJSON(t *testing.T) {
+	result := stagingFailure(&staging.Error{
+		Operation: "fault after Git index rename", Err: errors.New("fault"),
+		Mutation: &staging.Mutation{CheckoutChanged: true},
+	}, "stage logical selection")
+	if result.Outcome != cli.OutcomeError || result.Error == nil || result.Error.Kind != cli.ErrorRepository {
+		t.Fatalf("result = %#v", result)
+	}
+	encoded, err := json.Marshal(result.Value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"durable":false,"local_refs":[],"head":null,"checkout_changed":true,"remote":null,"recovery_required":false}`
+	if string(encoded) != want {
+		t.Fatalf("mutation JSON = %s, want %s", encoded, want)
 	}
 }
 

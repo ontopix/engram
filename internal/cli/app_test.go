@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"strings"
 	"testing"
 )
@@ -107,5 +108,38 @@ func TestAppRendersSuccessfulTextAndQuietSuppressesIt(t *testing.T) {
 	stdout.Reset()
 	if status := app.Run(context.Background(), []string{"--quiet", "status"}, &stdout, &stderr); status != 0 || stdout.Len() != 0 {
 		t.Fatalf("quiet status = %d, stdout = %q", status, stdout.String())
+	}
+}
+
+func TestAppUsesOptionalTextRendererOnlyForHumanOutput(t *testing.T) {
+	t.Parallel()
+	app := NewApp()
+	app.Handlers[CommandStatus] = HandlerFunc(func(context.Context, *Invocation) Result {
+		return Result{
+			Outcome: OutcomeOK,
+			Value: struct {
+				Changed bool `json:"changed"`
+			}{Changed: true},
+			Text: TextRendererFunc(func(output io.Writer) error {
+				_, err := io.WriteString(output, "specialized\n")
+				return err
+			}),
+		}
+	})
+	var stdout, stderr bytes.Buffer
+	if status := app.Run(context.Background(), []string{"status"}, &stdout, &stderr); status != 0 || stdout.String() != "specialized\n" || stderr.Len() != 0 {
+		t.Fatalf("text: status=%d stdout=%q stderr=%q", status, stdout.String(), stderr.String())
+	}
+	stdout.Reset()
+	if status := app.Run(context.Background(), []string{"status", "--format", "json"}, &stdout, &stderr); status != 0 || stderr.Len() != 0 {
+		t.Fatalf("JSON: status=%d stdout=%q stderr=%q", status, stdout.String(), stderr.String())
+	}
+	var envelope Envelope
+	if err := json.Unmarshal(stdout.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	value, ok := envelope.Result.(map[string]any)
+	if !ok || value["changed"] != true {
+		t.Fatalf("result=%#v", envelope.Result)
 	}
 }

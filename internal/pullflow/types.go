@@ -13,6 +13,7 @@ import (
 	"github.com/ontopix/engram/internal/checker"
 	"github.com/ontopix/engram/internal/managedread"
 	"github.com/ontopix/engram/internal/managedwrite"
+	"github.com/ontopix/engram/internal/rendezvous"
 )
 
 type State string
@@ -89,9 +90,19 @@ type HeadMutation struct {
 }
 
 type RecoveryResult struct {
-	Needed    bool      `json:"needed"`
-	Performed bool      `json:"performed"`
-	Mutation  *Mutation `json:"-"`
+	Needed           bool      `json:"needed"`
+	Performed        bool      `json:"performed"`
+	Durable          bool      `json:"durable"`
+	CheckoutChanged  bool      `json:"checkout_changed"`
+	RecoveryRequired bool      `json:"recovery_required"`
+	Mutation         *Mutation `json:"-"`
+}
+
+// RecoveryExpectation binds recovery to one canonical pull transition
+// inspected by an external recovery coordinator.
+type RecoveryExpectation struct {
+	OwnerToken  string
+	StateSHA256 string
 }
 
 type Error struct {
@@ -131,11 +142,21 @@ func KindOf(err error) ErrorKind {
 }
 
 func MutationOf(err error) *Mutation {
-	var typed *Error
-	if errors.As(err, &typed) {
+	if err == nil {
+		return nil
+	}
+	if typed, ok := err.(*Error); ok && typed.Mutation != nil {
 		return typed.Mutation
 	}
-	return nil
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		for _, nested := range joined.Unwrap() {
+			if mutation := MutationOf(nested); mutation != nil {
+				return mutation
+			}
+		}
+		return nil
+	}
+	return MutationOf(errors.Unwrap(err))
 }
 
 func typed(kind ErrorKind, operation string, err error) error {
@@ -156,16 +177,29 @@ type ManagedWriter interface {
 type Phase string
 
 const (
-	PhaseFetched         Phase = "fetched"
-	PhaseReplayActivated Phase = "replay-activated"
-	PhaseDraftPublished  Phase = "draft-published"
-	PhaseReplayCommitted Phase = "replay-committed"
-	PhaseFinalizing      Phase = "finalizing"
-	PhaseFastForwarding  Phase = "fast-forwarding"
-	PhaseRefUpdated      Phase = "ref-updated"
-	PhaseHeadUpdated     Phase = "head-updated"
-	PhaseIndexUpdated    Phase = "index-updated"
-	PhaseWorktreeUpdated Phase = "worktree-updated"
+	PhaseFetched                 Phase = "fetched"
+	PhaseReplayPlanPublished     Phase = "replay-plan-published"
+	PhaseReplayStatePublished    Phase = "replay-state-published"
+	PhaseReplayActivated         Phase = "replay-activated"
+	PhaseDraftPublished          Phase = "draft-published"
+	PhaseReplayCommitted         Phase = "replay-committed"
+	PhaseReplayUpdatePublished   Phase = "replay-update-published"
+	PhaseReplayUpdatePlan        Phase = "replay-update-plan"
+	PhaseReplayUpdateState       Phase = "replay-update-state"
+	PhaseTransitionPublished     Phase = "transition-published"
+	PhaseReplayTerminalPublished Phase = "replay-terminal-published"
+	PhaseFinalizing              Phase = "finalizing"
+	PhaseAborting                Phase = "aborting"
+	PhaseReplayTransitioned      Phase = "replay-transitioned"
+	PhaseReplayStateRemoved      Phase = "replay-state-removed"
+	PhaseReplayPlanRemoved       Phase = "replay-plan-removed"
+	PhaseReplayTerminalRemoved   Phase = "replay-terminal-removed"
+	PhaseFastForwarding          Phase = "fast-forwarding"
+	PhaseRefUpdated              Phase = "ref-updated"
+	PhaseHeadUpdated             Phase = "head-updated"
+	PhaseIndexUpdated            Phase = "index-updated"
+	PhaseWorktreeUpdated         Phase = "worktree-updated"
+	PhaseRecoveryLeased          Phase = "recovery-leased"
 )
 
 // Puller owns the network environment, the M4 writer, and deterministic fault
@@ -178,6 +212,15 @@ type Puller struct {
 	TempRoot    string
 	Fault       func(Phase) error
 
+	// afterRewriteCheck is a deterministic security race seam. Production
+	// pullers leave it nil. Repository-local URL rewrites appearing after this
+	// point cannot affect commands running in the private Git context.
+	afterRewriteCheck func()
+
+	// releaseReplayLease is a per-controller fault seam for the terminal
+	// cleanup ordering. Production pullers use RecoveryLease.Release directly.
+	releaseReplayLease func(*rendezvous.RecoveryLease) error
+
 	run commandRunner
 	mu  sync.Mutex
 }
@@ -185,6 +228,13 @@ type Puller struct {
 type commandRunner func(context.Context, string, string, []string, []byte, ...string) commandResult
 
 func New(writer ManagedWriter) *Puller { return &Puller{Writer: writer} }
+
+func (p *Puller) releaseTerminalLease(lease *rendezvous.RecoveryLease) error {
+	if p != nil && p.releaseReplayLease != nil {
+		return p.releaseReplayLease(lease)
+	}
+	return lease.Release()
+}
 
 func (p *Puller) checkpoint(phase Phase) error {
 	if p == nil || p.Fault == nil {

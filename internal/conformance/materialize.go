@@ -352,7 +352,11 @@ func (g fixtureGit) line(input []byte, arguments ...string) (string, error) {
 }
 
 func (g fixtureGit) run(input []byte, arguments ...string) ([]byte, error) {
-	global := []string{"--no-pager", "--no-optional-locks", "--no-replace-objects", "-c", "core.hooksPath=" + os.DevNull, "-C", g.directory}
+	global := []string{
+		"--no-pager", "--no-optional-locks", "--no-replace-objects",
+		"-c", "core.hooksPath=" + os.DevNull, "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false",
+		"-c", "maintenance.auto=false", "-c", "gc.auto=0", "-C", g.directory,
+	}
 	command := exec.Command(g.executable, append(global, arguments...)...)
 	command.Env = fixtureGitEnvironment(os.Environ())
 	command.Stdin = bytes.NewReader(input)

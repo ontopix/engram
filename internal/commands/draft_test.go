@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/ontopix/engram/internal/cli"
+	"github.com/ontopix/engram/internal/draft"
 )
 
 func TestDraftCommandsJSONAndStandardInput(t *testing.T) {
@@ -75,6 +77,65 @@ func TestDraftCommandsJSONAndStandardInput(t *testing.T) {
 	if movedBytes, err := os.ReadFile(filepath.Join(root, "topics", "stdin-moved.md")); err != nil || !bytes.HasSuffix(movedBytes, []byte(body)) {
 		t.Fatalf("moved bytes: %v %q", err, movedBytes)
 	}
+}
+
+func TestDraftMutationFailureHasExactClosedJSON(t *testing.T) {
+	result := draftFailure(&draft.Error{
+		Kind: draft.ErrorConflict, Operation: "fmt", Err: errors.New("fault"),
+		Mutation: &draft.Mutation{Durable: true, CheckoutChanged: true, RecoveryRequired: true},
+	}, "format catalogs")
+	if result.Outcome != cli.OutcomeError || result.Error == nil || result.Error.Kind != cli.ErrorConflict {
+		t.Fatalf("result = %#v", result)
+	}
+	encoded, err := json.Marshal(result.Value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"durable":true,"local_refs":[],"head":null,"checkout_changed":true,"remote":null,"recovery_required":true}`
+	if string(encoded) != want {
+		t.Fatalf("mutation JSON = %s, want %s", encoded, want)
+	}
+}
+
+func TestDraftRendezvousReleaseReportsExactResidualState(t *testing.T) {
+	injected := errors.New("injected release failure")
+	for _, test := range []struct {
+		name     string
+		residual bool
+	}{
+		{name: "removed lock", residual: false},
+		{name: "residual lock", residual: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := releaseDraftRendezvous(fakeDraftRendezvousHandle{mutated: true, recoveryRequired: test.residual, err: injected})
+			mutation, present := draft.MutationOf(err)
+			if !errors.Is(err, injected) || !present || !mutation.Durable || mutation.CheckoutChanged || mutation.RecoveryRequired != test.residual {
+				t.Fatalf("error = %v, mutation = %#v, present = %t", err, mutation, present)
+			}
+			result := draftFailure(err, "format catalogs")
+			closed, ok := result.Value.(cli.MutationResult)
+			if !ok || !closed.Durable || closed.CheckoutChanged || closed.RecoveryRequired != test.residual {
+				t.Fatalf("command result = %#v", result)
+			}
+		})
+	}
+	err := releaseDraftRendezvous(fakeDraftRendezvousHandle{mutated: true, recoveryRequired: true})
+	mutation, present := draft.MutationOf(err)
+	if err == nil || !present || !mutation.Durable || !mutation.RecoveryRequired {
+		t.Fatalf("silent residual release error = %v, mutation = %#v, present = %t", err, mutation, present)
+	}
+}
+
+type fakeDraftRendezvousHandle struct {
+	mutated          bool
+	recoveryRequired bool
+	err              error
+}
+
+func (h fakeDraftRendezvousHandle) Release() error { return h.err }
+func (h fakeDraftRendezvousHandle) Mutated() bool  { return h.mutated }
+func (h fakeDraftRendezvousHandle) RecoveryRequired() bool {
+	return h.recoveryRequired
 }
 
 func runDraftJSON(t *testing.T, root string, stdin *strings.Reader, arguments ...string) wireEnvelope {

@@ -14,3 +14,5 @@ func safeRegistryDirectoryMode(_ os.FileMode) bool { return true }
 // Windows does not expose a portable directory-fsync operation through os;
 // the file itself is flushed before the atomic replacement.
 func syncRegistryDirectory(_ string) error { return nil }
+
+func syncRegistryDirectoryState(_ string) (bool, error) { return true, nil }

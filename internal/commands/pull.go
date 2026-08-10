@@ -65,6 +65,10 @@ func registerPullFailure(app *cli.App, err error) {
 	app.Handlers[cli.CommandPull] = cli.HandlerFunc(func(context.Context, *cli.Invocation) cli.Result {
 		return commandError(cli.ErrorCapability, fmt.Sprintf("configure pull: %v", err))
 	})
+	// Replay exclusion remains a safety property even when the pull controller
+	// itself cannot be constructed. In particular, push must never publish the
+	// private replay branch merely because hook-trust configuration is broken.
+	RegisterReplayGuards(app)
 }
 
 // RegisterReplayGuards wraps status and every ordinary managed writer. It is
@@ -75,7 +79,7 @@ func RegisterReplayGuards(app *cli.App) {
 		return
 	}
 	wrapStatusForReplay(app)
-	for _, name := range []cli.CommandName{cli.CommandCommit, cli.CommandRevert} {
+	for _, name := range []cli.CommandName{cli.CommandCommit, cli.CommandRevert, cli.CommandPush} {
 		wrapWriteForReplay(app, name)
 	}
 }

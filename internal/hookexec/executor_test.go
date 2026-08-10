@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ontopix/engram/internal/checker"
 	"github.com/ontopix/engram/internal/gitraw"
@@ -182,6 +183,50 @@ func TestPrepareRejectsOriginalCandidateBoundaryBeforeMaterialization(t *testing
 	}
 }
 
+func TestPrepareAllowsHookToRepairNestedRoot(t *testing.T) {
+	requireShell(t)
+	fixture := newFixture(t, map[string]string{
+		"10-remove-nested-root.sh": `#!/usr/bin/env sh
+set -eu
+rm topics/.engram/root.yaml
+rmdir topics/.engram
+`,
+	})
+	nestedConfig := filepath.Join(fixture.candidate, "topics", ".engram")
+	if err := os.MkdirAll(nestedConfig, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := os.ReadFile(filepath.Join(fixture.store, ".engram", "root.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(nestedConfig, "root.yaml"), manifest, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	request := fixture.request(t, false)
+	before, _ := checker.CheckTransition(request.Base, request.Initial, false)
+	if before.Status != checker.StatusComplete || !hasFinding(before.Findings, "E102", "topics/.engram/root.yaml") {
+		t.Fatalf("repairable initial transition = %#v", before)
+	}
+
+	executor := New(&trustRecorder{trusted: true})
+	executor.TempRoot = fixture.temp
+	result, err := executor.Prepare(t.Context(), request)
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	if result.Validation.Status != checker.StatusComplete || result.Validation.HasErrors() || len(result.Changes) != 0 {
+		t.Fatalf("prepared result = %#v", result)
+	}
+	if len(result.Diagnostics) != 1 || result.Diagnostics[0].Hook != ".engram/hooks/prepare-changeset/10-remove-nested-root.sh" {
+		t.Fatalf("hook diagnostics = %#v", result.Diagnostics)
+	}
+	if _, exists := result.Final.Tree.Files["topics/.engram/root.yaml"]; exists {
+		t.Fatal("hook-repaired nested root remained in final candidate")
+	}
+}
+
 func TestPrepareRejectsNonzeroExitWithBoundedDiagnostics(t *testing.T) {
 	requireShell(t)
 	fixture := newFixture(t, map[string]string{
@@ -202,6 +247,26 @@ exit 7
 	var hookError *Error
 	if !errors.As(err, &hookError) || hookError.Diagnostic == nil || len(hookError.Diagnostic.Stdout) != 16 || !hookError.Diagnostic.StdoutTruncated || hookError.Diagnostic.Stderr != "rejected-stderr" {
 		t.Fatalf("hook diagnostic = %#v", hookError)
+	}
+}
+
+func TestPrepareBoundsHookWallTime(t *testing.T) {
+	requireShell(t)
+	fixture := newFixture(t, map[string]string{
+		"10-loop.sh": "#!/usr/bin/env sh\nwhile :; do :; done\n",
+	})
+	appendCandidate(t, fixture.candidate, "\nInitial candidate.\n")
+	executor := New(&trustRecorder{trusted: true})
+	executor.TempRoot = fixture.temp
+	executor.HookTimeout = 100 * time.Millisecond
+	started := time.Now()
+	result, err := executor.Prepare(t.Context(), fixture.request(t, false))
+	elapsed := time.Since(started)
+	if result != nil || KindOf(err) != ErrorHook || !errors.Is(err, ErrRejected) || !strings.Contains(err.Error(), "context deadline exceeded") {
+		t.Fatalf("result, error = %#v, %v", result, err)
+	}
+	if elapsed > 5*time.Second {
+		t.Fatalf("hook timeout returned after %s, want a bounded process wait", elapsed)
 	}
 }
 
@@ -370,6 +435,15 @@ func appendCandidate(t *testing.T, candidate, value string) {
 	if err := file.Close(); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func hasFinding(findings []checker.Finding, code, path string) bool {
+	for _, finding := range findings {
+		if finding.Code == code && finding.Path == path {
+			return true
+		}
+	}
+	return false
 }
 
 func requireShell(t *testing.T) {

@@ -31,6 +31,50 @@ const (
 var ErrExists = errors.New("managed recovery journal already exists")
 var ErrChanged = errors.New("managed recovery journal changed")
 
+// Effect records exact publication evidence when a journal operation fails
+// after its canonical name or one owned temporary may already have changed.
+// Visible does not imply crash durability; Durable is true only after the
+// containing directory has been flushed successfully.
+type Effect struct {
+	Visible bool
+	Durable bool
+}
+
+type EffectError struct {
+	Effect Effect
+	Err    error
+}
+
+func (e *EffectError) Error() string {
+	if e == nil || e.Err == nil {
+		return "journal operation failed after publication"
+	}
+	return e.Err.Error()
+}
+
+func (e *EffectError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
+// EffectOf returns mutation evidence carried by a failed journal operation.
+func EffectOf(err error) (Effect, bool) {
+	var typed *EffectError
+	if !errors.As(err, &typed) || typed == nil {
+		return Effect{}, false
+	}
+	return typed.Effect, true
+}
+
+func effectError(err error, visible, durable bool) error {
+	if err == nil {
+		return nil
+	}
+	return &EffectError{Effect: Effect{Visible: visible, Durable: durable}, Err: err}
+}
+
 type RefUpdate struct {
 	Ref    string  `json:"ref"`
 	Before *string `json:"before"`
@@ -133,10 +177,11 @@ func WritePending(name string, record Record) error {
 		}
 		return err
 	}
-	if err := syncRoot(directory); err != nil {
+	durable, err := syncRootState(directory)
+	if err != nil {
 		// The canonical journal may already be durable; never remove it after
 		// publication merely because the durability proof failed.
-		return err
+		return effectError(err, true, durable)
 	}
 	// The canonical name is already durable. Cleanup is retryable from the
 	// owner token and must not turn a published pending journal into a
@@ -205,7 +250,7 @@ func Remove(name string, expected []byte) error {
 	if record.State != Cancelled && record.State != Complete || !bytes.Equal(observed, expected) {
 		return ErrChanged
 	}
-	if err := CleanupOwnedTemporaries(name, expected); err != nil {
+	if _, err := CleanupOwnedTemporaries(name, expected); err != nil {
 		return err
 	}
 	directory, base, err := openJournalDirectory(name, false)
@@ -220,7 +265,11 @@ func Remove(name string, expected []byte) error {
 	if err := directory.Remove(base); err != nil {
 		return err
 	}
-	return syncRoot(directory)
+	durable, err := syncRootState(directory)
+	if err != nil {
+		return effectError(err, true, durable)
+	}
+	return nil
 }
 
 func validate(record Record) error {
@@ -367,20 +416,24 @@ func replace(name string, expected, updated []byte) error {
 	if err := directory.Rename(temporaryName, base); err != nil {
 		return err
 	}
-	return syncRoot(directory)
+	durable, err := syncRootState(directory)
+	if err != nil {
+		return effectError(err, true, durable)
+	}
+	return nil
 }
 
 // CleanupOwnedTemporaries removes only deterministic journal temporaries that
 // are cryptographically and structurally bound to the exact observed
 // canonical journal. Unknown or changed bytes are left untouched.
-func CleanupOwnedTemporaries(name string, expected []byte) error {
+func CleanupOwnedTemporaries(name string, expected []byte) (bool, error) {
 	record, observed, err := Read(name)
 	if err != nil || !bytes.Equal(observed, expected) {
-		return ErrChanged
+		return false, ErrChanged
 	}
 	directory, base, err := openJournalDirectory(name, false)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer directory.Close()
 	names := []string{
@@ -394,7 +447,7 @@ func CleanupOwnedTemporaries(name string, expected []byte) error {
 			continue
 		}
 		if err != nil {
-			return err
+			return false, err
 		}
 		owned := bytes.Equal(data, expected)
 		if !owned {
@@ -406,21 +459,25 @@ func CleanupOwnedTemporaries(name string, expected []byte) error {
 			}
 		}
 		if !owned {
-			return fmt.Errorf("foreign journal temporary %s", temporaryName)
+			return false, fmt.Errorf("foreign journal temporary %s", temporaryName)
 		}
 		current, err := stableRead(directory, temporaryName)
 		if err != nil || !bytes.Equal(current, data) {
-			return ErrChanged
+			return false, ErrChanged
 		}
 		if err := directory.Remove(temporaryName); err != nil {
-			return err
+			return false, err
 		}
 		removed = true
 	}
 	if removed {
-		return syncRoot(directory)
+		durable, err := syncRootState(directory)
+		if err != nil {
+			return durable, effectError(err, true, durable)
+		}
+		return true, nil
 	}
-	return nil
+	return false, nil
 }
 
 func replacementTemporaryPath(name string, expected []byte) string {
@@ -583,15 +640,24 @@ func sameFileState(left, right os.FileInfo) bool {
 }
 
 func syncRoot(root *os.Root) error {
+	_, err := syncRootState(root)
+	return err
+}
+
+func syncRootState(root *os.Root) (bool, error) {
 	if runtime.GOOS == "windows" {
-		return nil
+		return true, nil
 	}
 	directory, err := root.Open(".")
 	if err != nil {
-		return err
+		return false, err
 	}
-	err = directory.Sync()
-	return errors.Join(err, directory.Close())
+	syncErr := directory.Sync()
+	closeErr := directory.Close()
+	if syncErr != nil {
+		return false, errors.Join(syncErr, closeErr)
+	}
+	return true, closeErr
 }
 
 // Sort normalizes caller-owned slices before WritePending. It does not hide

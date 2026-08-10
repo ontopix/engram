@@ -330,7 +330,10 @@ func (a *snapshotAnalysis) compileSchemas() {
 }
 
 func (a *snapshotAnalysis) checkShadowing() {
-	for name := range a.schemas {
+	for name, file := range a.tree.Files {
+		if file.Role != snapshot.RoleSchema {
+			continue
+		}
 		scope := schemaScope(name)
 		if scope == "." {
 			continue

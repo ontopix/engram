@@ -14,7 +14,9 @@ change is one validated commit.
 | [`docs/spec/README.md`](docs/spec/README.md) | Normative core: snapshot format, validation, transitions, and Agent Protocol |
 | [`docs/spec/annex-git.md`](docs/spec/annex-git.md) | Normative Git binding for writable managed stores |
 | [`docs/cli/README.md`](docs/cli/README.md) | Non-normative reference CLI contract |
-| [`docs/implementation-plan.md`](docs/implementation-plan.md) | Phased implementation roadmap |
+| [`docs/implementation-plan.md`](docs/implementation-plan.md) | Completed implementation roadmap and release gates |
+| [`docs/operator-guide.md`](docs/operator-guide.md) | Installation, trust, synchronization, recovery, backup, and upgrades |
+| [`docs/release-notes.md`](docs/release-notes.md) | Current release-candidate scope and compatibility status |
 | [`docs/rationale.md`](docs/rationale.md) | Design reasoning and tradeoffs |
 | [`schemas/`](schemas/README.md) | Optional curated record types |
 | [`docs/spec/annex-skills.md`](docs/spec/annex-skills.md) | Canonical agent workflows |
@@ -37,16 +39,15 @@ normal filesystem tools.
 
 ## Status
 
-The v1 design is ready for implementation but remains a pre-release
-draft; no interface is stable until v1 is declared. The executable
-sequence and release gates live in the
-[implementation plan](docs/implementation-plan.md).
+The reference implementation is complete through M6 and is prepared as the
+`v1.0.0-rc.1` release candidate. The standard and observable CLI interfaces
+remain pre-release drafts until the final `v1.0.0` release; release-candidate
+interfaces can still change. Completed milestones and release evidence are
+recorded in the [implementation plan](docs/implementation-plan.md).
 
 Engram complements the [`.agents/` standard](https://github.com/apuigsech/dot-agents):
 projects can attach independent engram stores without merging their Git
 ownership or histories.
-
-Planned publication: `engram.ontopix.ai`.
 
 ## License
 

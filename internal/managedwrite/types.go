@@ -17,6 +17,7 @@ import (
 	"github.com/ontopix/engram/internal/checker"
 	"github.com/ontopix/engram/internal/gitraw"
 	"github.com/ontopix/engram/internal/hookexec"
+	"github.com/ontopix/engram/internal/journal"
 	"github.com/ontopix/engram/internal/rendezvous"
 )
 
@@ -40,6 +41,7 @@ const (
 	PhaseJournalComplete    Phase = "journal-complete"
 	PhaseLocksReleased      Phase = "locks-released"
 	PhaseJournalRemoved     Phase = "journal-removed"
+	PhaseRecoveryLeased     Phase = "recovery-leased"
 )
 
 type FailureKind string
@@ -74,14 +76,17 @@ var (
 // already accepted. UnknownCAS is true only when it cannot safely make either
 // claim; both cases deliberately retain the pending journal and locks.
 type Error struct {
-	Kind       FailureKind
-	Phase      Phase
-	Accepted   bool
-	UnknownCAS bool
-	Commit     string
-	Paths      []string
-	Validation *checker.Result
-	Err        error
+	Kind             FailureKind
+	Phase            Phase
+	Durable          bool
+	CheckoutChanged  bool
+	RecoveryRequired bool
+	Accepted         bool
+	UnknownCAS       bool
+	Commit           string
+	Paths            []string
+	Validation       *checker.Result
+	Err              error
 }
 
 func (e *Error) Error() string {
@@ -168,10 +173,20 @@ const (
 )
 
 type RecoveryResult struct {
-	Needed    bool           `json:"needed"`
-	Performed bool           `json:"performed"`
-	Action    RecoveryAction `json:"action"`
-	Accepted  *string        `json:"accepted"`
+	Needed           bool           `json:"needed"`
+	Performed        bool           `json:"performed"`
+	Action           RecoveryAction `json:"action"`
+	Accepted         *string        `json:"accepted"`
+	Durable          bool           `json:"durable"`
+	CheckoutChanged  bool           `json:"checkout_changed"`
+	RecoveryRequired bool           `json:"recovery_required"`
+}
+
+// RecoveryExpectation binds recovery to a canonical journal inspected by an
+// external recovery coordinator.
+type RecoveryExpectation struct {
+	OwnerToken  string
+	StateSHA256 string
 }
 
 // OwnerLiveness must return (false, nil) only when it has proved that the
@@ -187,6 +202,10 @@ type Engine struct {
 	Clock      func() time.Time
 	Fault      func(Phase) error
 	OwnerAlive OwnerLiveness
+	// WritePending and ReleaseLock are deterministic durability fault seams.
+	// Nil uses the production journal/rendezvous operations.
+	WritePending func(string, journal.Record) error
+	ReleaseLock  func(*rendezvous.Handle) error
 }
 
 var activeOwners sync.Map
@@ -210,6 +229,20 @@ func (e *Engine) checkpoint(phase Phase) error {
 		return fmt.Errorf("fault after %s: %w", phase, err)
 	}
 	return nil
+}
+
+func (e *Engine) writePending(name string, record journal.Record) error {
+	if e != nil && e.WritePending != nil {
+		return e.WritePending(name, record)
+	}
+	return journal.WritePending(name, record)
+}
+
+func (e *Engine) releaseLock(handle *rendezvous.Handle) error {
+	if e != nil && e.ReleaseLock != nil {
+		return e.ReleaseLock(handle)
+	}
+	return handle.Release()
 }
 
 func (e *Engine) markActive(token string, active bool) {

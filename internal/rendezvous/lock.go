@@ -40,16 +40,83 @@ type Owner struct {
 }
 
 type Handle struct {
-	owner   Owner
-	paths   []string // Acquisition order; release is reverse.
-	removed map[string]bool
+	owner         Owner
+	paths         []string // Acquisition order; release is reverse.
+	owners        map[string]Owner
+	removed       map[string]bool
+	mutated       bool
+	syncDirectory func(string) (bool, error)
 }
 
 // RecoveryLease serializes recognized recovery controllers. The persistent
 // lease file is harmless metadata; the authority is the host advisory lock,
 // which the kernel releases if the controller exits.
 type RecoveryLease struct {
-	file *os.File
+	file       *os.File
+	adoptFault func(int, string) error
+}
+
+type mutationError struct {
+	durable          bool
+	recoveryRequired bool
+	err              error
+}
+
+type replacementEffect struct {
+	visible          bool
+	durable          bool
+	recoveryRequired bool
+}
+
+func (e *mutationError) Error() string { return e.err.Error() }
+func (e *mutationError) Unwrap() error { return e.err }
+
+// DurableMutationOf reports whether a failed rendezvous operation is known to
+// have durably created, replaced, or removed at least one owned lock.
+func DurableMutationOf(err error) bool {
+	durable, _, _ := rendezvousMutationOf(err)
+	return durable
+}
+
+// RecoveryRequiredOf reports whether a failed rendezvous operation retained
+// at least one exact owned lock and therefore blocks another managed writer.
+func RecoveryRequiredOf(err error) bool {
+	_, recoveryRequired, _ := rendezvousMutationOf(err)
+	return recoveryRequired
+}
+
+func rendezvousMutationOf(err error) (durable, recoveryRequired, present bool) {
+	var visit func(error) (bool, bool, bool)
+	visit = func(current error) (bool, bool, bool) {
+		if current == nil {
+			return false, false, false
+		}
+		if mutation, ok := current.(*mutationError); ok {
+			nestedDurable, _, _ := visit(mutation.err)
+			return mutation.durable || nestedDurable, mutation.recoveryRequired, true
+		}
+		switch unwrapped := current.(type) {
+		case interface{ Unwrap() []error }:
+			joinedDurable := false
+			joinedRecoveryRequired := false
+			joinedPresent := false
+			for _, child := range unwrapped.Unwrap() {
+				childDurable, childRecoveryRequired, childPresent := visit(child)
+				if !childPresent {
+					continue
+				}
+				joinedDurable = joinedDurable || childDurable
+				joinedRecoveryRequired = childRecoveryRequired
+				joinedPresent = true
+			}
+			return joinedDurable, joinedRecoveryRequired, joinedPresent
+		case interface{ Unwrap() error }:
+			return visit(unwrapped.Unwrap())
+		default:
+			return false, false, false
+		}
+	}
+	return visit(err)
 }
 
 // RefPath returns the normative lock path for one exact full refname.
@@ -108,10 +175,21 @@ func acquire(paths []string) (*Handle, error) {
 	}}
 	for _, name := range paths {
 		if err := create(name, handle.owner); err != nil {
-			_ = handle.releaseCreated()
-			return nil, err
+			cleanupErr := handle.releaseCreated()
+			durable := handle.Mutated() || DurableMutationOf(err) || DurableMutationOf(cleanupErr)
+			recoveryRequired := RecoveryRequiredOf(err) || RecoveryRequiredOf(cleanupErr)
+			joined := errors.Join(err, cleanupErr)
+			if durable || recoveryRequired {
+				joined = &mutationError{durable: durable, recoveryRequired: recoveryRequired, err: joined}
+			}
+			return nil, joined
 		}
 		handle.paths = append(handle.paths, name)
+		if handle.owners == nil {
+			handle.owners = make(map[string]Owner)
+		}
+		handle.owners[name] = handle.owner
+		handle.mutated = true
 	}
 	return handle, nil
 }
@@ -126,18 +204,46 @@ func (h *Handle) SetPhase(phase Phase) error {
 	}
 	for _, name := range h.paths {
 		owner, err := Read(name)
-		if err != nil || owner != h.owner {
+		if err != nil || owner != h.ownerAt(name) {
 			return ErrOwnership
 		}
 	}
 	updated := h.owner
 	updated.Phase = phase
+	transitionDurable := false
+	var transitionErr error
 	for _, name := range h.paths {
-		if err := replaceOwned(name, h.owner, updated); err != nil {
-			return err
+		effect, err := replaceOwned(name, h.ownerAt(name), updated, h.syncLock)
+		transitionDurable = transitionDurable || effect.durable
+		h.mutated = h.mutated || effect.durable
+		if effect.visible {
+			h.setOwner(name, updated)
+		}
+		if err != nil {
+			transitionErr = errors.Join(transitionErr, fmt.Errorf("advance %s: %w", name, err))
+			// A visible exact replacement can be rolled forward: continue so
+			// the remaining locks reach the same phase despite a sync tail.
+			if !effect.visible || !effect.recoveryRequired {
+				break
+			}
 		}
 	}
-	h.owner = updated
+	allUpdated := true
+	for _, name := range h.paths {
+		if !ownedLockPresent(name, updated) {
+			allUpdated = false
+			break
+		}
+	}
+	if allUpdated {
+		h.owner = updated
+	}
+	if transitionErr != nil {
+		return rendezvousMutationError(transitionDurable, h.RecoveryRequired(), transitionErr)
+	}
+	if !allUpdated {
+		return rendezvousMutationError(transitionDurable, h.RecoveryRequired(), ErrOwnership)
+	}
 	return nil
 }
 
@@ -150,8 +256,9 @@ func (h *Handle) Release() error {
 	for len(h.paths) != 0 {
 		index := len(h.paths) - 1
 		name := h.paths[index]
+		expected := h.ownerAt(name)
 		if h.removed == nil || !h.removed[name] {
-			removed, err := removeOwned(name, h.owner)
+			removed, err := removeOwned(name, expected)
 			if h.removed == nil {
 				h.removed = make(map[string]bool)
 			}
@@ -159,16 +266,61 @@ func (h *Handle) Release() error {
 				h.removed[name] = true
 			}
 			if err != nil {
-				return err
+				return rendezvousMutationError(h.mutated, ownedLockPresent(name, expected), err)
 			}
 		}
-		if err := syncLockDirectory(name); err != nil {
-			return err
+		durable, syncErr := h.syncLock(name)
+		if durable {
+			h.mutated = true
+		}
+		if syncErr != nil {
+			return rendezvousMutationError(h.mutated, ownedLockPresent(name, expected), syncErr)
+		}
+		if !durable {
+			return rendezvousMutationError(h.mutated, ownedLockPresent(name, expected), errors.New("rendezvous directory sync reported no durability"))
+		}
+		if h.removed[name] {
+			h.mutated = true
 		}
 		delete(h.removed, name)
+		delete(h.owners, name)
 		h.paths = h.paths[:index]
 	}
 	return nil
+}
+
+func rendezvousMutationError(durable, recoveryRequired bool, err error) error {
+	if err == nil || !durable && !recoveryRequired {
+		return err
+	}
+	return &mutationError{durable: durable, recoveryRequired: recoveryRequired, err: err}
+}
+
+func (h *Handle) syncLock(name string) (bool, error) {
+	if h != nil && h.syncDirectory != nil {
+		return h.syncDirectory(name)
+	}
+	err := syncLockDirectory(name)
+	return err == nil, err
+}
+
+func (h *Handle) ownerAt(name string) Owner {
+	if h != nil && h.owners != nil {
+		if owner, ok := h.owners[name]; ok {
+			return owner
+		}
+	}
+	if h == nil {
+		return Owner{}
+	}
+	return h.owner
+}
+
+func (h *Handle) setOwner(name string, owner Owner) {
+	if h.owners == nil {
+		h.owners = make(map[string]Owner)
+	}
+	h.owners[name] = owner
 }
 
 func (h *Handle) Owner() Owner {
@@ -178,6 +330,27 @@ func (h *Handle) Owner() Owner {
 	return h.owner
 }
 
+// Mutated reports whether this handle is known to have durably created,
+// adopted, advanced, or removed owned lock state.
+func (h *Handle) Mutated() bool {
+	return h != nil && h.mutated
+}
+
+// RecoveryRequired reports whether this handle still owns at least one named
+// rendezvous lock. It is intentionally an exact owner check so callers do not
+// attribute a replacement writer's lock to the failed operation.
+func (h *Handle) RecoveryRequired() bool {
+	if h == nil {
+		return false
+	}
+	for _, name := range h.paths {
+		if ownedLockPresent(name, h.ownerAt(name)) {
+			return true
+		}
+	}
+	return false
+}
+
 // AcquireRecovery obtains a process-lifetime exclusive lease for one
 // worktree's recovery. The file remains after release; it is not a lifecycle
 // signal and contains no owner authority.
@@ -185,7 +358,16 @@ func AcquireRecovery(worktreeGitDir string) (*RecoveryLease, error) {
 	if worktreeGitDir == "" {
 		return nil, fmt.Errorf("recovery rendezvous requires a worktree Git directory")
 	}
-	name := filepath.Join(worktreeGitDir, "engram", "locks", "recovery.lease")
+	return AcquireRecoveryPath(filepath.Join(worktreeGitDir, "engram", "locks", "recovery.lease"))
+}
+
+// AcquireRecoveryPath obtains the same process-lifetime, nonblocking advisory
+// lease at one exact absolute path. The persistent regular file contains no
+// owner authority and is not itself recovery-required state.
+func AcquireRecoveryPath(name string) (*RecoveryLease, error) {
+	if !filepath.IsAbs(name) || filepath.Clean(name) != name || filepath.Base(name) == "." || filepath.Base(name) == string(filepath.Separator) {
+		return nil, fmt.Errorf("recovery lease path must be absolute and clean")
+	}
 	directory, base, err := openLockDirectory(name, true)
 	if err != nil {
 		return nil, err
@@ -198,12 +380,32 @@ func AcquireRecovery(worktreeGitDir string) (*RecoveryLease, error) {
 	if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
 		return nil, statErr
 	}
-	file, err := directory.OpenFile(base, os.O_RDWR|os.O_CREATE, 0o600)
+	var file *os.File
+	if errors.Is(statErr, os.ErrNotExist) {
+		// Publish a previously absent lease with O_EXCL. A racing creator may
+		// win between Lstat and OpenFile; in that case open only its already
+		// named inode. Never retry creation after observing EEXIST, because a
+		// subsequent disappearance could mean another process still holds an
+		// advisory lock on an unlinked inode.
+		file, err = directory.OpenFile(base, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
+		if errors.Is(err, os.ErrExist) {
+			before, statErr = directory.Lstat(base)
+			if statErr != nil {
+				return nil, errors.Join(ErrOwnership, statErr)
+			}
+			if before.Mode()&os.ModeSymlink != 0 || !before.Mode().IsRegular() {
+				return nil, fmt.Errorf("unsafe recovery lease file")
+			}
+			file, err = directory.OpenFile(base, os.O_RDWR, 0)
+		}
+	} else {
+		file, err = directory.OpenFile(base, os.O_RDWR, 0)
+	}
 	if err != nil {
 		return nil, err
 	}
 	opened, err := file.Stat()
-	if err != nil || !opened.Mode().IsRegular() || statErr == nil && !os.SameFile(before, opened) {
+	if err != nil || !opened.Mode().IsRegular() || before != nil && !os.SameFile(before, opened) {
 		_ = file.Close()
 		if err != nil {
 			return nil, err
@@ -218,15 +420,14 @@ func AcquireRecovery(worktreeGitDir string) (*RecoveryLease, error) {
 		}
 		return nil, fmt.Errorf("recovery lease changed while opening")
 	}
-	if statErr != nil {
-		if err := file.Sync(); err != nil {
-			_ = file.Close()
-			return nil, err
-		}
-		if err := syncRoot(directory); err != nil {
-			_ = file.Close()
-			return nil, err
-		}
+	// Every contender performs the creation durability barrier. A process
+	// that opened the inode created by a peer can otherwise win the advisory
+	// lock and return before that peer has synced the new directory entry.
+	if err := file.Sync(); err != nil {
+		return nil, errors.Join(err, file.Close())
+	}
+	if err := syncRoot(directory); err != nil {
+		return nil, errors.Join(err, file.Close())
 	}
 	if err := lockRecoveryFile(file); err != nil {
 		_ = file.Close()
@@ -234,6 +435,18 @@ func AcquireRecovery(worktreeGitDir string) (*RecoveryLease, error) {
 			return nil, ErrBusy
 		}
 		return nil, err
+	}
+	// The advisory lock protects the opened inode, so prove the pathname still
+	// names that inode after acquisition. Otherwise a replacement path could
+	// admit a second controller holding a different lock concurrently.
+	lockedName, err := directory.Lstat(base)
+	if err != nil || lockedName.Mode()&os.ModeSymlink != 0 || !lockedName.Mode().IsRegular() || !os.SameFile(opened, lockedName) {
+		unlockErr := unlockRecoveryFile(file)
+		closeErr := file.Close()
+		if err == nil {
+			err = ErrOwnership
+		}
+		return nil, errors.Join(err, unlockErr, closeErr, fmt.Errorf("recovery lease changed after locking"))
 	}
 	return &RecoveryLease{file: file}, nil
 }
@@ -294,18 +507,33 @@ func (l *RecoveryLease) AdoptPaths(token string, phase Phase, paths ...string) (
 		return nil, err
 	}
 	after := Owner{Version: 1, Token: token, PID: os.Getpid(), Hostname: hostname, StartedAt: time.Now().UTC().Format(time.RFC3339Nano), Phase: phase}
-	for _, name := range ordered {
+	mutated := false
+	for index, name := range ordered {
 		owner, err := Read(name)
 		if err != nil || owner.Token != token || owner.Phase != phase {
-			return nil, ErrOwnership
+			return nil, &mutationError{durable: mutated, recoveryRequired: true, err: ErrOwnership}
 		}
-		if err := replaceOwned(name, owner, after); err != nil {
-			return nil, err
+		effect, err := replaceOwned(name, owner, after, func(name string) (bool, error) {
+			syncErr := syncLockDirectory(name)
+			return syncErr == nil, syncErr
+		})
+		mutated = mutated || effect.durable
+		if err != nil {
+			return nil, &mutationError{durable: mutated, recoveryRequired: true, err: err}
+		}
+		if l.adoptFault != nil {
+			if err := l.adoptFault(index, name); err != nil {
+				return nil, &mutationError{durable: mutated, recoveryRequired: true, err: err}
+			}
 		}
 	}
 	// Preserve the caller's acquisition order when it is known. Generic path
 	// adoption uses byte order; Release still runs it in reverse.
-	handle := &Handle{owner: after, paths: append([]string(nil), ordered...)}
+	owners := make(map[string]Owner, len(ordered))
+	for _, name := range ordered {
+		owners[name] = after
+	}
+	handle := &Handle{owner: after, paths: append([]string(nil), ordered...), owners: owners, mutated: mutated}
 	return handle, nil
 }
 
@@ -373,56 +601,93 @@ func create(name string, owner Owner) error {
 		_ = directory.Remove(base)
 		return err
 	}
-	return syncRoot(directory)
+	if err := syncRoot(directory); err != nil {
+		// Publication is visible but not known durable. Remove only the exact
+		// owner we just created; a failed cleanup remains an explicit
+		// recovery-bearing rendezvous error rather than an ordinary retry.
+		removed, removeErr := removeOwned(name, owner)
+		var cleanupSyncErr error
+		if removed {
+			cleanupSyncErr = syncLockDirectory(name)
+		}
+		residual := ownedLockPresent(name, owner)
+		durable := removed && cleanupSyncErr == nil
+		return &mutationError{
+			durable: durable, recoveryRequired: residual,
+			err: errors.Join(err, removeErr, cleanupSyncErr),
+		}
+	}
+	return nil
 }
 
-func replaceOwned(name string, before, after Owner) error {
+func replaceOwned(name string, before, after Owner, syncDirectory func(string) (bool, error)) (replacementEffect, error) {
+	effect := replacementEffect{}
 	directory, base, err := openLockDirectory(name, false)
 	if err != nil {
-		return err
+		return effect, err
 	}
 	defer directory.Close()
 	current, err := readOwnerAt(directory, base)
 	if err != nil || current != before {
-		return ErrOwnership
+		return effect, ErrOwnership
 	}
 	data, err := json.Marshal(after)
 	if err != nil {
-		return err
+		return effect, err
 	}
 	data = append(data, '\n')
 	temporaryName, temporary, err := createLockTemporary(directory)
 	if err != nil {
-		return err
+		return effect, err
 	}
 	defer directory.Remove(temporaryName)
 	if err := temporary.Chmod(0o600); err != nil {
 		temporary.Close()
-		return err
+		return effect, err
 	}
 	if _, err := temporary.Write(data); err != nil {
 		temporary.Close()
-		return err
+		return effect, err
 	}
 	if err := temporary.Sync(); err != nil {
 		temporary.Close()
-		return err
+		return effect, err
 	}
 	if err := temporary.Close(); err != nil {
-		return err
+		return effect, err
 	}
 	current, err = readOwnerAt(directory, base)
 	if err != nil || current != before {
-		return ErrOwnership
+		return effect, ErrOwnership
 	}
 	if err := directory.Rename(temporaryName, base); err != nil {
-		return err
+		return effect, err
 	}
-	return syncRoot(directory)
+	effect.visible = true
+	effect.recoveryRequired = ownedLockPresent(name, after)
+	if syncDirectory == nil {
+		syncDirectory = func(string) (bool, error) {
+			syncErr := syncRoot(directory)
+			return syncErr == nil, syncErr
+		}
+	}
+	effect.durable, err = syncDirectory(name)
+	effect.recoveryRequired = ownedLockPresent(name, after)
+	if err != nil {
+		return effect, err
+	}
+	if !effect.durable {
+		return effect, errors.New("rendezvous replacement directory sync reported no durability")
+	}
+	if !effect.recoveryRequired {
+		return effect, ErrOwnership
+	}
+	return effect, nil
 }
 
 func (h *Handle) releaseCreated() error {
 	var result error
+	paths := append([]string(nil), h.paths...)
 	for index := len(h.paths) - 1; index >= 0; index-- {
 		name := h.paths[index]
 		owner, err := Read(name)
@@ -430,12 +695,28 @@ func (h *Handle) releaseCreated() error {
 			removed, removeErr := removeOwned(name, h.owner)
 			result = errors.Join(result, removeErr)
 			if removed && removeErr == nil {
-				result = errors.Join(result, syncLockDirectory(name))
+				syncErr := syncLockDirectory(name)
+				result = errors.Join(result, syncErr)
+				if syncErr == nil {
+					h.mutated = true
+				}
 			}
 		}
 	}
 	h.paths = nil
+	residual := false
+	for _, name := range paths {
+		residual = residual || ownedLockPresent(name, h.owner)
+	}
+	if result != nil && (h.mutated || residual) {
+		return &mutationError{durable: h.mutated, recoveryRequired: residual, err: result}
+	}
 	return result
+}
+
+func ownedLockPresent(name string, expected Owner) bool {
+	owner, err := Read(name)
+	return err == nil && owner == expected
 }
 
 func writerPaths(commonGitDir, worktreeGitDir string, refnames []string) ([]string, error) {

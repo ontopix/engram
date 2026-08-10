@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"reflect"
 	"testing"
+
+	"github.com/ontopix/engram/internal/snapshot"
 )
 
 func TestFindingIdentityOrderingAndErrorClass(t *testing.T) {
@@ -38,5 +40,15 @@ func TestEmptyValidationFindingsEncodeAsArray(t *testing.T) {
 	}
 	if string(encoded) != `{"target":"changeset","status":"indeterminate","findings":[]}` {
 		t.Fatalf("encoded result = %s", encoded)
+	}
+}
+
+func TestUnavailableCandidateStillReportsIndependentBasePreflightFinding(t *testing.T) {
+	t.Parallel()
+	base := &Snapshot{Tree: &snapshot.Tree{Issues: []snapshot.Issue{{Code: "E103", Path: "escape"}}}}
+	result, _ := CheckTransition(base, nil, false)
+	want := []Finding{{Code: "E103", Path: "escape"}}
+	if result.Status != StatusIndeterminate || !reflect.DeepEqual(result.Findings, want) {
+		t.Fatalf("result = %#v, want indeterminate with %#v", result, want)
 	}
 }

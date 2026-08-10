@@ -29,15 +29,29 @@ func RegisterHooks(app *cli.App) {
 // RegisterHooks. registryPath is still checked by hooks.Registry to ensure it
 // cannot be controlled from inside the selected store.
 func RegisterHooksAt(app *cli.App, registryPath string) {
+	registry, err := hooks.NewRegistry(registryPath)
+	if err != nil {
+		registerHookConfigurationFailure(app, err)
+		return
+	}
+	registerHooksWith(app, registry)
+}
+
+type hookRegistry interface {
+	List(string, hooks.Set) (hooks.Selection, error)
+	Trust(string, hooks.Set) (hooks.Selection, error)
+	Revoke(string, ...string) (hooks.RevokeResult, error)
+}
+
+func registerHooksWith(app *cli.App, registry hookRegistry) {
 	if app == nil {
 		return
 	}
 	if app.Handlers == nil {
 		app.Handlers = make(map[cli.CommandName]cli.Handler)
 	}
-	registry, err := hooks.NewRegistry(registryPath)
-	if err != nil {
-		registerHookConfigurationFailure(app, err)
+	if registry == nil {
+		registerHookConfigurationFailure(app, errors.New("hook trust registry is unavailable"))
 		return
 	}
 	app.Handlers[cli.CommandHooksList] = cli.HandlerFunc(func(ctx context.Context, invocation *cli.Invocation) cli.Result {
@@ -74,7 +88,7 @@ type hookSelectionResult struct {
 	Hooks   []hooks.Hook `json:"hooks"`
 }
 
-func runHooksList(ctx context.Context, invocation *cli.Invocation, registry *hooks.Registry) cli.Result {
+func runHooksList(ctx context.Context, invocation *cli.Invocation, registry hookRegistry) cli.Result {
 	root, state, set, result := selectHooks(ctx, invocation)
 	if result != nil {
 		return *result
@@ -86,7 +100,7 @@ func runHooksList(ctx context.Context, invocation *cli.Invocation, registry *hoo
 	return cli.Result{Outcome: cli.OutcomeOK, Value: hookResult(state, selection)}
 }
 
-func runHooksTrust(ctx context.Context, invocation *cli.Invocation, registry *hooks.Registry) cli.Result {
+func runHooksTrust(ctx context.Context, invocation *cli.Invocation, registry hookRegistry) cli.Result {
 	root, state, set, result := selectHooks(ctx, invocation)
 	if result != nil {
 		return *result
@@ -98,7 +112,7 @@ func runHooksTrust(ctx context.Context, invocation *cli.Invocation, registry *ho
 	return cli.Result{Outcome: cli.OutcomeOK, Value: hookResult(state, selection)}
 }
 
-func runHooksRevoke(ctx context.Context, invocation *cli.Invocation, registry *hooks.Registry) cli.Result {
+func runHooksRevoke(ctx context.Context, invocation *cli.Invocation, registry hookRegistry) cli.Result {
 	store, result := openManaged(ctx, invocation)
 	if result != nil {
 		return *result
@@ -178,11 +192,14 @@ func hookFailure(err error, action string) cli.Result {
 		return commandError(cli.ErrorInternal, action+": unknown failure")
 	}
 	kind := cli.ErrorRepository
+	effect, hasEffect := hooks.EffectOf(err)
 	switch {
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		kind = cli.ErrorCancelled
 	case errors.Is(err, hooks.ErrConcurrent):
 		kind = cli.ErrorConcurrency
+	case errors.Is(err, hooks.ErrInvalidName):
+		kind = cli.ErrorUsage
 	case errors.Is(err, hooks.ErrCorruptRegistry), errors.Is(err, hooks.ErrUnsafePermissions),
 		errors.Is(err, hooks.ErrConfigInsideStore), errors.Is(err, hooks.ErrPhysicalIdentity):
 		kind = cli.ErrorIntegration
@@ -191,5 +208,15 @@ func hookFailure(err error, action string) cli.Result {
 	case errors.Is(err, fs.ErrPermission):
 		kind = cli.ErrorIO
 	}
-	return commandError(kind, fmt.Sprintf("%s: %v", action, err))
+	if hasEffect && kind == cli.ErrorRepository {
+		kind = cli.ErrorIO
+	}
+	result := commandError(kind, fmt.Sprintf("%s: %v", action, err))
+	if hasEffect {
+		mutation := cli.NewMutationResult()
+		mutation.Durable = effect.Durable
+		mutation.RecoveryRequired = effect.RecoveryRequired
+		result.Value = mutation
+	}
+	return result
 }

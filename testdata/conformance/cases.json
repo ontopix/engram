@@ -279,6 +279,196 @@
       }
     },
     {
+      "id": "changeset-causal-base-record-finding",
+      "description": "Changing a base record whose frontmatter is unavailable emits its causal E201 and makes the transition indeterminate.",
+      "kind": "changeset",
+      "base": {
+        "operations": [
+          {
+            "operation": "write_text",
+            "path": "causal.md",
+            "source": "testdata/conformance/files/invalid-record.md"
+          }
+        ]
+      },
+      "candidate": {
+        "operations": []
+      },
+      "expected": {
+        "status": "indeterminate",
+        "findings": [
+          {"code": "E201", "path": "causal.md"}
+        ]
+      }
+    },
+    {
+      "id": "changeset-causal-base-schema-finding",
+      "description": "Changing a schema whose base components are unavailable emits its causal E303 and makes E504 indeterminate.",
+      "kind": "changeset",
+      "base": {
+        "operations": [
+          {
+            "operation": "write_text",
+            "path": ".engram/schemas/evolving.md",
+            "source": "testdata/conformance/files/invalid-record.md"
+          }
+        ]
+      },
+      "candidate": {
+        "operations": [
+          {
+            "operation": "write_text",
+            "path": ".engram/schemas/evolving.md",
+            "source": "testdata/conformance/files/schema-version-candidate.md"
+          }
+        ]
+      },
+      "expected": {
+        "status": "indeterminate",
+        "findings": [
+          {"code": "E303", "path": ".engram/schemas/evolving.md"}
+        ]
+      }
+    },
+    {
+      "id": "changeset-causal-base-record-schema-finding",
+      "description": "Deleting a record whose selected base schema is unparsable emits the schema's causal E303 and makes its policy check indeterminate.",
+      "kind": "changeset",
+      "base": {
+        "operations": [
+          {
+            "operation": "write_text",
+            "path": ".engram/schemas/fixed.md",
+            "source": "testdata/conformance/files/invalid-record.md"
+          },
+          {
+            "operation": "write_text",
+            "path": "fixed.md",
+            "source": "testdata/conformance/files/immutable-record.md"
+          }
+        ]
+      },
+      "candidate": {
+        "operations": []
+      },
+      "expected": {
+        "status": "indeterminate",
+        "findings": [
+          {"code": "E303", "path": ".engram/schemas/fixed.md"}
+        ]
+      }
+    },
+    {
+      "id": "changeset-base-noncausal-findings-omitted",
+      "description": "Repairing a base description defect does not union unrelated E204 or E301 findings when policy inputs remain available.",
+      "kind": "changeset",
+      "base": {
+        "operations": [
+          {
+            "operation": "write_text",
+            "path": "repair.md",
+            "source": "testdata/conformance/files/bad-description.md"
+          }
+        ]
+      },
+      "candidate": {
+        "operations": [
+          {
+            "operation": "write_text",
+            "path": "repair.md",
+            "source": "testdata/conformance/files/removed-target.md"
+          }
+        ]
+      },
+      "expected": {
+        "status": "complete",
+        "findings": [],
+        "not_findings": ["E204", "E301"]
+      }
+    },
+    {
+      "id": "changeset-causal-base-preflight-finding",
+      "description": "A base boundary failure emits its causal E103 before changeset construction and makes the transition indeterminate.",
+      "kind": "changeset",
+      "base": {
+        "operations": [
+          {
+            "operation": "write_symlink",
+            "path": "escape",
+            "target": "README.md"
+          }
+        ]
+      },
+      "candidate": {
+        "operations": []
+      },
+      "expected": {
+        "status": "indeterminate",
+        "findings": [
+          {"code": "E103", "path": "escape"}
+        ]
+      }
+    },
+    {
+      "id": "changeset-causal-findings-deduplicate",
+      "description": "The same preflight identity in candidate and required-base evaluation is emitted once.",
+      "kind": "changeset",
+      "base": {
+        "operations": [
+          {
+            "operation": "write_symlink",
+            "path": "escape",
+            "target": "README.md"
+          }
+        ]
+      },
+      "candidate": {
+        "operations": [
+          {
+            "operation": "write_symlink",
+            "path": "escape",
+            "target": "README.md"
+          }
+        ]
+      },
+      "expected": {
+        "status": "indeterminate",
+        "findings": [
+          {"code": "E103", "path": "escape"}
+        ]
+      }
+    },
+    {
+      "id": "changeset-causal-findings-use-normative-order",
+      "description": "Candidate and causal base findings are merged in UTF-8 path order rather than evaluation order.",
+      "kind": "changeset",
+      "base": {
+        "operations": [
+          {
+            "operation": "write_text",
+            "path": "z-causal.md",
+            "source": "testdata/conformance/files/invalid-record.md"
+          }
+        ]
+      },
+      "candidate": {
+        "operations": [
+          {
+            "operation": "write_text",
+            "path": "a-candidate.md",
+            "source": "testdata/conformance/files/invalid-record.md"
+          }
+        ]
+      },
+      "expected": {
+        "status": "indeterminate",
+        "findings": [
+          {"code": "E201", "path": "a-candidate.md"},
+          {"code": "E201", "path": "z-causal.md"}
+        ]
+      }
+    },
+    {
       "id": "nfd-entry-name",
       "description": "A decomposed entry name produces E107 at the containing directory and is pruned.",
       "kind": "snapshot",
@@ -395,6 +585,29 @@
       "expected": {
         "findings": [
           {"code": "E102", "path": "nested/.engram/root.yaml"}
+        ]
+      }
+    },
+    {
+      "id": "changeset-nested-root-is-repairable-static-input",
+      "description": "A nested root is a complete changeset result with E102 rather than a preflight-indeterminate transition.",
+      "kind": "changeset",
+      "base": {
+        "operations": []
+      },
+      "candidate": {
+        "operations": [
+          {
+            "operation": "write_text",
+            "path": "topics/.engram/root.yaml",
+            "source": "examples/minimal/.engram/root.yaml"
+          }
+        ]
+      },
+      "expected": {
+        "status": "complete",
+        "findings": [
+          {"code": "E102", "path": "topics/.engram/root.yaml"}
         ]
       }
     },
@@ -667,6 +880,81 @@
         "findings": [
           {"code": "E304", "path": "area/.engram/schemas/note.md"}
         ]
+      }
+    },
+    {
+      "id": "schema-shadowing-unparsable-content",
+      "description": "An unparsable nearer schema still shadows the ancestor candidate and emits E303 plus E304.",
+      "kind": "snapshot",
+      "snapshot": {
+        "operations": [
+          {
+            "operation": "write_text",
+            "path": "area/README.md",
+            "source": "testdata/conformance/files/root-catalog-none.md"
+          },
+          {
+            "operation": "write_text",
+            "path": "area/.engram/schemas/note.md",
+            "source": "testdata/conformance/files/invalid-record.md"
+          }
+        ]
+      },
+      "expected": {
+        "findings": [
+          {"code": "E303", "path": "area/.engram/schemas/note.md"},
+          {"code": "E304", "path": "area/.engram/schemas/note.md"}
+        ]
+      }
+    },
+    {
+      "id": "schema-shadowing-invalid-utf8",
+      "description": "A nearer schema with invalid text still shadows the ancestor candidate and emits E108 plus E304.",
+      "kind": "snapshot",
+      "snapshot": {
+        "operations": [
+          {
+            "operation": "write_text",
+            "path": "area/README.md",
+            "source": "testdata/conformance/files/root-catalog-none.md"
+          },
+          {
+            "operation": "write_base64",
+            "path": "area/.engram/schemas/note.md",
+            "content": "/w=="
+          }
+        ]
+      },
+      "expected": {
+        "findings": [
+          {"code": "E108", "path": "area/.engram/schemas/note.md"},
+          {"code": "E304", "path": "area/.engram/schemas/note.md"}
+        ]
+      }
+    },
+    {
+      "id": "schema-invalid-content-without-shadowing",
+      "description": "An unparsable uniquely named schema emits E303 without a false E304.",
+      "kind": "snapshot",
+      "snapshot": {
+        "operations": [
+          {
+            "operation": "write_text",
+            "path": "area/README.md",
+            "source": "testdata/conformance/files/root-catalog-none.md"
+          },
+          {
+            "operation": "write_text",
+            "path": "area/.engram/schemas/broken.md",
+            "source": "testdata/conformance/files/invalid-record.md"
+          }
+        ]
+      },
+      "expected": {
+        "findings": [
+          {"code": "E303", "path": "area/.engram/schemas/broken.md"}
+        ],
+        "not_findings": ["E304"]
       }
     },
     {

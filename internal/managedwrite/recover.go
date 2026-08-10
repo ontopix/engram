@@ -3,6 +3,8 @@ package managedwrite
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -19,6 +21,16 @@ import (
 // ambiguous pending-old/other state returns FailureRecovery and deliberately
 // retains the adopted rendezvous locks and journal.
 func (e *Engine) Recover(ctx context.Context, storeRoot string) (*RecoveryResult, error) {
+	return e.recover(ctx, storeRoot, nil)
+}
+
+// RecoverExpected binds recovery to the exact canonical journal approved by
+// an external read-only recovery coordinator.
+func (e *Engine) RecoverExpected(ctx context.Context, storeRoot string, expected RecoveryExpectation) (*RecoveryResult, error) {
+	return e.recover(ctx, storeRoot, &expected)
+}
+
+func (e *Engine) recover(ctx context.Context, storeRoot string, expected *RecoveryExpectation) (*RecoveryResult, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -32,10 +44,20 @@ func (e *Engine) Recover(ctx context.Context, storeRoot string) (*RecoveryResult
 	journalPath := journal.Path(topology.GitDir)
 	record, journalBytes, journalErr := journal.Read(journalPath)
 	if errors.Is(journalErr, os.ErrNotExist) {
+		if expected != nil {
+			return &RecoveryResult{Needed: true, RecoveryRequired: true}, typed(FailureConcurrency, PhaseCaptured, journal.ErrChanged)
+		}
 		return e.recoverWithoutJournal(ctx, topology)
 	}
 	if journalErr != nil {
-		return &RecoveryResult{Needed: true}, typed(FailureRecovery, PhaseCaptured, errors.Join(ErrRecovery, journalErr))
+		return &RecoveryResult{Needed: true, RecoveryRequired: true}, typed(FailureRecovery, PhaseCaptured, errors.Join(ErrRecovery, journalErr))
+	}
+	if expected != nil {
+		digest := sha256.Sum256(journalBytes)
+		if expected.OwnerToken == "" || expected.StateSHA256 == "" || record.OwnerToken != expected.OwnerToken ||
+			hex.EncodeToString(digest[:]) != expected.StateSHA256 {
+			return &RecoveryResult{Needed: true, RecoveryRequired: true}, typed(FailureConcurrency, PhaseCaptured, journal.ErrChanged)
+		}
 	}
 	if record.ObjectFormat != topology.Format {
 		return &RecoveryResult{Needed: true}, typed(FailureRecovery, PhaseCaptured, fmt.Errorf("%w: journal object format does not match repository", ErrRecovery))
@@ -46,13 +68,22 @@ func (e *Engine) Recover(ctx context.Context, storeRoot string) (*RecoveryResult
 		return &RecoveryResult{Needed: true}, classify(PhaseLocked, err)
 	}
 	defer lease.Release()
+	if err := e.checkpoint(PhaseRecoveryLeased); err != nil {
+		return &RecoveryResult{Needed: true, RecoveryRequired: true}, classify(PhaseRecoveryLeased, err)
+	}
 	// Re-read after acquiring recovery exclusion; a normal owner may have
 	// completed cleanup while we waited.
 	record, observedAgain, err := journal.Read(journalPath)
 	if errors.Is(err, os.ErrNotExist) {
+		if expected != nil {
+			return &RecoveryResult{Needed: true, RecoveryRequired: true}, typed(FailureConcurrency, PhaseCaptured, journal.ErrChanged)
+		}
 		return &RecoveryResult{Action: RecoveryNone}, nil
 	}
 	if err != nil || !bytes.Equal(observedAgain, journalBytes) {
+		if expected != nil {
+			return &RecoveryResult{Needed: true, RecoveryRequired: true}, typed(FailureConcurrency, PhaseCaptured, errors.Join(err, journal.ErrChanged))
+		}
 		return &RecoveryResult{Needed: true}, typed(FailureRecovery, PhaseCaptured, errors.Join(ErrRecovery, err, journal.ErrChanged))
 	}
 
@@ -85,94 +116,187 @@ func (e *Engine) Recover(ctx context.Context, storeRoot string) (*RecoveryResult
 			handle, err = lease.AdoptPaths(record.OwnerToken, phase, lockPaths...)
 		}
 		if err != nil {
-			return &RecoveryResult{Needed: true}, typed(FailureRecovery, PhaseLocked, errors.Join(ErrRecovery, err))
+			result := &RecoveryResult{Needed: true, Durable: rendezvous.DurableMutationOf(err), RecoveryRequired: true}
+			if errors.Is(err, rendezvous.ErrOwnership) {
+				return result, typed(FailureConcurrency, PhaseLocked, errors.Join(ErrConcurrent, err))
+			}
+			return result, classify(PhaseLocked, err)
 		}
 		e.markActive(record.OwnerToken, true)
 	}
+	adoptedDurable := handle != nil && handle.Mutated()
 	finishActive := func() {
 		if handle != nil {
 			e.markActive(record.OwnerToken, false)
 		}
 	}
 	defer finishActive()
-
-	switch record.State {
-	case journal.Cancelled:
-		if len(lockPaths) != 2 {
-			return &RecoveryResult{Needed: true}, typed(FailureRecovery, PhaseLocked, fmt.Errorf("%w: cancelled journal lacks exact locks", ErrRecovery))
+	if record.State == journal.Pending && len(lockPaths) == 2 && phase == rendezvous.PreJournal {
+		cancelledResult := &RecoveryResult{Needed: true, Durable: adoptedDurable, RecoveryRequired: true}
+		cleaned, err := journal.CleanupOwnedTemporaries(journalPath, journalBytes)
+		cancelledResult.Durable = cancelledResult.Durable || cleaned
+		if err != nil {
+			mergeJournalRecoveryEffect(cancelledResult, err)
+			return cancelledResult, typed(FailureRecovery, PhaseJournalRemoved, err)
 		}
-		if err := journal.CleanupOwnedTemporaries(journalPath, journalBytes); err != nil {
-			return &RecoveryResult{Needed: true}, typed(FailureRecovery, PhaseJournalRemoved, err)
+		cancelledBytes, err := journal.SetState(journalPath, journalBytes, journal.Cancelled)
+		if err != nil {
+			mergeJournalRecoveryEffect(cancelledResult, err)
+			return cancelledResult, typed(FailureRecovery, PhaseJournalComplete, err)
 		}
-		if err := handle.Release(); err != nil {
-			return &RecoveryResult{Needed: true}, typed(FailureRecovery, PhaseLocksReleased, err)
+		cancelledResult.Durable = true
+		if err := e.releaseLock(handle); err != nil {
+			cancelledResult.Durable = cancelledResult.Durable || handle.Mutated()
+			return cancelledResult, typed(FailureRecovery, PhaseLocksReleased, err)
 		}
 		e.markActive(record.OwnerToken, false)
 		handle = nil
-		if err := journal.Remove(journalPath, journalBytes); err != nil {
-			return &RecoveryResult{Needed: true}, typed(FailureRecovery, PhaseJournalRemoved, err)
+		if err := journal.Remove(journalPath, cancelledBytes); err != nil {
+			mergeJournalRecoveryEffect(cancelledResult, err)
+			return cancelledResult, typed(FailureRecovery, PhaseJournalRemoved, err)
 		}
-		return &RecoveryResult{Needed: true, Performed: true, Action: RecoveryCancelled}, nil
+		cancelledResult.Performed = true
+		cancelledResult.Action = RecoveryCancelled
+		cancelledResult.RecoveryRequired = false
+		return cancelledResult, nil
+	}
 
-	case journal.Complete:
-		if err := journal.CleanupOwnedTemporaries(journalPath, journalBytes); err != nil {
-			return &RecoveryResult{Needed: true}, typed(FailureRecovery, PhaseJournalRemoved, err)
+	switch record.State {
+	case journal.Cancelled:
+		cancelledResult := &RecoveryResult{Needed: true, Durable: adoptedDurable, RecoveryRequired: true}
+		cleaned, err := journal.CleanupOwnedTemporaries(journalPath, journalBytes)
+		cancelledResult.Durable = cancelledResult.Durable || cleaned
+		if err != nil {
+			mergeJournalRecoveryEffect(cancelledResult, err)
+			return cancelledResult, typed(FailureRecovery, PhaseJournalRemoved, err)
 		}
 		if handle != nil {
-			if err := handle.Release(); err != nil {
-				return &RecoveryResult{Needed: true}, typed(FailureRecovery, PhaseLocksReleased, err)
+			if err := e.releaseLock(handle); err != nil {
+				cancelledResult.Durable = cancelledResult.Durable || handle.Mutated()
+				return cancelledResult, typed(FailureRecovery, PhaseLocksReleased, err)
 			}
+			cancelledResult.Durable = true
 			e.markActive(record.OwnerToken, false)
 			handle = nil
 		}
 		if err := journal.Remove(journalPath, journalBytes); err != nil {
-			return &RecoveryResult{Needed: true}, typed(FailureRecovery, PhaseJournalRemoved, err)
+			mergeJournalRecoveryEffect(cancelledResult, err)
+			return cancelledResult, typed(FailureRecovery, PhaseJournalRemoved, err)
 		}
-		return &RecoveryResult{Needed: true, Performed: true, Action: RecoveryCompleted, Accepted: stringPointer(record.Ref.After)}, nil
+		cancelledResult.Performed = true
+		cancelledResult.Action = RecoveryCancelled
+		cancelledResult.Durable = true
+		cancelledResult.RecoveryRequired = false
+		return cancelledResult, nil
+
+	case journal.Complete:
+		completeResult := &RecoveryResult{
+			Needed: true, Accepted: stringPointer(record.Ref.After), Durable: adoptedDurable,
+			RecoveryRequired: true,
+		}
+		cleaned, err := journal.CleanupOwnedTemporaries(journalPath, journalBytes)
+		completeResult.Durable = completeResult.Durable || cleaned
+		if err != nil {
+			mergeJournalRecoveryEffect(completeResult, err)
+			return completeResult, typed(FailureRecovery, PhaseJournalRemoved, err)
+		}
+		if handle != nil {
+			if err := e.releaseLock(handle); err != nil {
+				completeResult.Durable = completeResult.Durable || handle.Mutated()
+				return completeResult, typed(FailureRecovery, PhaseLocksReleased, err)
+			}
+			completeResult.Durable = true
+			e.markActive(record.OwnerToken, false)
+			handle = nil
+		}
+		if err := journal.Remove(journalPath, journalBytes); err != nil {
+			mergeJournalRecoveryEffect(completeResult, err)
+			return completeResult, typed(FailureRecovery, PhaseJournalRemoved, err)
+		}
+		completeResult.Performed = true
+		completeResult.Action = RecoveryCompleted
+		completeResult.Durable = true
+		completeResult.RecoveryRequired = false
+		return completeResult, nil
 
 	case journal.Pending:
 		if len(lockPaths) != 2 || phase != rendezvous.JournalRequired {
-			return &RecoveryResult{Needed: true}, typed(FailureRecovery, PhaseLocked, fmt.Errorf("%w: pending journal lacks exact journal-required locks", ErrRecovery))
+			return &RecoveryResult{Needed: true, Durable: adoptedDurable, RecoveryRequired: true}, typed(FailureRecovery, PhaseLocked, fmt.Errorf("%w: pending journal lacks exact journal-required locks", ErrRecovery))
 		}
 		git, err := newGitClient(topology.Root)
 		if err != nil {
-			return &RecoveryResult{Needed: true}, typed(FailureCapability, PhaseCaptured, err)
+			return &RecoveryResult{Needed: true, Durable: adoptedDurable, RecoveryRequired: true}, typed(FailureCapability, PhaseCaptured, err)
 		}
 		current, err := stableRecoveryRef(ctx, git, topology, record.Ref.Ref)
 		if err != nil {
-			return &RecoveryResult{Needed: true}, typed(FailureRecovery, PhaseFinalRecheck, errors.Join(ErrRecovery, err))
+			return &RecoveryResult{Needed: true, Durable: adoptedDurable, RecoveryRequired: true}, typed(FailureRecovery, PhaseFinalRecheck, errors.Join(ErrRecovery, err))
 		}
 		if current == nil || *current != record.Ref.After {
 			reason := "accepted ref has an unrelated value"
 			if sameOptionalString(current, record.Ref.Before) {
 				reason = "accepted ref equals the old value; old-to-new-to-old remains possible"
 			}
-			return &RecoveryResult{Needed: true, Accepted: cloneOptionalString(current)}, typed(FailureRecovery, PhaseRefUpdated, fmt.Errorf("%w: %s", ErrRecovery, reason))
+			return &RecoveryResult{Needed: true, Accepted: cloneOptionalString(current), Durable: adoptedDurable, RecoveryRequired: true}, typed(FailureRecovery, PhaseRefUpdated, fmt.Errorf("%w: %s", ErrRecovery, reason))
+		}
+		pendingResult := &RecoveryResult{
+			Needed: true, Accepted: stringPointer(record.Ref.After), Durable: adoptedDurable,
+			RecoveryRequired: true,
 		}
 		if err := verifyRecoverableInputs(ctx, git, topology.Root, record); err != nil {
-			return &RecoveryResult{Needed: true, Accepted: stringPointer(record.Ref.After)}, err
+			return pendingResult, err
 		}
-		if err := reconcileIndex(ctx, topology.Root, record); err != nil {
-			return &RecoveryResult{Needed: true, Accepted: stringPointer(record.Ref.After)}, typed(FailureRecovery, PhaseIndexReconciled, err)
+		indexChanged, err := reconcileIndex(ctx, topology.Root, record)
+		pendingResult.CheckoutChanged = pendingResult.CheckoutChanged || indexChanged
+		if err != nil {
+			return pendingResult, typed(FailureRecovery, PhaseIndexReconciled, err)
 		}
-		if err := reconcileWorktree(topology.Root, record); err != nil {
-			return &RecoveryResult{Needed: true, Accepted: stringPointer(record.Ref.After)}, typed(FailureRecovery, PhaseWorktreeReconciled, err)
+		pendingResult.Durable = pendingResult.Durable || indexChanged
+		if err := e.checkpoint(PhaseIndexReconciled); err != nil {
+			return pendingResult, typed(FailureRecovery, PhaseIndexReconciled, errors.Join(ErrRecovery, err))
+		}
+		worktreeChanged, err := reconcileWorktree(topology.Root, record)
+		pendingResult.CheckoutChanged = pendingResult.CheckoutChanged || worktreeChanged
+		if err != nil {
+			return pendingResult, typed(FailureRecovery, PhaseWorktreeReconciled, err)
+		}
+		pendingResult.Durable = pendingResult.Durable || worktreeChanged
+		if err := e.checkpoint(PhaseWorktreeReconciled); err != nil {
+			return pendingResult, typed(FailureRecovery, PhaseWorktreeReconciled, errors.Join(ErrRecovery, err))
 		}
 		completeBytes, err := journal.SetState(journalPath, journalBytes, journal.Complete)
 		if err != nil {
-			return &RecoveryResult{Needed: true, Accepted: stringPointer(record.Ref.After)}, typed(FailureRecovery, PhaseJournalComplete, err)
+			mergeJournalRecoveryEffect(pendingResult, err)
+			return pendingResult, typed(FailureRecovery, PhaseJournalComplete, err)
 		}
-		if err := handle.Release(); err != nil {
-			return &RecoveryResult{Needed: true, Accepted: stringPointer(record.Ref.After)}, typed(FailureRecovery, PhaseLocksReleased, err)
+		pendingResult.Durable = true
+		if err := e.checkpoint(PhaseJournalComplete); err != nil {
+			return pendingResult, typed(FailureRecovery, PhaseJournalComplete, errors.Join(ErrRecovery, err))
+		}
+		if err := e.releaseLock(handle); err != nil {
+			pendingResult.Durable = pendingResult.Durable || handle.Mutated()
+			return pendingResult, typed(FailureRecovery, PhaseLocksReleased, err)
 		}
 		e.markActive(record.OwnerToken, false)
 		handle = nil
 		if err := journal.Remove(journalPath, completeBytes); err != nil {
-			return &RecoveryResult{Needed: true, Accepted: stringPointer(record.Ref.After)}, typed(FailureRecovery, PhaseJournalRemoved, err)
+			mergeJournalRecoveryEffect(pendingResult, err)
+			return pendingResult, typed(FailureRecovery, PhaseJournalRemoved, err)
 		}
-		return &RecoveryResult{Needed: true, Performed: true, Action: RecoveryReconciled, Accepted: stringPointer(record.Ref.After)}, nil
+		pendingResult.Performed = true
+		pendingResult.Action = RecoveryReconciled
+		pendingResult.RecoveryRequired = false
+		return pendingResult, nil
 	default:
 		return &RecoveryResult{Needed: true}, typed(FailureRecovery, PhaseCaptured, ErrRecovery)
+	}
+}
+
+func mergeJournalRecoveryEffect(result *RecoveryResult, err error) {
+	if result == nil {
+		return
+	}
+	if effect, present := journal.EffectOf(err); present {
+		result.Durable = result.Durable || effect.Durable
 	}
 }
 
@@ -201,7 +325,7 @@ func recognizedJournalLocks(record journal.Record, refLock, worktreeLock string)
 	for _, name := range paths {
 		value, err := rendezvous.Read(name)
 		if errors.Is(err, os.ErrNotExist) {
-			if record.State != journal.Complete {
+			if record.State != journal.Complete && record.State != journal.Cancelled {
 				return nil, owner, phase, typed(FailureRecovery, PhaseLocked, fmt.Errorf("%w: required rendezvous lock is missing", ErrRecovery))
 			}
 			continue
@@ -303,18 +427,22 @@ func (e *Engine) recoverWithoutJournal(ctx context.Context, topology *gitraw.Top
 	}
 	handle, err := lease.AdoptPaths(worktreeOwner.Token, rendezvous.PreJournal, paths...)
 	if err != nil {
-		return &RecoveryResult{Needed: true}, typed(FailureRecovery, PhaseLocked, errors.Join(ErrRecovery, err))
+		result := &RecoveryResult{Needed: true, Durable: rendezvous.DurableMutationOf(err), RecoveryRequired: true}
+		if errors.Is(err, rendezvous.ErrOwnership) {
+			return result, typed(FailureConcurrency, PhaseLocked, errors.Join(ErrConcurrent, err))
+		}
+		return result, classify(PhaseLocked, err)
 	}
 	e.markActive(worktreeOwner.Token, true)
 	defer e.markActive(worktreeOwner.Token, false)
 	if err := cleanupUnpublishedJournalTemporary(topology.GitDir, worktreeOwner.Token); err != nil {
-		return &RecoveryResult{Needed: true}, typed(FailureRecovery, PhaseJournalRemoved, err)
+		return &RecoveryResult{Needed: true, Durable: handle.Mutated(), RecoveryRequired: true}, typed(FailureRecovery, PhaseJournalRemoved, err)
 	}
-	if err := handle.Release(); err != nil {
-		return &RecoveryResult{Needed: true}, typed(FailureRecovery, PhaseLocksReleased, err)
+	if err := e.releaseLock(handle); err != nil {
+		return &RecoveryResult{Needed: true, Durable: handle.Mutated(), RecoveryRequired: true}, typed(FailureRecovery, PhaseLocksReleased, err)
 	}
 	e.markActive(worktreeOwner.Token, false)
-	return &RecoveryResult{Needed: true, Performed: true, Action: RecoveryStaleLock}, nil
+	return &RecoveryResult{Needed: true, Performed: true, Action: RecoveryStaleLock, Durable: true}, nil
 }
 
 func scanRefLocks(commonGitDir string) ([]string, error) {

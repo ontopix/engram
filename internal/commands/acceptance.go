@@ -319,28 +319,25 @@ func managedWriteFailure(err error, prospective *managedwrite.Result, action str
 	}
 	result := cli.Result{Outcome: cli.OutcomeError, Error: &cli.ProtocolError{Kind: kind, Message: fmt.Sprintf("%s: %v", action, err)}}
 	var typed *managedwrite.Error
-	if errors.As(err, &typed) && (typed.Accepted || typed.UnknownCAS || typed.Kind == managedwrite.FailureRecovery) {
+	if errors.As(err, &typed) && (typed.Durable || typed.Accepted || typed.UnknownCAS || typed.RecoveryRequired || typed.Kind == managedwrite.FailureRecovery) {
 		mutation := cli.NewMutationResult()
-		mutation.Durable = typed.Accepted
-		mutation.RecoveryRequired = typed.Phase != managedwrite.PhaseJournalRemoved
+		mutation.Durable = typed.Durable || typed.Accepted
+		mutation.RecoveryRequired = typed.RecoveryRequired
+		if !typed.Durable {
+			mutation.RecoveryRequired = (typed.Accepted || typed.UnknownCAS || typed.Kind == managedwrite.FailureRecovery) && typed.Phase != managedwrite.PhaseJournalRemoved
+		}
 		if typed.Accepted && prospective != nil && prospective.Ref != "" && typed.Commit != "" {
 			after := typed.Commit
 			mutation.LocalRefs = append(mutation.LocalRefs, cli.RefMutation{Ref: prospective.Ref, Before: cloneStringForCommand(prospective.Base), After: &after})
+			mutation.Head = &cli.HeadMutation{
+				Before: cli.MutationGitState{Ref: cloneStringForCommand(&prospective.Ref), Commit: cloneStringForCommand(prospective.Base)},
+				After:  cli.MutationGitState{Ref: cloneStringForCommand(&prospective.Ref), Commit: cloneStringForCommand(&after)},
+			}
 		}
-		mutation.CheckoutChanged = typed.Accepted && checkoutKnownChanged(typed.Phase)
+		mutation.CheckoutChanged = typed.CheckoutChanged
 		result.Value = mutation
 	}
 	return result
-}
-
-func checkoutKnownChanged(phase managedwrite.Phase) bool {
-	switch phase {
-	case managedwrite.PhaseWorktreeReconciled, managedwrite.PhaseJournalComplete,
-		managedwrite.PhaseLocksReleased, managedwrite.PhaseJournalRemoved:
-		return true
-	default:
-		return false
-	}
 }
 
 func cloneChangesForCommand(value []changeset.Change) []changeset.Change {

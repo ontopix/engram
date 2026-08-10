@@ -1,6 +1,7 @@
 package doctor
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"os"
@@ -249,6 +250,184 @@ func TestMissingTargetWithExactLifecycleEvidenceIsInspectable(t *testing.T) {
 	}
 	if findCheck(t, result, "initialization.state").Status != OK {
 		t.Fatalf("initialization state = %#v", findCheck(t, result, "initialization.state"))
+	}
+}
+
+func TestInternalLifecycleLookalikeIsNotRecognized(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("portable Windows process-death proof is intentionally conservative")
+	}
+	root := healthyStore(t)
+	state := lifecycleState{
+		Version: 1, Operation: "acquisition", Target: root,
+		Owner: deadOwner(t, rendezvous.PreJournal), Phase: lifecycleCleanupRequired,
+	}
+	name := filepath.Join(root, ".git", "engram", "state", "acquisition-v1.json")
+	if err := os.MkdirAll(filepath.Dir(name), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(name, canonicalJSON(state), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	result, err := Inspect(context.Background(), root, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Recovery.Needed || findCheck(t, result, "acquisition.state").Status != OK {
+		t.Fatalf("internal lookalike was recognized: %#v", result.Recovery)
+	}
+}
+
+func TestRecoveryRequestBindsAndRevalidatesExactLifecycleState(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("portable Windows process-death proof is intentionally conservative")
+	}
+	target := filepath.Join(t.TempDir(), "future-store")
+	state := lifecycleState{
+		Version: 1, Operation: "acquisition", Target: target,
+		Owner: deadOwner(t, rendezvous.PreJournal), Phase: lifecycleCleanupRequired,
+	}
+	name := lifecycleSidecar(target, "acquisition")
+	if err := os.WriteFile(name, canonicalJSON(state), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	_, err := Inspect(context.Background(), target, Options{
+		Recover: true,
+		Recovery: RecoveryFunc(func(ctx context.Context, request RecoveryRequest) (RecoveryResponse, error) {
+			called = true
+			if request.Binding.Controller != RecoveryAcquisition || request.Binding.OwnerToken != state.Owner.Token || len(request.Binding.StateSHA256) != 64 {
+				t.Fatalf("binding = %#v", request.Binding)
+			}
+			competing := state
+			competing.Operation = "initialization"
+			competing.Owner.Token = strings.Repeat("f", 64)
+			competingName := lifecycleSidecar(target, "initialization")
+			if writeErr := os.WriteFile(competingName, canonicalJSON(competing), 0o600); writeErr != nil {
+				t.Fatal(writeErr)
+			}
+			if competingErr := request.Revalidate(ctx); KindOf(competingErr) != FailureConcurrency {
+				t.Fatalf("competing controller revalidation = %v (%q)", competingErr, KindOf(competingErr))
+			}
+			if removeErr := os.Remove(competingName); removeErr != nil {
+				t.Fatal(removeErr)
+			}
+			state.Owner.Token = strings.Repeat("e", 64)
+			if writeErr := os.WriteFile(name, canonicalJSON(state), 0o600); writeErr != nil {
+				t.Fatal(writeErr)
+			}
+			revalidateErr := request.Revalidate(ctx)
+			if KindOf(revalidateErr) != FailureConcurrency {
+				t.Fatalf("revalidate error = %v (%q)", revalidateErr, KindOf(revalidateErr))
+			}
+			return RecoveryResponse{Failure: FailureConcurrency, RecoveryRequired: true}, revalidateErr
+		}),
+	})
+	if !called || KindOf(err) != FailureConcurrency {
+		t.Fatalf("called = %v, error = %v (%q)", called, err, KindOf(err))
+	}
+	if mutation, present := MutationOf(err); !present || !mutation.RecoveryRequired || mutation.Durable || mutation.CheckoutChanged {
+		t.Fatalf("mutation = %#v, present = %v", mutation, present)
+	}
+}
+
+func TestRecoveryRequestBindsLifecyclePublicationPlan(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("portable Windows process-death proof is intentionally conservative")
+	}
+	target := filepath.Join(t.TempDir(), "future-store")
+	state := lifecycleState{
+		Version: 1, Operation: "acquisition", Target: target,
+		Owner: deadOwner(t, rendezvous.PreJournal), Phase: lifecycleCleanupRequired,
+	}
+	name := lifecycleSidecar(target, "acquisition")
+	if err := os.WriteFile(name, canonicalJSON(state), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stage := target + ".engram-acquisition-v1-" + state.Owner.Token + ".stage"
+	if err := os.Mkdir(stage, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	plan := filepath.Join(stage, "plan-v1.json")
+	if err := os.WriteFile(plan, []byte("approved plan bytes\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	_, err := Inspect(context.Background(), target, Options{
+		Recover: true,
+		Recovery: RecoveryFunc(func(ctx context.Context, request RecoveryRequest) (RecoveryResponse, error) {
+			called = true
+			if err := os.WriteFile(plan, []byte("changed plan bytes\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			revalidateErr := request.Revalidate(ctx)
+			if KindOf(revalidateErr) != FailureConcurrency {
+				t.Fatalf("plan revalidation = %v (%q)", revalidateErr, KindOf(revalidateErr))
+			}
+			return RecoveryResponse{Failure: FailureConcurrency, RecoveryRequired: true}, revalidateErr
+		}),
+	})
+	if !called || KindOf(err) != FailureConcurrency {
+		t.Fatalf("called = %v, error = %v (%q)", called, err, KindOf(err))
+	}
+	if got, readErr := os.ReadFile(name); readErr != nil || !bytes.Equal(got, canonicalJSON(state)) {
+		t.Fatalf("sidecar changed = %q, %v", got, readErr)
+	}
+}
+
+func TestRecoveryFailurePreservesControllerClassAndEffects(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("portable Windows process-death proof is intentionally conservative")
+	}
+	target := filepath.Join(t.TempDir(), "future-store")
+	state := lifecycleState{
+		Version: 1, Operation: "initialization", Target: target,
+		Owner: deadOwner(t, rendezvous.PreJournal), Phase: lifecycleCleanupRequired,
+	}
+	if err := os.WriteFile(lifecycleSidecar(target, "initialization"), canonicalJSON(state), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Inspect(context.Background(), target, Options{
+		Recover: true,
+		Recovery: RecoveryFunc(func(context.Context, RecoveryRequest) (RecoveryResponse, error) {
+			return RecoveryResponse{
+				Failure: FailureIO, Durable: true, CheckoutChanged: true, RecoveryRequired: true,
+			}, os.ErrPermission
+		}),
+	})
+	if KindOf(err) != FailureIO {
+		t.Fatalf("kind = %q, error = %v", KindOf(err), err)
+	}
+	if mutation, present := MutationOf(err); !present || !mutation.Durable || !mutation.CheckoutChanged || !mutation.RecoveryRequired {
+		t.Fatalf("mutation = %#v, present = %v", mutation, present)
+	}
+}
+
+func TestRecoveryPostcheckCancellationKeepsSuccessfulEffects(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("portable Windows process-death proof is intentionally conservative")
+	}
+	target := filepath.Join(t.TempDir(), "future-store")
+	state := lifecycleState{
+		Version: 1, Operation: "acquisition", Target: target,
+		Owner: deadOwner(t, rendezvous.PreJournal), Phase: lifecycleCleanupRequired,
+	}
+	if err := os.WriteFile(lifecycleSidecar(target, "acquisition"), canonicalJSON(state), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	_, err := Inspect(ctx, target, Options{
+		Recover: true,
+		Recovery: RecoveryFunc(func(context.Context, RecoveryRequest) (RecoveryResponse, error) {
+			cancel()
+			return RecoveryResponse{Durable: true, CheckoutChanged: true}, nil
+		}),
+	})
+	if KindOf(err) != FailureCancelled {
+		t.Fatalf("kind = %q, error = %v", KindOf(err), err)
+	}
+	if mutation, present := MutationOf(err); !present || !mutation.Durable || !mutation.CheckoutChanged || mutation.RecoveryRequired {
+		t.Fatalf("mutation = %#v, present = %v", mutation, present)
 	}
 }
 

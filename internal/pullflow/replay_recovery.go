@@ -82,7 +82,7 @@ func (p *Puller) repairReplayProgress(ctx context.Context, repository *gitraw.Re
 	if plan.Next < len(plan.Sources) {
 		state.Base = managedread.GitState{Commit: stringPointer(plan.Sources[plan.Next].Base)}
 	}
-	if err := updateReplay(repository, oldState, oldPlan, state, plan); err != nil {
+	if err := p.updateReplay(repository, oldState, oldPlan, state, plan); err != nil {
 		return repository, oldState, oldPlan, false, replayRecoveryError("record proven replay progress", err)
 	}
 	refreshed, err := gitraw.Discover(ctx, repository.Root)

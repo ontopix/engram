@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+No changes after the `v1.0.0-rc.1` release candidate.
+
+## 1.0.0-rc.1 — 2026-08-09
+
+### Reference implementation
+
+- Completed implementation milestones M0–M6: deterministic portable
+  conformance, raw managed-Git reads, safe draft helpers, managed acceptance
+  and recovery, exact linear synchronization, advisory diagnostics, and the
+  complete documented command surface.
+- Added deterministic cross-platform release archives for macOS, Linux, and
+  Windows on amd64 and arm64, with checksums, machine-readable provenance,
+  canonical skills, operator documentation, compiled-dependency licenses, the
+  Go license, and Unicode generated-data provenance.
+- Added compatibility CI across Go 1.25 and 1.26 on macOS, Linux, and Windows,
+  plus race, offline, vet, fuzz-smoke, formatting, module, shell, and repository
+  gates. Tagged releases re-run that workflow before a least-privilege publish
+  job can create a GitHub release.
+- Declared the embedded default CLI version `1.0.0-rc.1`. The standard,
+  finding identities, and JSON v1 protocol remain release-candidate interfaces
+  until the final `v1.0.0` publication.
+
 ### Documentation architecture
 
 - Closed the implementation-facing ambiguities found in the final baseline

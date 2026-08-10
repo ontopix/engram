@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -45,10 +46,64 @@ type Result struct {
 	Changed    bool   `json:"changed"`
 }
 
+// Effect is the closed protocol evidence attached to a failed update. The
+// containing EffectError also records that publication may already be visible
+// when Durable is false (rename completed but directory sync did not).
+type Effect struct {
+	Durable          bool
+	RecoveryRequired bool
+}
+
+// EffectError reports a failed operation which nevertheless published the
+// entrypoint or left its cooperating lock in place.
+type EffectError struct {
+	Effect Effect
+	Err    error
+}
+
+func (e *EffectError) Error() string {
+	if e == nil || e.Err == nil {
+		return "attachment update failed after mutation"
+	}
+	return e.Err.Error()
+}
+
+func (e *EffectError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
+// EffectOf returns the persistent evidence carried by err.
+func EffectOf(err error) (Effect, bool) {
+	var typed *EffectError
+	if !errors.As(err, &typed) || typed == nil {
+		return Effect{}, false
+	}
+	return typed.Effect, true
+}
+
+// Updater owns one attachment operation and its instance-local fault seams.
+// Package-level Attach and Detach create a fresh production updater.
+type Updater struct {
+	afterRename  func(string) error
+	afterSync    func(string) error
+	beforeRemove func(string) error
+	afterRelease func(string) error
+}
+
+func NewUpdater() *Updater { return &Updater{} }
+
 type parsedBlock struct {
 	start  int
 	end    int
 	stores []string
+}
+
+type publication struct {
+	visible bool
+	durable bool
 }
 
 // ResolveProject returns an explicit real directory, or the containing Git
@@ -64,7 +119,12 @@ func ResolveProject(ctx context.Context, explicit string) (string, error) {
 	}
 	git, err := exec.LookPath("git")
 	if err == nil {
-		command := exec.CommandContext(ctx, git, "--no-pager", "--no-optional-locks", "-c", "core.hooksPath="+os.DevNull, "-C", working, "rev-parse", "--path-format=absolute", "--show-toplevel")
+		command := exec.CommandContext(ctx, git,
+			"--no-pager", "--no-optional-locks", "--no-replace-objects",
+			"-c", "core.hooksPath="+os.DevNull, "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false",
+			"-c", "maintenance.auto=false", "-c", "gc.auto=0",
+			"-C", working, "rev-parse", "--path-format=absolute", "--show-toplevel",
+		)
 		command.Env = isolatedEnvironment(os.Environ())
 		output, commandErr := command.Output()
 		if commandErr == nil {
@@ -126,16 +186,27 @@ func CanonicalStore(store string) (string, error) {
 
 // Attach adds store to the owned block and atomically publishes the result.
 func Attach(project, entrypoint, store string) (Result, error) {
-	return update(project, entrypoint, store, true)
+	return NewUpdater().Attach(project, entrypoint, store)
 }
 
 // Detach removes store from the owned block and atomically publishes the
 // result. A missing block or entry is an unchanged success.
 func Detach(project, entrypoint, store string) (Result, error) {
-	return update(project, entrypoint, store, false)
+	return NewUpdater().Detach(project, entrypoint, store)
 }
 
-func update(project, entrypoint, store string, attach bool) (Result, error) {
+func (u *Updater) Attach(project, entrypoint, store string) (Result, error) {
+	return u.update(project, entrypoint, store, true)
+}
+
+func (u *Updater) Detach(project, entrypoint, store string) (Result, error) {
+	return u.update(project, entrypoint, store, false)
+}
+
+func (u *Updater) update(project, entrypoint, store string, attach bool) (result Result, resultErr error) {
+	if u == nil {
+		return Result{}, fmt.Errorf("attachment updater is nil")
+	}
 	var err error
 	project, err = realDirectory(project)
 	if err != nil {
@@ -153,13 +224,23 @@ func update(project, entrypoint, store string, attach bool) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	result := Result{Project: project, Store: store, Entrypoint: entrypoint}
+	result = Result{Project: project, Store: store, Entrypoint: entrypoint}
 
 	lock, err := acquireLock(entrypoint + ".engram.lock")
 	if err != nil {
 		return Result{}, err
 	}
-	defer lock.release()
+	published := publication{}
+	defer func() {
+		residual, releaseErr := lock.release(u.beforeRemove, u.afterRelease)
+		if releaseErr != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("release attachment lock: %w", releaseErr))
+		}
+		if resultErr != nil {
+			result = Result{}
+			resultErr = withEffect(resultErr, published, residual)
+		}
+	}()
 
 	original, originalInfo, err := readOptional(entrypoint)
 	if err != nil {
@@ -200,11 +281,22 @@ func update(project, entrypoint, store string, attach bool) (Result, error) {
 	if bytes.Equal(original, updated) {
 		return result, nil
 	}
-	if err := publish(entrypoint, original, originalInfo, updated); err != nil {
+	published, err = u.publish(entrypoint, original, originalInfo, updated)
+	if err != nil {
 		return Result{}, err
 	}
 	result.Changed = true
 	return result, nil
+}
+
+func withEffect(err error, published publication, residual bool) error {
+	if err == nil || !published.visible && !residual {
+		return err
+	}
+	return &EffectError{
+		Effect: Effect{Durable: published.durable, RecoveryRequired: residual},
+		Err:    err,
+	}
 }
 
 func detachStorePath(store string) (string, error) {
@@ -401,18 +493,18 @@ func readOptional(name string) ([]byte, os.FileInfo, error) {
 	return data, info, err
 }
 
-func publish(name string, original []byte, originalInfo os.FileInfo, updated []byte) error {
+func (u *Updater) publish(name string, original []byte, originalInfo os.FileInfo, updated []byte) (publication, error) {
 	current, currentInfo, err := readOptional(name)
 	if err != nil {
-		return err
+		return publication{}, err
 	}
 	if !bytes.Equal(current, original) || originalInfo == nil != (currentInfo == nil) || originalInfo != nil && !os.SameFile(originalInfo, currentInfo) {
-		return fmt.Errorf("%w: entrypoint changed concurrently", ErrBusy)
+		return publication{}, fmt.Errorf("%w: entrypoint changed concurrently", ErrBusy)
 	}
 	directory := filepath.Dir(name)
 	temporary, err := os.CreateTemp(directory, ".engram-entrypoint-*")
 	if err != nil {
-		return err
+		return publication{}, err
 	}
 	temporaryName := temporary.Name()
 	defer os.Remove(temporaryName)
@@ -422,31 +514,54 @@ func publish(name string, original []byte, originalInfo os.FileInfo, updated []b
 	}
 	if err := temporary.Chmod(mode); err != nil {
 		temporary.Close()
-		return err
+		return publication{}, err
 	}
 	if _, err := temporary.Write(updated); err != nil {
 		temporary.Close()
-		return err
+		return publication{}, err
 	}
 	if err := temporary.Sync(); err != nil {
 		temporary.Close()
-		return err
+		return publication{}, err
 	}
 	if err := temporary.Close(); err != nil {
-		return err
+		return publication{}, err
 	}
 	if err := os.Rename(temporaryName, name); err != nil {
-		return err
+		return publication{}, err
 	}
-	if directoryHandle, err := os.Open(directory); err == nil {
-		syncErr := directoryHandle.Sync()
-		closeErr := directoryHandle.Close()
-		if syncErr != nil {
-			return syncErr
+	result := publication{visible: true}
+	if u.afterRename != nil {
+		if err := u.afterRename(name); err != nil {
+			return result, err
 		}
-		return closeErr
 	}
-	return nil
+	result.durable, err = syncAttachmentDirectory(directory)
+	if err != nil {
+		return result, err
+	}
+	if u.afterSync != nil {
+		if err := u.afterSync(name); err != nil {
+			return result, err
+		}
+	}
+	return result, nil
+}
+
+func syncAttachmentDirectory(directory string) (bool, error) {
+	if runtime.GOOS == "windows" {
+		return true, nil
+	}
+	handle, err := os.Open(directory)
+	if err != nil {
+		return false, err
+	}
+	syncErr := handle.Sync()
+	closeErr := handle.Close()
+	if syncErr != nil {
+		return false, errors.Join(syncErr, closeErr)
+	}
+	return true, closeErr
 }
 
 type lockFile struct {
@@ -465,14 +580,69 @@ func acquireLock(name string) (*lockFile, error) {
 	return &lockFile{name: name, file: file}, nil
 }
 
-func (l *lockFile) release() {
+func (l *lockFile) release(beforeRemove, afterRelease func(string) error) (bool, error) {
 	if l == nil {
-		return
+		return false, nil
 	}
+	var ownedInfo os.FileInfo
+	var ownershipErr error
+	var closeErr error
 	if l.file != nil {
-		_ = l.file.Close()
+		ownedInfo, ownershipErr = l.file.Stat()
+		closeErr = l.file.Close()
 	}
-	_ = os.Remove(l.name)
+	var beforeRemoveErr error
+	if beforeRemove != nil {
+		beforeRemoveErr = beforeRemove(l.name)
+	}
+	var removeErr error
+	ownedAtName := false
+	var identityErr error
+	if beforeRemoveErr == nil && ownershipErr == nil && ownedInfo != nil {
+		currentInfo, statErr := os.Lstat(l.name)
+		switch {
+		case statErr == nil && os.SameFile(ownedInfo, currentInfo):
+			ownedAtName = true
+		case statErr == nil:
+			identityErr = fmt.Errorf("%w: attachment lock ownership changed before release", ErrBusy)
+		case !errors.Is(statErr, os.ErrNotExist):
+			identityErr = statErr
+		}
+	}
+	if beforeRemoveErr == nil && ownershipErr == nil && ownedInfo == nil {
+		identityErr = fmt.Errorf("%w: attachment lock ownership is unavailable", ErrBusy)
+	}
+	if ownedAtName {
+		removeErr = os.Remove(l.name)
+		if errors.Is(removeErr, os.ErrNotExist) {
+			removeErr = nil
+		}
+	}
+	var syncErr error
+	if ownedAtName && removeErr == nil {
+		_, syncErr = syncAttachmentDirectory(filepath.Dir(l.name))
+	}
+	var faultErr error
+	if beforeRemoveErr == nil && ownershipErr == nil && identityErr == nil && removeErr == nil && afterRelease != nil {
+		faultErr = afterRelease(l.name)
+	}
+	residual := false
+	var inspectErr error
+	currentInfo, statErr := os.Lstat(l.name)
+	switch {
+	case statErr == nil && ownedInfo != nil:
+		residual = os.SameFile(ownedInfo, currentInfo)
+	case statErr == nil:
+		residual = true
+	case !errors.Is(statErr, os.ErrNotExist):
+		residual = true
+		inspectErr = statErr
+	}
+	var residualErr error
+	if residual {
+		residualErr = fmt.Errorf("%w: attachment lock remains after release", ErrBusy)
+	}
+	return residual, errors.Join(ownershipErr, closeErr, beforeRemoveErr, identityErr, removeErr, syncErr, faultErr, inspectErr, residualErr)
 }
 
 func isolatedEnvironment(environment []string) []string {

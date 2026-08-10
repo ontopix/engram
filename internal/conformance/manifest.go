@@ -226,9 +226,6 @@ func (m *Manifest) Validate() error {
 			if c.Base.Unavailable && *c.Expected.Status != StatusIndeterminate {
 				return fmt.Errorf("%s.expected.status must be %q when base is unavailable", where, StatusIndeterminate)
 			}
-			if !c.Base.Unavailable && *c.Expected.Status != StatusComplete {
-				return fmt.Errorf("%s.expected.status must be %q when base is available", where, StatusComplete)
-			}
 			if err := c.Candidate.validate(where + ".candidate"); err != nil {
 				return err
 			}

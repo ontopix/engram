@@ -33,6 +33,9 @@ func TestAddStagesOnlyLiteralSelectionAndPreservesDraft(t *testing.T) {
 	if !result.Changed || !reflect.DeepEqual(result.Staged, wantStaged) {
 		t.Fatalf("result = %#v", result)
 	}
+	if candidates, globErr := filepath.Glob(filepath.Join(root, ".git", ".engram-index-candidate-*")); globErr != nil || len(candidates) != 0 {
+		t.Fatalf("prospective indexes after successful Git replacement = %v, %v", candidates, globErr)
+	}
 	status, err := open(t, root).Status(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -149,6 +152,262 @@ func TestAddSHA256(t *testing.T) {
 	fields := strings.Fields(git(t, root, "ls-files", "--stage", "topics/why-files.md"))
 	if len(fields) < 2 || len(fields[1]) != gitraw.SHA256.HexWidth() {
 		t.Fatalf("index listing = %q", fields)
+	}
+}
+
+func TestAddPostPublicationFaultsCarryExactEffects(t *testing.T) {
+	tests := []struct {
+		name        string
+		phase       Phase
+		wantDurable bool
+	}{
+		{name: "rename visible before directory sync", phase: PhaseIndexRenamed, wantDurable: false},
+		{name: "index directory synced", phase: PhaseIndexSynced, wantDurable: true},
+		{name: "worktree rendezvous released", phase: PhaseWorktreeReleased, wantDurable: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := fixture(t, false)
+			appendTo(t, filepath.Join(root, "topics", "why-files.md"), "\nFaulted add.\n")
+			injected := errors.New("injected post-publication fault")
+			adder := New()
+			adder.Fault = func(phase Phase) error {
+				if phase == test.phase {
+					return injected
+				}
+				return nil
+			}
+			result, err := adder.Add(context.Background(), open(t, root), []string{"topics/why-files.md"}, false)
+			mutation, present := MutationOf(err)
+			if !errors.Is(err, injected) || result.Changed || !present || mutation.Durable != test.wantDurable || !mutation.CheckoutChanged || mutation.RecoveryRequired {
+				t.Fatalf("result = %#v, error = %v, mutation = %#v, present = %t", result, err, mutation, present)
+			}
+			status, statusErr := open(t, root).Status(context.Background())
+			if statusErr != nil || !reflect.DeepEqual(status.Staged, []changeset.Change{{Operation: changeset.Modified, Path: "topics/why-files.md"}}) {
+				t.Fatalf("published index status = %#v, %v", status, statusErr)
+			}
+			if _, statErr := os.Lstat(rendezvous.WorktreePath(filepath.Join(root, ".git"))); !errors.Is(statErr, os.ErrNotExist) {
+				t.Fatalf("worktree rendezvous remains: %v", statErr)
+			}
+		})
+	}
+}
+
+func TestAddIndexDirectorySyncFailureCarriesVisibleNonDurableEffect(t *testing.T) {
+	root := fixture(t, false)
+	appendTo(t, filepath.Join(root, "topics", "why-files.md"), "\nFaulted fsync.\n")
+	injected := errors.New("injected index directory sync failure")
+	adder := New()
+	adder.syncIndexDirectory = func(string) (bool, error) { return false, injected }
+	result, err := adder.Add(context.Background(), open(t, root), []string{"topics/why-files.md"}, false)
+	mutation, present := MutationOf(err)
+	if !errors.Is(err, injected) || result.Changed || !present || mutation.Durable || !mutation.CheckoutChanged || mutation.RecoveryRequired {
+		t.Fatalf("result = %#v, error = %v, mutation = %#v, present = %t", result, err, mutation, present)
+	}
+	status, statusErr := open(t, root).Status(context.Background())
+	if statusErr != nil || !reflect.DeepEqual(status.Staged, []changeset.Change{{Operation: changeset.Modified, Path: "topics/why-files.md"}}) {
+		t.Fatalf("published index status = %#v, %v", status, statusErr)
+	}
+}
+
+func TestAddIndexDirectorySyncTailCarriesDurableEffect(t *testing.T) {
+	root := fixture(t, false)
+	appendTo(t, filepath.Join(root, "topics", "why-files.md"), "\nFaulted fsync close tail.\n")
+	injected := errors.New("injected index directory close tail")
+	adder := New()
+	adder.syncIndexDirectory = func(string) (bool, error) { return true, injected }
+	result, err := adder.Add(context.Background(), open(t, root), []string{"topics/why-files.md"}, false)
+	mutation, present := MutationOf(err)
+	if !errors.Is(err, injected) || result.Changed || !present || !mutation.Durable || !mutation.CheckoutChanged || mutation.RecoveryRequired {
+		t.Fatalf("result = %#v, error = %v, mutation = %#v, present = %t", result, err, mutation, present)
+	}
+}
+
+func TestAddIndexRenameTailCarriesPublishedEffect(t *testing.T) {
+	root := fixture(t, false)
+	appendTo(t, filepath.Join(root, "topics", "why-files.md"), "\nFaulted rename tail.\n")
+	injected := errors.New("injected index rename tail")
+	adder := New()
+	adder.renamePath = func(oldPath, newPath string) (bool, error) {
+		renameErr := os.Rename(oldPath, newPath)
+		return renameErr == nil, errors.Join(renameErr, injected)
+	}
+	result, err := adder.Add(context.Background(), open(t, root), []string{"topics/why-files.md"}, false)
+	mutation, present := MutationOf(err)
+	if !errors.Is(err, injected) || result.Changed || !present || !mutation.Durable || !mutation.CheckoutChanged || mutation.RecoveryRequired {
+		t.Fatalf("result = %#v, error = %v, mutation = %#v, present = %t", result, err, mutation, present)
+	}
+	status, statusErr := open(t, root).Status(context.Background())
+	if statusErr != nil || !reflect.DeepEqual(status.Staged, []changeset.Change{{Operation: changeset.Modified, Path: "topics/why-files.md"}}) {
+		t.Fatalf("published index status = %#v, %v", status, statusErr)
+	}
+}
+
+func TestAddAggregatesNativeLockAndCandidateCleanupFailures(t *testing.T) {
+	t.Run("native index lock remains after rename failure", func(t *testing.T) {
+		root := fixture(t, false)
+		appendTo(t, filepath.Join(root, "topics", "why-files.md"), "\nFaulted rename.\n")
+		renameErr := errors.New("injected index rename failure")
+		cleanupErr := errors.New("injected index lock cleanup failure")
+		adder := New()
+		adder.renamePath = func(oldPath, _ string) (bool, error) {
+			if strings.HasSuffix(oldPath, "index.lock") {
+				return false, renameErr
+			}
+			return false, errors.New("unexpected rename")
+		}
+		adder.removePath = func(name string) (bool, error) {
+			if strings.HasSuffix(name, "index.lock") {
+				return false, cleanupErr
+			}
+			err := os.Remove(name)
+			return err == nil, err
+		}
+		result, err := adder.Add(context.Background(), open(t, root), []string{"topics/why-files.md"}, false)
+		mutation, present := MutationOf(err)
+		if !errors.Is(err, renameErr) || !errors.Is(err, cleanupErr) || result.Changed || !present || mutation.Durable || mutation.CheckoutChanged || !mutation.RecoveryRequired {
+			t.Fatalf("result = %#v, error = %v, mutation = %#v, present = %t", result, err, mutation, present)
+		}
+		if _, statErr := os.Lstat(filepath.Join(root, ".git", "index.lock")); statErr != nil {
+			t.Fatalf("residual native lock missing: %v", statErr)
+		}
+	})
+
+	t.Run("silent native index lock cleanup", func(t *testing.T) {
+		root := fixture(t, false)
+		appendTo(t, filepath.Join(root, "topics", "why-files.md"), "\nSilent lock cleanup.\n")
+		renameErr := errors.New("injected index rename failure")
+		adder := New()
+		adder.renamePath = func(string, string) (bool, error) { return false, renameErr }
+		adder.removePath = func(name string) (bool, error) {
+			if strings.HasSuffix(name, "index.lock") {
+				return false, nil
+			}
+			err := os.Remove(name)
+			return err == nil, err
+		}
+		result, err := adder.Add(context.Background(), open(t, root), []string{"topics/why-files.md"}, false)
+		mutation, present := MutationOf(err)
+		if !errors.Is(err, renameErr) || result.Changed || !present || mutation.Durable || mutation.CheckoutChanged || !mutation.RecoveryRequired {
+			t.Fatalf("result = %#v, error = %v, mutation = %#v, present = %t", result, err, mutation, present)
+		}
+	})
+
+	t.Run("prospective index cleanup prevents success", func(t *testing.T) {
+		root := fixture(t, false)
+		cleanupErr := errors.New("injected candidate cleanup failure")
+		adder := New()
+		adder.removePath = func(name string) (bool, error) {
+			if strings.Contains(filepath.Base(name), ".engram-index-candidate-") {
+				return false, cleanupErr
+			}
+			err := os.Remove(name)
+			return err == nil, err
+		}
+		result, err := adder.Add(context.Background(), open(t, root), []string{"README.md"}, false)
+		mutation, present := MutationOf(err)
+		if !errors.Is(err, cleanupErr) || result.Changed || !present || mutation.Durable || mutation.CheckoutChanged || mutation.RecoveryRequired {
+			t.Fatalf("result = %#v, error = %v, mutation = %#v, present = %t", result, err, mutation, present)
+		}
+		matches, globErr := filepath.Glob(filepath.Join(root, ".git", ".engram-index-candidate-*"))
+		if globErr != nil || len(matches) != 1 {
+			t.Fatalf("residual candidates = %v, %v", matches, globErr)
+		}
+	})
+
+	t.Run("silent prospective index cleanup", func(t *testing.T) {
+		root := fixture(t, false)
+		adder := New()
+		adder.removePath = func(name string) (bool, error) {
+			if strings.Contains(filepath.Base(name), ".engram-index-candidate-") {
+				return false, nil
+			}
+			err := os.Remove(name)
+			return err == nil, err
+		}
+		result, err := adder.Add(context.Background(), open(t, root), []string{"README.md"}, false)
+		mutation, present := MutationOf(err)
+		if err == nil || result.Changed || !present || mutation.Durable || mutation.CheckoutChanged || mutation.RecoveryRequired {
+			t.Fatalf("result = %#v, error = %v, mutation = %#v, present = %t", result, err, mutation, present)
+		}
+	})
+}
+
+func TestAddReleaseFailurePreservesPriorRecoveryEvidence(t *testing.T) {
+	root := fixture(t, false)
+	appendTo(t, filepath.Join(root, "topics", "why-files.md"), "\nFaulted cleanup and release.\n")
+	renameErr := errors.New("injected index rename failure")
+	cleanupErr := errors.New("injected native lock cleanup failure")
+	releaseErr := errors.New("injected rendezvous release failure")
+	adder := New()
+	adder.acquire = func(string) (worktreeHandle, error) { return failingWorktreeHandle{err: releaseErr}, nil }
+	adder.renamePath = func(string, string) (bool, error) { return false, renameErr }
+	adder.removePath = func(name string) (bool, error) {
+		if strings.HasSuffix(name, "index.lock") {
+			return false, cleanupErr
+		}
+		err := os.Remove(name)
+		return err == nil, err
+	}
+	result, err := adder.Add(context.Background(), open(t, root), []string{"topics/why-files.md"}, false)
+	mutation, present := MutationOf(err)
+	if !errors.Is(err, renameErr) || !errors.Is(err, cleanupErr) || !errors.Is(err, releaseErr) || result.Changed || !present || !mutation.Durable || mutation.CheckoutChanged || !mutation.RecoveryRequired {
+		t.Fatalf("result = %#v, error = %v, mutation = %#v, present = %t", result, err, mutation, present)
+	}
+}
+
+func TestAddReleaseFailureNeverReportsSuccess(t *testing.T) {
+	root := fixture(t, false)
+	injected := errors.New("injected residual rendezvous")
+	adder := New()
+	adder.acquire = func(gitDirectory string) (worktreeHandle, error) {
+		name := rendezvous.WorktreePath(gitDirectory)
+		if err := os.MkdirAll(filepath.Dir(name), 0o700); err != nil {
+			return nil, err
+		}
+		if err := os.WriteFile(name, []byte("residual\n"), 0o600); err != nil {
+			return nil, err
+		}
+		return failingWorktreeHandle{err: injected}, nil
+	}
+	result, err := adder.Add(context.Background(), open(t, root), []string{"README.md"}, false)
+	mutation, present := MutationOf(err)
+	if !errors.Is(err, injected) || result.Changed || !present || !mutation.Durable || mutation.CheckoutChanged || !mutation.RecoveryRequired {
+		t.Fatalf("result = %#v, error = %v, mutation = %#v, present = %t", result, err, mutation, present)
+	}
+}
+
+func TestAddSilentResidualRendezvousNeverReportsSuccess(t *testing.T) {
+	root := fixture(t, false)
+	adder := New()
+	adder.acquire = func(string) (worktreeHandle, error) { return silentResidualWorktreeHandle{}, nil }
+	result, err := adder.Add(context.Background(), open(t, root), []string{"README.md"}, false)
+	mutation, present := MutationOf(err)
+	if err == nil || result.Changed || !present || !mutation.Durable || mutation.CheckoutChanged || !mutation.RecoveryRequired {
+		t.Fatalf("result = %#v, error = %v, mutation = %#v, present = %t", result, err, mutation, present)
+	}
+}
+
+type failingWorktreeHandle struct{ err error }
+
+func (h failingWorktreeHandle) Release() error { return h.err }
+
+type silentResidualWorktreeHandle struct{}
+
+func (silentResidualWorktreeHandle) Release() error         { return nil }
+func (silentResidualWorktreeHandle) RecoveryRequired() bool { return true }
+
+func TestStagingMutationOfUsesFinalRecoverySnapshot(t *testing.T) {
+	first := mutationError("first", errors.New("first"), Mutation{CheckoutChanged: true, RecoveryRequired: true})
+	last := mutationError("last", errors.New("last"), Mutation{Durable: true})
+	mutation, present := MutationOf(errors.Join(first, last))
+	if !present || !mutation.Durable || !mutation.CheckoutChanged || mutation.RecoveryRequired {
+		t.Fatalf("joined mutation = %#v, present = %t", mutation, present)
+	}
+	outer := mutationError("outer", first, Mutation{})
+	mutation, present = MutationOf(outer)
+	if !present || mutation.Durable || !mutation.CheckoutChanged || mutation.RecoveryRequired {
+		t.Fatalf("outer mutation = %#v, present = %t", mutation, present)
 	}
 }
 

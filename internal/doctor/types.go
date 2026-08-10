@@ -48,19 +48,45 @@ type Result struct {
 	Recovery Recovery `json:"recovery"`
 }
 
-// RecoveryRequest is deliberately small. Doctor has already proved that all
-// recognized owners are dead, that the controller state is structurally
-// recognized, and that no unknown state participates. An adapter must retain
-// those observations, perform only local idempotent reconciliation, and must
-// not run hooks, use the network, guess a ref outcome, or move an accepted ref.
+// RecoveryController is the closed set of state owners doctor may authorize.
+// It is deliberately about controller state, not CLI command routing.
+type RecoveryController string
+
+const (
+	RecoveryInitialization  RecoveryController = "initialization"
+	RecoveryAcquisition     RecoveryController = "acquisition"
+	RecoverySynchronization RecoveryController = "synchronization"
+	RecoveryManagedWrite    RecoveryController = "managed-write"
+)
+
+// RecoveryBinding identifies the exact controller state approved by the
+// read-only inspection. StateSHA256 is the digest of the controller's
+// canonical state bytes; the private proof also binds every participating
+// rendezvous record.
+type RecoveryBinding struct {
+	Controller  RecoveryController
+	OwnerToken  string
+	StateSHA256 string
+}
+
+// RecoveryRequest carries a closed binding to the exact state doctor proved
+// safe. Revalidate must succeed immediately before an adapter mutates state.
+// The unexported proof prevents callers from manufacturing an approval.
 type RecoveryRequest struct {
 	Target     string
 	Repository *gitraw.Repository
+	Binding    RecoveryBinding
+	proof      *recoveryProof
 }
 
 type RecoveryResponse struct {
-	Accepted *managedread.GitState
-	Durable  bool
+	Accepted         *managedread.GitState
+	Failure          ErrorKind
+	Durable          bool
+	LocalRefs        []RefMutation
+	Head             *HeadMutation
+	CheckoutChanged  bool
+	RecoveryRequired bool
 }
 
 // RecoveryAdapter connects doctor to the transaction/synchronization engines
@@ -90,6 +116,11 @@ const (
 	FailureConcurrency ErrorKind = "concurrency"
 	FailureRepository  ErrorKind = "repository"
 	FailureIO          ErrorKind = "io"
+	FailureTrust       ErrorKind = "trust"
+	FailureHook        ErrorKind = "hook"
+	FailureNetwork     ErrorKind = "network"
+	FailureConflict    ErrorKind = "conflict"
+	FailureIntegration ErrorKind = "integration"
 	FailureOperational ErrorKind = "operational"
 )
 
@@ -102,7 +133,21 @@ type Failure struct {
 
 type Mutation struct {
 	Durable          bool
+	LocalRefs        []RefMutation
+	Head             *HeadMutation
+	CheckoutChanged  bool
 	RecoveryRequired bool
+}
+
+type RefMutation struct {
+	Ref    string
+	Before *string
+	After  *string
+}
+
+type HeadMutation struct {
+	Before managedread.GitState
+	After  managedread.GitState
 }
 
 func (e *Failure) Error() string {

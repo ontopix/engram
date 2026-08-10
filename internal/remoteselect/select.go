@@ -185,7 +185,11 @@ func gitOutput(ctx context.Context, root string, arguments ...string) ([]byte, i
 	if err != nil {
 		return nil, -1, err
 	}
-	global := []string{"--no-pager", "--no-optional-locks", "--no-replace-objects", "-c", "core.hooksPath=" + os.DevNull, "-C", root}
+	global := []string{
+		"--no-pager", "--no-optional-locks", "--no-replace-objects",
+		"-c", "core.hooksPath=" + os.DevNull, "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false",
+		"-c", "maintenance.auto=false", "-c", "gc.auto=0", "-C", root,
+	}
 	command := exec.CommandContext(ctx, git, append(global, arguments...)...)
 	command.Env = isolatedEnvironment(os.Environ())
 	output, err := command.Output()

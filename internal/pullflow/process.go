@@ -21,6 +21,8 @@ func runGitCommand(ctx context.Context, executable, root string, environment []s
 	global := []string{
 		"--no-pager", "--no-optional-locks", "--no-replace-objects",
 		"-c", "core.askPass=", "-c", "core.hooksPath=" + os.DevNull,
+		"-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false",
+		"-c", "maintenance.auto=false", "-c", "gc.auto=0",
 		"-c", "core.sshCommand=ssh", "-c", "credential.helper=",
 		"-c", "protocol.ext.allow=never", "-c", "fetch.writeCommitGraph=false",
 		"-c", "fetch.recurseSubmodules=no", "-C", root,

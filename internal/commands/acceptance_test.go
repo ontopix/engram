@@ -162,12 +162,40 @@ func TestManagedWriteRecoveryErrorUsesMutationResult(t *testing.T) {
 	}
 	result := decodeObject(t, envelope.Result)
 	assertExactKeys(t, result, "durable", "local_refs", "head", "checkout_changed", "remote", "recovery_required")
-	if result["durable"] != true || result["recovery_required"] != true || result["checkout_changed"] != false {
+	if result["durable"] != true || result["recovery_required"] != true || result["checkout_changed"] != false || result["head"] == nil {
 		t.Fatalf("mutation = %#v", result)
 	}
 	refs := result["local_refs"].([]any)
 	if len(refs) != 1 || refs[0].(map[string]any)["after"] != commit {
 		t.Fatalf("local refs = %#v", refs)
+	}
+}
+
+func TestManagedWritePreCASDurabilityUsesMutationResult(t *testing.T) {
+	result := managedWriteFailure(&managedwrite.Error{
+		Kind: managedwrite.FailureRecovery, Phase: managedwrite.PhaseJournalPending,
+		Durable: true, RecoveryRequired: true, Err: managedwrite.ErrRecovery,
+	}, &managedwrite.Result{Ref: "refs/heads/main"}, "accept candidate")
+	if result.Outcome != cli.OutcomeError || result.Error == nil || result.Error.Kind != cli.ErrorConflict {
+		t.Fatalf("result = %#v", result)
+	}
+	mutation, ok := result.Value.(cli.MutationResult)
+	if !ok || !mutation.Durable || !mutation.RecoveryRequired || mutation.CheckoutChanged || len(mutation.LocalRefs) != 0 || mutation.Head != nil || mutation.Remote != nil {
+		t.Fatalf("mutation = %#v", result.Value)
+	}
+}
+
+func TestManagedWriteCheckoutEvidenceIsExplicit(t *testing.T) {
+	base := "1111111111111111111111111111111111111111"
+	commit := "2222222222222222222222222222222222222222"
+	result := managedWriteFailure(&managedwrite.Error{
+		Kind: managedwrite.FailureRecovery, Phase: managedwrite.PhaseIndexReconciled,
+		Durable: true, Accepted: true, CheckoutChanged: true, RecoveryRequired: true,
+		Commit: commit, Err: managedwrite.ErrPostCAS,
+	}, &managedwrite.Result{Ref: "refs/heads/main", Base: &base}, "accept candidate")
+	mutation, ok := result.Value.(cli.MutationResult)
+	if !ok || !mutation.Durable || !mutation.CheckoutChanged || !mutation.RecoveryRequired || len(mutation.LocalRefs) != 1 || mutation.Head == nil {
+		t.Fatalf("mutation = %#v", result.Value)
 	}
 }
 

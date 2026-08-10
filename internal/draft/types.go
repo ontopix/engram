@@ -46,6 +46,15 @@ type Error struct {
 	Operation string
 	Path      string
 	Err       error
+	Mutation  *Mutation
+}
+
+// Mutation is the closed local effect set known after a draft publication
+// error. Draft helpers never update refs, HEAD, or remotes.
+type Mutation struct {
+	Durable          bool
+	CheckoutChanged  bool
+	RecoveryRequired bool
 }
 
 func (e *Error) Error() string {
@@ -80,6 +89,47 @@ func KindOf(err error) ErrorKind {
 		return typed.Kind
 	}
 	return ""
+}
+
+// MutationOf merges effect evidence across joined or wrapped draft errors.
+// RecoveryRequired is the final snapshot: an outer mutation overrides its
+// causes and the last evidence-bearing joined error overrides earlier ones.
+func MutationOf(err error) (Mutation, bool) {
+	var visit func(error) (Mutation, bool)
+	visit = func(current error) (Mutation, bool) {
+		if current == nil {
+			return Mutation{}, false
+		}
+		if typedError, ok := current.(*Error); ok && typedError.Mutation != nil {
+			result := *typedError.Mutation
+			if nested, present := visit(typedError.Err); present {
+				result.Durable = result.Durable || nested.Durable
+				result.CheckoutChanged = result.CheckoutChanged || nested.CheckoutChanged
+			}
+			return result, true
+		}
+		switch unwrapped := current.(type) {
+		case interface{ Unwrap() []error }:
+			result := Mutation{}
+			present := false
+			for _, child := range unwrapped.Unwrap() {
+				childMutation, childPresent := visit(child)
+				if !childPresent {
+					continue
+				}
+				result.Durable = result.Durable || childMutation.Durable
+				result.CheckoutChanged = result.CheckoutChanged || childMutation.CheckoutChanged
+				result.RecoveryRequired = childMutation.RecoveryRequired
+				present = true
+			}
+			return result, present
+		case interface{ Unwrap() error }:
+			return visit(unwrapped.Unwrap())
+		default:
+			return Mutation{}, false
+		}
+	}
+	return visit(err)
 }
 
 // Unlock releases a caller-owned worktree rendezvous.
@@ -197,6 +247,13 @@ func typed(kind ErrorKind, operation, logicalPath string, err error) error {
 		err = errors.New("unknown failure")
 	}
 	return &Error{Kind: kind, Operation: operation, Path: logicalPath, Err: err}
+}
+
+func mutationError(kind ErrorKind, operation string, err error, mutation Mutation) error {
+	if err == nil {
+		err = errors.New("unknown mutation failure")
+	}
+	return &Error{Kind: kind, Operation: operation, Err: err, Mutation: &mutation}
 }
 
 func cancelled(ctx context.Context, operation string) error {

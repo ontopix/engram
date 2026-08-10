@@ -343,6 +343,26 @@ func TestPushBlocksRepositoryURLRewritesBeforeNetwork(t *testing.T) {
 	}
 }
 
+func TestPushPrivateNetworkContextDefeatsRewriteAfterFinalCheck(t *testing.T) {
+	fixture := newPushFixture(t, true)
+	redirected := filepath.Join(fixture.root, "redirected.git")
+	redirectedURL := (&url.URL{Scheme: "file", Path: redirected}).String()
+	pusher := NewPusher()
+	pusher.afterRewriteCheck = func() {
+		testGit(t, fixture.local, "config", "url."+redirectedURL+".insteadOf", fixture.remoteURL)
+	}
+	result, err := pusher.Push(t.Context(), openTestStore(t, fixture.local), "origin", "main")
+	if err != nil || result == nil || result.State != PushPushed {
+		t.Fatalf("push after rewrite race = %#v, %v", result, err)
+	}
+	if got := fixture.remoteTip(t); got != result.After {
+		t.Fatalf("selected remote tip = %q, want %q", got, result.After)
+	}
+	if _, err := os.Lstat(redirected); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("rewrite target was contacted or created: %v", err)
+	}
+}
+
 func TestPushFiltersLSRemoteTailMatchesAndCreatesOnlyExactRef(t *testing.T) {
 	fixture := newPushFixture(t, true)
 	tip := fixture.tip(t)

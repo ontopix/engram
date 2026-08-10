@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -14,6 +15,7 @@ import (
 	"github.com/ontopix/engram/internal/guard"
 	"github.com/ontopix/engram/internal/lifecycle"
 	"github.com/ontopix/engram/internal/managedread"
+	"github.com/ontopix/engram/internal/rendezvous"
 )
 
 func TestClonePublishesOnlyVerifiedManagedStore(t *testing.T) {
@@ -124,7 +126,7 @@ func TestCloneCleanupFailureRetainsRecoverableExactState(t *testing.T) {
 		t.Fatalf("clone error = %v", err)
 	}
 	mutation, ok := MutationOf(err)
-	if !ok || !mutation.RecoveryRequired || mutation.CheckoutChanged || mutation.Accepted != nil {
+	if !ok || !mutation.Durable || !mutation.RecoveryRequired || mutation.CheckoutChanged || mutation.Accepted != nil {
 		t.Fatalf("mutation = %#v, %v", mutation, ok)
 	}
 	if _, _, err := lifecycle.Read(destination, lifecycle.Acquisition); err != nil {
@@ -210,23 +212,139 @@ func TestCloneCleanupRequiredFaultRecoversUnpublishedStage(t *testing.T) {
 
 func TestClonePublishedFaultRecoversAcceptedCheckout(t *testing.T) {
 	location := bareFixture(t, false)
-	for _, phase := range []Phase{PhasePublished, PhaseDurable, PhaseStageCleaned} {
+	for _, phase := range []Phase{PhasePublished, PhaseDurable} {
 		t.Run(string(phase), func(t *testing.T) {
 			destination := canonicalTestDestination(t, string(phase))
 			runFaultedClone(t, location, destination, phase, "")
 			if _, err := os.Lstat(destination); err != nil {
 				t.Fatalf("published target = %v", err)
 			}
-			recovered, err := Recover(context.Background(), destination)
+			observation, err := lifecycle.ObserveRecovery(destination, lifecycle.Acquisition)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !recovered.Needed || !recovered.Performed || !recovered.Published || !recovered.Durable || recovered.Accepted == nil || recovered.Accepted.Ref == nil || recovered.Accepted.Commit == nil {
+			recovered, err := RecoverExpected(context.Background(), destination, observation.Expectation)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !recovered.Needed || !recovered.Performed || !recovered.Published || !recovered.Durable || recovered.CheckoutChanged || recovered.RecoveryRequired || recovered.Accepted == nil || recovered.Accepted.Ref == nil || recovered.Accepted.Commit == nil {
 				t.Fatalf("recovered = %#v", recovered)
 			}
 			assertNoAcquisitionState(t, destination)
 			if _, _, err := verifyPublishedStore(context.Background(), destination); err != nil {
 				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestCloneRecoveryWithoutLifecycleStateIsANoop(t *testing.T) {
+	destination := canonicalTestDestination(t, "no-recovery-state")
+	result, err := Recover(context.Background(), destination)
+	if err != nil || result == nil || result.Needed || result.Performed || result.Durable || result.CheckoutChanged || result.RecoveryRequired || result.Accepted != nil {
+		t.Fatalf("recovery = %#v, %v", result, err)
+	}
+	if _, err := os.Lstat(lifecycle.Sidecar(destination, lifecycle.Acquisition) + ".lease"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("no-op recovery created a lease file: %v", err)
+	}
+}
+
+func TestCloneRecoveryLeaseRejectsAConcurrentController(t *testing.T) {
+	location := bareFixture(t, false)
+	destination := canonicalTestDestination(t, "contended-recovery")
+	runFaultedClone(t, location, destination, PhaseCleanupRequired, "")
+	observation, err := lifecycle.ObserveRecovery(destination, lifecycle.Acquisition)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease, err := lifecycle.AcquireRecovery(destination, lifecycle.Acquisition)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lease.Release()
+
+	result, recoverErr := RecoverExpected(context.Background(), destination, observation.Expectation)
+	if KindOf(recoverErr) != ErrorConcurrency || !errors.Is(recoverErr, rendezvous.ErrBusy) || result == nil || !result.Needed || result.Performed || result.Durable || result.CheckoutChanged || !result.RecoveryRequired {
+		t.Fatalf("contended recovery = %#v, %v", result, recoverErr)
+	}
+	if _, _, err := lifecycle.Read(destination, lifecycle.Acquisition); err != nil {
+		t.Fatalf("contended recovery changed lifecycle state: %v", err)
+	}
+	cleanupAcquisitionArtifacts(t, destination)
+}
+
+func TestRecoverExpectedRejectsChangedClonePlanAndPreservesForeignTarget(t *testing.T) {
+	location := bareFixture(t, false)
+	for _, test := range []struct {
+		name   string
+		mutate func(*testing.T, string)
+	}{
+		{name: "bytes", mutate: func(t *testing.T, name string) {
+			t.Helper()
+			if err := os.WriteFile(name, []byte("{}\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "symlink", mutate: func(t *testing.T, name string) {
+			t.Helper()
+			approved, err := os.ReadFile(name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			other := filepath.Join(filepath.Dir(name), "replacement-plan")
+			if err := os.WriteFile(other, approved, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Remove(name); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(other, name); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "disappeared", mutate: func(t *testing.T, name string) {
+			t.Helper()
+			if err := os.Remove(name); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if test.name == "symlink" && runtime.GOOS == "windows" {
+				t.Skip("symlink creation is not portable on Windows")
+			}
+			destination := canonicalTestDestination(t, "plan-"+test.name)
+			runFaultedClone(t, location, destination, PhaseCleanupRequired, "race")
+			state, _, err := lifecycle.Read(destination, lifecycle.Acquisition)
+			if err != nil {
+				t.Fatal(err)
+			}
+			stage, err := lifecycle.Stage(state)
+			if err != nil {
+				t.Fatal(err)
+			}
+			observation, err := lifecycle.ObserveRecovery(destination, lifecycle.Acquisition)
+			if err != nil {
+				t.Fatal(err)
+			}
+			test.mutate(t, publicationPlanPath(stage))
+			recovered, recoverErr := RecoverExpected(context.Background(), destination, observation.Expectation)
+			if KindOf(recoverErr) != ErrorConcurrency || recovered == nil || !recovered.Needed {
+				t.Fatalf("recovery = %#v, %v", recovered, recoverErr)
+			}
+			mutation, present := MutationOf(recoverErr)
+			if !present || mutation.Durable || mutation.CheckoutChanged || !mutation.RecoveryRequired {
+				t.Fatalf("recovery mutation = %#v, %v", mutation, present)
+			}
+			marker := filepath.Join(destination, "foreign")
+			if data, err := os.ReadFile(marker); err != nil || string(data) != "preserve" {
+				t.Fatalf("foreign target changed = %q, %v", data, err)
+			}
+			if _, err := os.Lstat(stage); err != nil {
+				t.Fatalf("stage was removed: %v", err)
+			}
+			if _, _, err := lifecycle.Read(destination, lifecycle.Acquisition); err != nil {
+				t.Fatalf("sidecar was removed: %v", err)
 			}
 		})
 	}
@@ -275,7 +393,7 @@ func TestConcurrentCloneRecoveryIsIdempotent(t *testing.T) {
 	close(results)
 	close(errorsSeen)
 	for err := range errorsSeen {
-		if err != nil {
+		if err != nil && (KindOf(err) != ErrorConcurrency || !errors.Is(err, rendezvous.ErrBusy)) {
 			t.Fatalf("parallel recovery: %v", err)
 		}
 	}
@@ -330,6 +448,10 @@ func TestCloneRecoveryRefusesLiveOwnerAndMalformedPlan(t *testing.T) {
 		if KindOf(err) != ErrorRecovery || result == nil || !result.Needed {
 			t.Fatalf("recover = %#v, %v", result, err)
 		}
+		mutation, present := MutationOf(err)
+		if !present || mutation.Durable || mutation.CheckoutChanged || !mutation.RecoveryRequired {
+			t.Fatalf("mutation = %#v, %v", mutation, present)
+		}
 		if _, _, err := lifecycle.Read(destination, lifecycle.Acquisition); err != nil {
 			t.Fatalf("state was removed: %v", err)
 		}
@@ -339,35 +461,342 @@ func TestCloneRecoveryRefusesLiveOwnerAndMalformedPlan(t *testing.T) {
 	})
 }
 
-func TestClonePublishedFailureCarriesMutationEvidence(t *testing.T) {
+func TestCloneFaultPhasesCarryOnlyAttributableMutationEvidence(t *testing.T) {
 	location := bareFixture(t, false)
-	destination := canonicalTestDestination(t, "mutation")
-	cloner := &Cloner{Fault: func(phase Phase) error {
-		if phase == PhasePublished {
-			return errors.New("injected")
+	tests := []struct {
+		phase         Phase
+		wantDurable   bool
+		wantCheckout  bool
+		wantRecovery  bool
+		wantPublished bool
+		wantAccepted  bool
+	}{
+		{phase: PhaseCleanupRequired, wantDurable: true, wantRecovery: true},
+		{phase: PhasePublished, wantDurable: true, wantCheckout: true, wantRecovery: true, wantPublished: true, wantAccepted: true},
+		{phase: PhaseDurable, wantDurable: true, wantCheckout: true, wantRecovery: true, wantPublished: true, wantAccepted: true},
+		{phase: PhaseStageCleaned, wantDurable: true, wantCheckout: true, wantPublished: true, wantAccepted: true},
+		{phase: PhaseCleaned, wantDurable: true, wantCheckout: true, wantPublished: true, wantAccepted: true},
+	}
+	for _, test := range tests {
+		t.Run(string(test.phase), func(t *testing.T) {
+			destination := canonicalTestDestination(t, "mutation-"+string(test.phase))
+			cloner := &Cloner{Fault: func(phase Phase) error {
+				if phase == test.phase {
+					return errors.New("injected")
+				}
+				return nil
+			}}
+			result, err := cloner.Run(context.Background(), location, Options{Destination: destination, DestinationProvided: true})
+			if err == nil || result.Published != test.wantPublished {
+				t.Fatalf("clone = %#v, %v", result, err)
+			}
+			mutation, ok := MutationOf(err)
+			if !ok || mutation.Durable != test.wantDurable || mutation.CheckoutChanged != test.wantCheckout || mutation.RecoveryRequired != test.wantRecovery || (mutation.Accepted != nil) != test.wantAccepted {
+				t.Fatalf("mutation = %#v, %v", mutation, ok)
+			}
+			cleanupAcquisitionArtifacts(t, destination)
+		})
+	}
+}
+
+func TestClonePublicationSyncReportsVisibleAndDurableEffectsSeparately(t *testing.T) {
+	location := bareFixture(t, false)
+	injected := errors.New("injected publication sync failure")
+	for _, test := range []struct {
+		name        string
+		durable     bool
+		wantDurable bool
+	}{
+		{name: "sync failed", durable: false, wantDurable: true},
+		{name: "close failed after sync", durable: true, wantDurable: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			destination := canonicalTestDestination(t, "sync-"+strings.ReplaceAll(test.name, " ", "-"))
+			cloner := New()
+			cloner.syncPublicationDirectory = func(string) (bool, error) { return test.durable, injected }
+			result, err := cloner.Run(context.Background(), location, Options{Destination: destination, DestinationProvided: true})
+			mutation, present := MutationOf(err)
+			if !errors.Is(err, injected) || !result.Published || !present || mutation.Durable != test.wantDurable || !mutation.CheckoutChanged || !mutation.RecoveryRequired || mutation.Accepted == nil {
+				t.Fatalf("result = %#v, error = %v, mutation = %#v, present = %t", result, err, mutation, present)
+			}
+			if _, err := os.Lstat(destination); err != nil {
+				t.Fatalf("visible destination = %v", err)
+			}
+			cleanupAcquisitionArtifacts(t, destination)
+		})
+	}
+}
+
+func TestCloneAtomicPublicationRefusesLateDestination(t *testing.T) {
+	location := bareFixture(t, false)
+	destination := canonicalTestDestination(t, "late-destination")
+	var appeared os.FileInfo
+	cloner := New()
+	cloner.renamePublication = func(oldPath, newPath string) (bool, error) {
+		if err := os.Mkdir(newPath, 0o700); err != nil {
+			return false, err
 		}
-		return nil
-	}}
+		var err error
+		appeared, err = os.Lstat(newPath)
+		if err != nil {
+			return false, err
+		}
+		return renameNoReplace(oldPath, newPath)
+	}
 	result, err := cloner.Run(context.Background(), location, Options{Destination: destination, DestinationProvided: true})
-	if err == nil || !result.Published {
+	if KindOf(err) != ErrorConcurrency || !errors.Is(err, os.ErrExist) || result.Published {
 		t.Fatalf("clone = %#v, %v", result, err)
 	}
-	mutation, ok := MutationOf(err)
-	if !ok || mutation.Durable || !mutation.CheckoutChanged || !mutation.RecoveryRequired || mutation.Accepted == nil || mutation.Accepted.Commit == nil {
-		t.Fatalf("mutation = %#v, %v", mutation, ok)
+	mutation, present := MutationOf(err)
+	if !present || !mutation.Durable || mutation.CheckoutChanged || !mutation.RecoveryRequired || mutation.Accepted != nil {
+		t.Fatalf("mutation = %#v, present = %t", mutation, present)
+	}
+	current, statErr := os.Lstat(destination)
+	if statErr != nil || !current.IsDir() || !os.SameFile(appeared, current) {
+		t.Fatalf("late destination = %#v, %v", current, statErr)
 	}
 	state, _, stateErr := lifecycle.Read(destination, lifecycle.Acquisition)
-	if stateErr != nil {
-		t.Fatal(stateErr)
+	if stateErr != nil || state.Phase != lifecycle.CleanupRequired {
+		t.Fatalf("lifecycle = %#v, %v", state, stateErr)
 	}
 	stage, stageErr := lifecycle.Stage(state)
 	if stageErr != nil {
 		t.Fatal(stageErr)
 	}
-	t.Cleanup(func() {
-		_ = os.RemoveAll(stage)
-		_ = os.Remove(lifecycle.Sidecar(destination, lifecycle.Acquisition))
+	if _, stageErr := os.Lstat(filepath.Join(stage, "store")); stageErr != nil {
+		t.Fatalf("unpublished checkout was consumed: %v", stageErr)
+	}
+	cleanupAcquisitionArtifacts(t, destination)
+}
+
+func TestCloneRecoveryDoesNotAttributeObservedCheckout(t *testing.T) {
+	location := bareFixture(t, false)
+	injected := errors.New("injected recovery cleanup failure")
+	tests := []struct {
+		name          string
+		phase         Phase
+		removeStage   bool
+		operations    func(string) recoveryOperations
+		wantDurable   bool
+		wantPerformed bool
+		wantPublished bool
+		wantRecovery  bool
+	}{
+		{
+			name: "published sidecar durable before stage cleanup failure", phase: PhasePublished,
+			operations: func(string) recoveryOperations {
+				return recoveryOperations{cleanupStage: func(string) error { return injected }}
+			},
+			wantDurable: true, wantPerformed: true, wantPublished: true,
+		},
+		{
+			name: "sidecar removal refused", phase: PhaseCleanupRequired, removeStage: true,
+			operations: func(string) recoveryOperations {
+				return recoveryOperations{removeLifecycle: func(*lifecycle.Handle) error { return injected }}
+			},
+			wantRecovery: true,
+		},
+		{
+			name: "sidecar visible removal before sync", phase: PhaseCleanupRequired, removeStage: true,
+			operations: func(destination string) recoveryOperations {
+				return recoveryOperations{removeLifecycle: func(*lifecycle.Handle) error {
+					if err := os.Remove(lifecycle.Sidecar(destination, lifecycle.Acquisition)); err != nil {
+						return errors.Join(injected, err)
+					}
+					return injected
+				}}
+			},
+			wantPerformed: true,
+		},
+		{
+			name: "visible sidecar removal preserves stage plan", phase: PhasePublished,
+			operations: func(destination string) recoveryOperations {
+				return recoveryOperations{removeLifecycle: func(*lifecycle.Handle) error {
+					if err := os.Remove(lifecycle.Sidecar(destination, lifecycle.Acquisition)); err != nil {
+						return errors.Join(injected, err)
+					}
+					return injected
+				}}
+			},
+			wantPerformed: true, wantPublished: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			destination := canonicalTestDestination(t, strings.ReplaceAll(test.name, " ", "-"))
+			runFaultedClone(t, location, destination, test.phase, "")
+			if test.removeStage {
+				state, _, err := lifecycle.Read(destination, lifecycle.Acquisition)
+				if err != nil {
+					t.Fatal(err)
+				}
+				stage, err := lifecycle.Stage(state)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.RemoveAll(stage); err != nil {
+					t.Fatal(err)
+				}
+			}
+			observation, err := lifecycle.ObserveRecovery(destination, lifecycle.Acquisition)
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, recoverErr := recover(context.Background(), destination, &observation.Expectation, test.operations(destination))
+			if !errors.Is(recoverErr, injected) || result == nil || !result.Needed || result.Published != test.wantPublished || result.Durable != test.wantDurable || result.Performed != test.wantPerformed || result.CheckoutChanged || result.RecoveryRequired != test.wantRecovery {
+				t.Fatalf("recovery = %#v, %v", result, recoverErr)
+			}
+			mutation, present := MutationOf(recoverErr)
+			if !present || mutation.Durable != test.wantDurable || mutation.CheckoutChanged || mutation.RecoveryRequired != test.wantRecovery {
+				t.Fatalf("mutation = %#v, %v", mutation, present)
+			}
+			if test.wantPublished {
+				if _, _, err := verifyPublishedStore(context.Background(), destination); err != nil {
+					t.Fatalf("published checkout changed: %v", err)
+				}
+			} else if _, err := os.Lstat(destination); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("unpublished target = %v", err)
+			}
+			cleanupAcquisitionArtifacts(t, destination)
+		})
+	}
+}
+
+func TestPublishedCloneRecoveryRetainsPlanUntilLifecycleRemovalSucceeds(t *testing.T) {
+	location := bareFixture(t, false)
+	destination := canonicalTestDestination(t, "published-removal-retry")
+	runFaultedClone(t, location, destination, PhasePublished, "")
+	state, _, err := lifecycle.Read(destination, lifecycle.Acquisition)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage, err := lifecycle.Stage(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	observation, err := lifecycle.ObserveRecovery(destination, lifecycle.Acquisition)
+	if err != nil {
+		t.Fatal(err)
+	}
+	injected := errors.New("injected lifecycle removal refusal")
+	result, recoverErr := recover(context.Background(), destination, &observation.Expectation, recoveryOperations{
+		removeLifecycle: func(*lifecycle.Handle) error { return injected },
 	})
+	if !errors.Is(recoverErr, injected) || result == nil || !result.Needed || result.Performed || !result.Published || result.Durable || !result.RecoveryRequired || result.Accepted == nil {
+		t.Fatalf("first recovery = %#v, %v", result, recoverErr)
+	}
+	if _, err := os.Lstat(publicationPlanPath(stage)); err != nil {
+		t.Fatalf("publication plan was removed before lifecycle authority: %v", err)
+	}
+	if _, _, err := lifecycle.Read(destination, lifecycle.Acquisition); err != nil {
+		t.Fatalf("lifecycle was changed by refused removal: %v", err)
+	}
+	retried, err := RecoverExpected(context.Background(), destination, observation.Expectation)
+	if err != nil || retried == nil || !retried.Needed || !retried.Performed || !retried.Published || !retried.Durable || retried.RecoveryRequired || retried.Accepted == nil {
+		t.Fatalf("retried recovery = %#v, %v", retried, err)
+	}
+	if _, err := os.Lstat(stage); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stage remains after retry: %v", err)
+	}
+	assertNoAcquisitionState(t, destination)
+}
+
+func TestPublishedCloneRecoveryRejectsEquivalentTargetReplacement(t *testing.T) {
+	location := bareFixture(t, false)
+	destination := canonicalTestDestination(t, "published-identity")
+	replacement := destination + "-replacement"
+	displaced := destination + "-displaced"
+	if result, err := Clone(context.Background(), location, Options{Destination: replacement, DestinationProvided: true}); err != nil || !result.Published {
+		t.Fatalf("replacement clone = %#v, %v", result, err)
+	}
+	runFaultedClone(t, location, destination, PhasePublished, "")
+	originalInfo, err := os.Lstat(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	observation, err := lifecycle.ObserveRecovery(destination, lifecycle.Acquisition)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verificationCalls := 0
+	operations := recoveryOperations{verifyPublished: func(ctx context.Context, root string, plan publicationPlan) (*managedread.GitState, error) {
+		verificationCalls++
+		if verificationCalls == 2 {
+			if err := os.Rename(root, displaced); err != nil {
+				return nil, err
+			}
+			if err := os.Rename(replacement, root); err != nil {
+				return nil, err
+			}
+		}
+		return verifyPublished(ctx, root, plan)
+	}}
+	result, recoverErr := recover(context.Background(), destination, &observation.Expectation, operations)
+	if KindOf(recoverErr) != ErrorConcurrency || result == nil || !result.Needed || result.Performed || !result.Published || result.Durable || !result.RecoveryRequired || result.Accepted == nil {
+		t.Fatalf("recovery = %#v, %v", result, recoverErr)
+	}
+	currentInfo, err := os.Lstat(destination)
+	if err != nil || os.SameFile(originalInfo, currentInfo) {
+		t.Fatalf("replacement identity = %#v, %v", currentInfo, err)
+	}
+	displacedInfo, err := os.Lstat(displaced)
+	if err != nil || !os.SameFile(originalInfo, displacedInfo) {
+		t.Fatalf("displaced original = %#v, %v", displacedInfo, err)
+	}
+	if _, _, err := lifecycle.Read(destination, lifecycle.Acquisition); err != nil {
+		t.Fatalf("lifecycle was removed after target replacement: %v", err)
+	}
+	cleanupAcquisitionArtifacts(t, destination)
+}
+
+func TestCloneRecoveryRefusesPublishedRepositoryWithoutExactPlan(t *testing.T) {
+	location := bareFixture(t, false)
+	destination := canonicalTestDestination(t, "published-without-plan")
+	runFaultedClone(t, location, destination, PhasePublished, "")
+	state, _, err := lifecycle.Read(destination, lifecycle.Acquisition)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage, err := lifecycle.Stage(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(stage); err != nil {
+		t.Fatal(err)
+	}
+	observation, err := lifecycle.ObserveRecovery(destination, lifecycle.Acquisition)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, recoverErr := RecoverExpected(context.Background(), destination, observation.Expectation)
+	if KindOf(recoverErr) != ErrorConflict || result == nil || !result.Needed || result.Performed || result.Published || result.Durable || result.CheckoutChanged || !result.RecoveryRequired || result.Accepted != nil {
+		t.Fatalf("recovery = %#v, %v", result, recoverErr)
+	}
+	mutation, present := MutationOf(recoverErr)
+	if !present || mutation.Durable || mutation.CheckoutChanged || !mutation.RecoveryRequired || mutation.Accepted != nil {
+		t.Fatalf("mutation = %#v, %v", mutation, present)
+	}
+	if _, _, err := verifyPublishedStore(context.Background(), destination); err != nil {
+		t.Fatalf("published checkout changed: %v", err)
+	}
+	if _, _, err := lifecycle.Read(destination, lifecycle.Acquisition); err != nil {
+		t.Fatalf("ambiguous lifecycle was removed: %v", err)
+	}
+	cleanupAcquisitionArtifacts(t, destination)
+}
+
+func cleanupAcquisitionArtifacts(t *testing.T, destination string) {
+	t.Helper()
+	if state, _, err := lifecycle.Read(destination, lifecycle.Acquisition); err == nil {
+		if stage, stageErr := lifecycle.Stage(state); stageErr == nil {
+			if err := os.RemoveAll(stage); err != nil {
+				t.Fatalf("clean acquisition stage: %v", err)
+			}
+		}
+	}
+	if err := os.Remove(lifecycle.Sidecar(destination, lifecycle.Acquisition)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("clean acquisition lifecycle: %v", err)
+	}
 }
 
 func TestCloneRecoveryFaultHelper(t *testing.T) {

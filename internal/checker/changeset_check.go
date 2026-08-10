@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"math/big"
+	"path"
 	"reflect"
 
 	"github.com/ontopix/engram/internal/changeset"
@@ -20,8 +21,16 @@ func CheckTransition(base, candidate *Snapshot, initialization bool) (Result, []
 	// any indeterminate early return so every result has one stable shape.
 	result := Result{Target: TargetChangeset, Status: StatusComplete, Findings: []Finding{}}
 	findings := make(findingSet)
+	if base != nil && base.Tree != nil {
+		for _, issue := range base.Tree.Issues {
+			if changeset.IsPreflightIssue(issue) {
+				findings.add(issue.Code, issue.Path, "")
+			}
+		}
+	}
 	if candidate == nil {
 		result.Status = StatusIndeterminate
+		result.Findings = findings.sorted()
 		return result, nil
 	}
 	for _, finding := range candidate.Validation.Findings {
@@ -32,7 +41,9 @@ func CheckTransition(base, candidate *Snapshot, initialization bool) (Result, []
 		result.Findings = findings.sorted()
 		return result, nil
 	}
-	if !changeset.PreflightOK(candidate.Tree) || base != nil && !changeset.PreflightOK(base.Tree) {
+	candidatePreflight := changeset.PreflightOK(candidate.Tree)
+	basePreflight := base == nil || changeset.PreflightOK(base.Tree)
+	if !candidatePreflight || !basePreflight {
 		result.Status = StatusIndeterminate
 		result.Findings = findings.sorted()
 		return result, nil
@@ -59,6 +70,7 @@ func CheckTransition(base, candidate *Snapshot, initialization bool) (Result, []
 		}
 		record := base.Records[name]
 		if record == nil || !record.Policy.Available {
+			addBaseRecordInputFindings(findings, base, name, record)
 			result.Status = StatusIndeterminate
 			continue
 		}
@@ -101,6 +113,7 @@ func CheckTransition(base, candidate *Snapshot, initialization bool) (Result, []
 		if !baseOK || !candidateOK || baseSchema.Version == nil || candidateSchema.Version == nil ||
 			baseSchema.RawSchema == nil || candidateSchema.RawSchema == nil ||
 			!baseSchema.BodyValid || !candidateSchema.BodyValid || !baseSchema.PolicyValid || !candidateSchema.PolicyValid {
+			addFindingsAt(findings, base.Validation.Findings, name, isSchemaInputFinding)
 			result.Status = StatusIndeterminate
 			continue
 		}
@@ -115,6 +128,72 @@ func CheckTransition(base, candidate *Snapshot, initialization bool) (Result, []
 
 	result.Findings = findings.sorted()
 	return result, changes
+}
+
+func addBaseRecordInputFindings(findings findingSet, base *Snapshot, name string, record *Record) {
+	if base == nil {
+		return
+	}
+	addFindingsAt(findings, base.Validation.Findings, name, isRecordInputFinding)
+	if record == nil || record.Type == "" || base.Tree == nil {
+		return
+	}
+	schemaPath := record.SchemaPath
+	if schemaPath == "" {
+		schemaPath = selectedSchemaCandidate(base.Tree, path.Dir(name), record.Type)
+	}
+	if schemaPath != "" {
+		addFindingsAt(findings, base.Validation.Findings, schemaPath, isSchemaInputFinding)
+	}
+}
+
+func addFindingsAt(findings findingSet, available []Finding, name string, causal func(string) bool) {
+	for _, finding := range available {
+		if finding.Path == name && causal(finding.Code) {
+			findings.add(finding.Code, finding.Path, finding.Detail)
+		}
+	}
+}
+
+func isRecordInputFinding(code string) bool {
+	switch code {
+	case "E108", "E201", "E202", "E203":
+		return true
+	default:
+		return false
+	}
+}
+
+func isSchemaInputFinding(code string) bool {
+	return code == "E108" || code == "E303"
+}
+
+// selectedSchemaCandidate mirrors scoped schema selection but returns the
+// direct candidate path even when its contents could not be parsed. Preflight
+// has already proved the traversed configuration boundaries when this helper
+// is used by transition validation.
+func selectedSchemaCandidate(tree *snapshot.Tree, directory, typeName string) string {
+	for scope := directory; ; scope = parentScope(scope) {
+		config := joinScope(scope, ".engram")
+		if kind, exists := tree.Boundaries[config]; exists {
+			if kind != snapshot.KindDirectory {
+				return ""
+			}
+			schemaDirectory := joinScope(scope, ".engram/schemas")
+			if schemaKind, exists := tree.Boundaries[schemaDirectory]; exists {
+				if schemaKind != snapshot.KindDirectory {
+					return ""
+				}
+				candidate := joinScope(scope, ".engram/schemas/"+typeName+".md")
+				if _, exists := tree.Boundaries[candidate]; exists {
+					return candidate
+				}
+			}
+		}
+		if scope == "." {
+			return ""
+		}
+	}
 }
 
 func requiredWikilinkTargets(candidate *Snapshot) map[string]struct{} {

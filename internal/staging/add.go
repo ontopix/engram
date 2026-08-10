@@ -27,6 +27,153 @@ import (
 var ErrSelection = errors.New("invalid add selection")
 var ErrConcurrent = errors.New("add input changed concurrently")
 
+// Mutation is the closed local effect set known after an add failure. Add
+// never changes refs, HEAD, worktree bytes, or remotes; index replacement is
+// reported through CheckoutChanged.
+type Mutation struct {
+	Durable          bool
+	CheckoutChanged  bool
+	RecoveryRequired bool
+}
+
+// Error preserves ordinary error identity while carrying mutation evidence.
+type Error struct {
+	Operation string
+	Err       error
+	Mutation  *Mutation
+}
+
+func (e *Error) Error() string {
+	if e == nil {
+		return "<nil>"
+	}
+	if e.Err == nil {
+		return e.Operation
+	}
+	if e.Operation == "" {
+		return e.Err.Error()
+	}
+	return e.Operation + ": " + e.Err.Error()
+}
+
+func (e *Error) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
+// MutationOf merges effect evidence across joined or wrapped staging errors.
+// RecoveryRequired is the final snapshot: an outer mutation overrides its
+// causes and the last evidence-bearing joined error overrides earlier ones.
+func MutationOf(err error) (Mutation, bool) {
+	var visit func(error) (Mutation, bool)
+	visit = func(current error) (Mutation, bool) {
+		if current == nil {
+			return Mutation{}, false
+		}
+		if typedError, ok := current.(*Error); ok && typedError.Mutation != nil {
+			result := *typedError.Mutation
+			if nested, present := visit(typedError.Err); present {
+				result.Durable = result.Durable || nested.Durable
+				result.CheckoutChanged = result.CheckoutChanged || nested.CheckoutChanged
+			}
+			return result, true
+		}
+		switch unwrapped := current.(type) {
+		case interface{ Unwrap() []error }:
+			result := Mutation{}
+			present := false
+			for _, child := range unwrapped.Unwrap() {
+				childMutation, childPresent := visit(child)
+				if !childPresent {
+					continue
+				}
+				result.Durable = result.Durable || childMutation.Durable
+				result.CheckoutChanged = result.CheckoutChanged || childMutation.CheckoutChanged
+				result.RecoveryRequired = childMutation.RecoveryRequired
+				present = true
+			}
+			return result, present
+		case interface{ Unwrap() error }:
+			return visit(unwrapped.Unwrap())
+		default:
+			return Mutation{}, false
+		}
+	}
+	return visit(err)
+}
+
+func mutationError(operation string, err error, mutation Mutation) error {
+	if err == nil {
+		err = errors.New("unknown staging mutation failure")
+	}
+	return &Error{Operation: operation, Err: err, Mutation: &mutation}
+}
+
+// Phase identifies an instance-local fault boundary reached immediately after
+// the named publication step completes.
+type Phase string
+
+const (
+	PhaseIndexRenamed     Phase = "index-renamed"
+	PhaseIndexSynced      Phase = "index-synced"
+	PhaseWorktreeReleased Phase = "worktree-released"
+)
+
+type worktreeHandle interface {
+	Release() error
+}
+
+// Adder owns per-instance fault and rendezvous seams. Package-level Add uses a
+// fresh default instance, so parallel tests never share mutable fault state.
+type Adder struct {
+	Fault              func(Phase) error
+	acquire            func(string) (worktreeHandle, error)
+	removePath         func(string) (bool, error)
+	renamePath         func(string, string) (bool, error)
+	syncIndexDirectory func(string) (bool, error)
+}
+
+func New() *Adder { return &Adder{} }
+
+func (a *Adder) checkpoint(phase Phase) error {
+	if a == nil || a.Fault == nil {
+		return nil
+	}
+	return a.Fault(phase)
+}
+
+func (a *Adder) acquireWorktree(gitDirectory string) (worktreeHandle, error) {
+	if a != nil && a.acquire != nil {
+		return a.acquire(gitDirectory)
+	}
+	return rendezvous.AcquireWorktree(gitDirectory)
+}
+
+func (a *Adder) remove(name string) (bool, error) {
+	if a != nil && a.removePath != nil {
+		return a.removePath(name)
+	}
+	err := os.Remove(name)
+	return err == nil, err
+}
+
+func (a *Adder) rename(oldPath, newPath string) (bool, error) {
+	if a != nil && a.renamePath != nil {
+		return a.renamePath(oldPath, newPath)
+	}
+	err := os.Rename(oldPath, newPath)
+	return err == nil, err
+}
+
+func (a *Adder) syncIndexParent(name string) (bool, error) {
+	if a != nil && a.syncIndexDirectory != nil {
+		return a.syncIndexDirectory(name)
+	}
+	return syncIndexParent(name)
+}
+
 type Result struct {
 	Changed bool               `json:"changed"`
 	Staged  []changeset.Change `json:"staged"`
@@ -35,6 +182,11 @@ type Result struct {
 // Add stages selected logical changes, or all logical changes when all is
 // true. Paths are literals and are never passed to Git as pathspecs.
 func Add(ctx context.Context, store *managedread.Store, selections []string, all bool) (result Result, resultErr error) {
+	return New().Add(ctx, store, selections, all)
+}
+
+// Add stages selected logical changes using this instance's fault seams.
+func (a *Adder) Add(ctx context.Context, store *managedread.Store, selections []string, all bool) (result Result, resultErr error) {
 	if store == nil || store.Repository() == nil {
 		return Result{}, fmt.Errorf("staging: nil managed store")
 	}
@@ -42,14 +194,41 @@ func Add(ctx context.Context, store *managedread.Store, selections []string, all
 		return Result{}, fmt.Errorf("%w: choose paths or all", ErrSelection)
 	}
 	repository := store.Repository()
-	lock, err := rendezvous.AcquireWorktree(repository.GitDir)
+	lock, err := a.acquireWorktree(repository.GitDir)
 	if err != nil {
+		mutation := Mutation{Durable: rendezvous.DurableMutationOf(err), RecoveryRequired: rendezvous.RecoveryRequiredOf(err)}
+		if mutation.Durable || mutation.RecoveryRequired {
+			return Result{}, mutationError("acquire worktree rendezvous", err, mutation)
+		}
 		return Result{}, err
 	}
+	published := Mutation{}
 	defer func() {
-		if err := lock.Release(); err != nil {
+		releaseErr := lock.Release()
+		recoveryRequired := rendezvous.RecoveryRequiredOf(releaseErr)
+		if owned, ok := lock.(interface{ RecoveryRequired() bool }); ok {
+			recoveryRequired = recoveryRequired || owned.RecoveryRequired()
+		} else if !recoveryRequired {
+			recoveryRequired = pathMayRemain(rendezvous.WorktreePath(repository.GitDir))
+		}
+		if releaseErr != nil || recoveryRequired {
 			result = Result{}
-			resultErr = errors.Join(resultErr, fmt.Errorf("release worktree rendezvous: %w", err))
+			published.Durable = true // Lock acquisition itself completed durably.
+			if releaseErr == nil {
+				releaseErr = errors.New("worktree rendezvous release retained an owned lock")
+			}
+			published.Durable = published.Durable || rendezvous.DurableMutationOf(releaseErr)
+			published.RecoveryRequired = published.RecoveryRequired || recoveryRequired
+			resultErr = mutationError("release worktree rendezvous", errors.Join(resultErr, releaseErr), published)
+			return
+		}
+		if err := a.checkpoint(PhaseWorktreeReleased); err != nil {
+			result = Result{}
+			if published.CheckoutChanged {
+				resultErr = mutationError("fault after worktree rendezvous release", errors.Join(resultErr, err), published)
+			} else {
+				resultErr = errors.Join(resultErr, &Error{Operation: "fault after worktree rendezvous release", Err: err})
+			}
 		}
 	}()
 
@@ -92,16 +271,36 @@ func Add(ctx context.Context, store *managedread.Store, selections []string, all
 		return Result{}, err
 	}
 	temporaryPath := temporary.Name()
+	temporaryInfo, statErr := temporary.Stat()
+	defer func() {
+		_, removeErr := a.removeExact(temporaryPath, temporaryInfo)
+		residual := exactRegularPath(temporaryPath, temporaryInfo)
+		if removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) || residual {
+			result = Result{}
+			if removeErr == nil {
+				removeErr = errors.New("prospective Git index cleanup retained its exact temporary")
+			}
+			resultErr = mutationError("clean prospective Git index", errors.Join(resultErr, removeErr), published)
+		}
+	}()
+	if statErr != nil {
+		return Result{}, errors.Join(statErr, temporary.Close())
+	}
 	if err := temporary.Close(); err != nil {
-		os.Remove(temporaryPath)
 		return Result{}, err
 	}
-	defer os.Remove(temporaryPath)
 	if indexInfo != nil {
 		if err := os.WriteFile(temporaryPath, indexBefore, indexInfo.Mode().Perm()); err != nil {
 			return Result{}, err
 		}
 	} else if err := initializeEmptyIndex(ctx, repository.Root, temporaryPath); err != nil {
+		return Result{}, err
+	}
+	// Git publishes an alternate index through its own adjacent lock+rename,
+	// so a successful command may legitimately replace the CreateTemp inode.
+	// Advance cleanup ownership only after that command has completed.
+	temporaryInfo, err = regularPathInfo(temporaryPath)
+	if err != nil {
 		return Result{}, err
 	}
 
@@ -111,6 +310,10 @@ func Add(ctx context.Context, store *managedread.Store, selections []string, all
 			return Result{}, err
 		}
 		if err := updateAlternateIndex(ctx, repository.Root, temporaryPath, repository.Format, updates); err != nil {
+			return Result{}, err
+		}
+		temporaryInfo, err = regularPathInfo(temporaryPath)
+		if err != nil {
 			return Result{}, err
 		}
 	}
@@ -132,11 +335,51 @@ func Add(ctx context.Context, store *managedread.Store, selections []string, all
 	if err := verifyInputs(ctx, store, selected, working, indexPath, indexBefore, indexInfo); err != nil {
 		return Result{}, err
 	}
-	if err := publishIndex(indexPath, indexBefore, indexInfo, indexAfter); err != nil {
+	published, err = a.publishIndex(indexPath, indexBefore, indexInfo, indexAfter)
+	if err != nil {
 		return Result{}, err
 	}
 	result.Changed = true
 	return result, nil
+}
+
+func pathMayRemain(name string) bool {
+	_, err := os.Lstat(name)
+	return !errors.Is(err, os.ErrNotExist)
+}
+
+func exactRegularPath(name string, expected os.FileInfo) bool {
+	current, err := os.Lstat(name)
+	return err == nil && expected != nil && current.Mode()&os.ModeSymlink == 0 && current.Mode().IsRegular() && os.SameFile(expected, current)
+}
+
+func regularPathInfo(name string) (os.FileInfo, error) {
+	info, err := os.Lstat(name)
+	if err != nil {
+		return nil, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return nil, ErrConcurrent
+	}
+	return info, nil
+}
+
+func (a *Adder) removeExact(name string, expected os.FileInfo) (bool, error) {
+	current, err := os.Lstat(name)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if expected == nil || current.Mode()&os.ModeSymlink != 0 || !current.Mode().IsRegular() || !os.SameFile(expected, current) {
+		return false, ErrConcurrent
+	}
+	removed, removeErr := a.remove(name)
+	if !removed && removeErr == nil && exactRegularPath(name, expected) {
+		removeErr = errors.New("staging cleanup reported success without removing the exact path")
+	}
+	return removed, removeErr
 }
 
 type update struct {
@@ -160,7 +403,12 @@ func indexUpdates(ctx context.Context, repository *gitraw.Repository, accepted, 
 		if !exists {
 			return nil, fmt.Errorf("%w: selected working file %q became unavailable", ErrConcurrent, change.Path)
 		}
-		command := exec.CommandContext(ctx, git, "--no-pager", "--no-optional-locks", "--no-replace-objects", "-c", "core.hooksPath="+os.DevNull, "-C", repository.Root, "hash-object", "-w", "--stdin")
+		command := exec.CommandContext(ctx, git,
+			"--no-pager", "--no-optional-locks", "--no-replace-objects",
+			"-c", "core.hooksPath="+os.DevNull, "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false",
+			"-c", "maintenance.auto=false", "-c", "gc.auto=0",
+			"-C", repository.Root, "hash-object", "-w", "--stdin",
+		)
 		command.Env = isolatedEnvironment(os.Environ(), "")
 		command.Stdin = bytes.NewReader(file.Data)
 		output, err := command.Output()
@@ -193,7 +441,12 @@ func updateAlternateIndex(ctx context.Context, root, indexPath string, format gi
 			fmt.Fprintf(&input, "%s %s\t%s%c", update.mode, update.oid, update.path, byte(0))
 		}
 	}
-	command := exec.CommandContext(ctx, git, "--no-pager", "--no-optional-locks", "--no-replace-objects", "-c", "core.hooksPath="+os.DevNull, "-C", root, "update-index", "-z", "--index-info")
+	command := exec.CommandContext(ctx, git,
+		"--no-pager", "--no-optional-locks", "--no-replace-objects",
+		"-c", "core.hooksPath="+os.DevNull, "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false",
+		"-c", "maintenance.auto=false", "-c", "gc.auto=0",
+		"-C", root, "update-index", "-z", "--index-info",
+	)
 	command.Env = isolatedEnvironment(os.Environ(), indexPath)
 	command.Stdin = &input
 	if output, err := command.CombinedOutput(); err != nil {
@@ -210,7 +463,12 @@ func initializeEmptyIndex(ctx context.Context, root, indexPath string) error {
 	if err != nil {
 		return err
 	}
-	command := exec.CommandContext(ctx, git, "--no-pager", "--no-optional-locks", "--no-replace-objects", "-c", "core.hooksPath="+os.DevNull, "-C", root, "read-tree", "--empty")
+	command := exec.CommandContext(ctx, git,
+		"--no-pager", "--no-optional-locks", "--no-replace-objects",
+		"-c", "core.hooksPath="+os.DevNull, "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false",
+		"-c", "maintenance.auto=false", "-c", "gc.auto=0",
+		"-C", root, "read-tree", "--empty",
+	)
 	command.Env = isolatedEnvironment(os.Environ(), indexPath)
 	if output, err := command.CombinedOutput(); err != nil {
 		return fmt.Errorf("create empty prospective index: %w: %s", err, bytes.TrimSpace(output))
@@ -298,49 +556,93 @@ func verifyInputs(ctx context.Context, store *managedread.Store, selected []chan
 	return nil
 }
 
-func publishIndex(name string, before []byte, beforeInfo os.FileInfo, after []byte) error {
+func (a *Adder) publishIndex(name string, before []byte, beforeInfo os.FileInfo, after []byte) (mutation Mutation, resultErr error) {
 	lockName := name + ".lock"
 	lock, err := os.OpenFile(lockName, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if errors.Is(err, os.ErrExist) {
-		return rendezvous.ErrBusy
+		return mutation, rendezvous.ErrBusy
 	}
 	if err != nil {
-		return err
+		return mutation, err
 	}
+	lockInfo, statErr := lock.Stat()
 	removeLock := true
 	defer func() {
 		if removeLock {
-			_ = os.Remove(lockName)
+			_, removeErr := a.removeExact(lockName, lockInfo)
+			mutation.RecoveryRequired = exactRegularPath(lockName, lockInfo)
+			if removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) || mutation.RecoveryRequired {
+				if removeErr == nil {
+					removeErr = errors.New("Git index lock cleanup retained its exact inode")
+				}
+				resultErr = mutationError("clean Git index lock", errors.Join(resultErr, removeErr), mutation)
+			}
 		}
 	}()
+	if statErr != nil || !lockInfo.Mode().IsRegular() {
+		return mutation, errors.Join(statErr, lock.Close())
+	}
 	current, currentInfo, err := readIndex(name)
 	if err != nil || !bytes.Equal(current, before) || beforeInfo == nil != (currentInfo == nil) || beforeInfo != nil && !os.SameFile(beforeInfo, currentInfo) {
-		lock.Close()
-		return ErrConcurrent
+		closeErr := lock.Close()
+		return mutation, errors.Join(ErrConcurrent, err, closeErr)
 	}
 	if _, err := lock.Write(after); err != nil {
-		lock.Close()
-		return err
+		return mutation, errors.Join(err, lock.Close())
 	}
 	if err := lock.Sync(); err != nil {
-		lock.Close()
-		return err
+		return mutation, errors.Join(err, lock.Close())
 	}
 	if err := lock.Close(); err != nil {
-		return err
+		return mutation, err
 	}
-	if err := os.Rename(lockName, name); err != nil {
-		return err
+	renamed, renameErr := a.rename(lockName, name)
+	if !renamed && exactRegularPath(name, lockInfo) {
+		renamed = true
+	}
+	if !renamed {
+		if renameErr == nil {
+			renameErr = errors.New("Git index rename reported success without publishing the exact inode")
+		}
+		return mutation, renameErr
 	}
 	removeLock = false
-	if runtime.GOOS == "windows" {
-		return nil
+	mutation.CheckoutChanged = true
+	if renameErr != nil {
+		durable, syncErr := a.syncIndexParent(filepath.Dir(name))
+		mutation.Durable = durable
+		return mutation, mutationError("rename Git index", errors.Join(renameErr, syncErr), mutation)
 	}
-	directory, err := os.Open(filepath.Dir(name))
+	if err := a.checkpoint(PhaseIndexRenamed); err != nil {
+		return mutation, mutationError("fault after Git index rename", err, mutation)
+	}
+	durable, err := a.syncIndexParent(filepath.Dir(name))
+	mutation.Durable = durable
 	if err != nil {
-		return err
+		return mutation, mutationError("sync Git index directory", err, mutation)
 	}
-	return errors.Join(directory.Sync(), directory.Close())
+	if err := a.checkpoint(PhaseIndexSynced); err != nil {
+		return mutation, mutationError("fault after Git index sync", err, mutation)
+	}
+	return mutation, nil
+}
+
+func syncIndexParent(name string) (bool, error) {
+	directory, err := os.Open(name)
+	if err != nil {
+		return false, err
+	}
+	syncErr := directory.Sync()
+	closeErr := directory.Close()
+	// Windows does not expose a portable directory-fsync operation. The index
+	// lock contents were synced before the atomic replacement.
+	if runtime.GOOS == "windows" {
+		syncErr = nil
+	}
+	if syncErr != nil {
+		return false, errors.Join(syncErr, closeErr)
+	}
+	return true, closeErr
 }
 
 func readIndex(name string) ([]byte, os.FileInfo, error) {

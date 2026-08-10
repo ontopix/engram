@@ -19,19 +19,40 @@ type attachResult struct {
 	Audits     []managedread.HistoryAudit `json:"audits"`
 }
 
+type attachmentUpdater interface {
+	Attach(string, string, string) (attachment.Result, error)
+	Detach(string, string, string) (attachment.Result, error)
+}
+
 // RegisterAttachments installs the local attach and detach workflows.
 func RegisterAttachments(app *cli.App) {
+	registerAttachmentsWith(app, attachment.NewUpdater())
+}
+
+func registerAttachmentsWith(app *cli.App, updater attachmentUpdater) {
 	if app == nil {
 		return
 	}
 	if app.Handlers == nil {
 		app.Handlers = make(map[cli.CommandName]cli.Handler)
 	}
-	app.Handlers[cli.CommandAttach] = cli.HandlerFunc(runAttach)
-	app.Handlers[cli.CommandDetach] = cli.HandlerFunc(runDetach)
+	if updater == nil {
+		for _, name := range []cli.CommandName{cli.CommandAttach, cli.CommandDetach} {
+			app.Handlers[name] = cli.HandlerFunc(func(context.Context, *cli.Invocation) cli.Result {
+				return commandError(cli.ErrorCapability, "attachment updater is unavailable")
+			})
+		}
+		return
+	}
+	app.Handlers[cli.CommandAttach] = cli.HandlerFunc(func(ctx context.Context, invocation *cli.Invocation) cli.Result {
+		return runAttach(ctx, invocation, updater)
+	})
+	app.Handlers[cli.CommandDetach] = cli.HandlerFunc(func(ctx context.Context, invocation *cli.Invocation) cli.Result {
+		return runDetach(ctx, invocation, updater)
+	})
 }
 
-func runAttach(ctx context.Context, invocation *cli.Invocation) cli.Result {
+func runAttach(ctx context.Context, invocation *cli.Invocation, updater attachmentUpdater) cli.Result {
 	if invocation == nil || len(invocation.Arguments) != 1 {
 		return commandError(cli.ErrorInternal, "attach invocation has invalid arguments")
 	}
@@ -67,7 +88,7 @@ func runAttach(ctx context.Context, invocation *cli.Invocation) cli.Result {
 	if audit.Validation.HasErrors() {
 		return cli.Result{Outcome: cli.OutcomeIssues, Value: value}
 	}
-	published, err := attachment.Attach(project, entrypoint, storePath)
+	published, err := updater.Attach(project, entrypoint, storePath)
 	if err != nil {
 		return attachmentFailure(err, "publish attachment")
 	}
@@ -75,7 +96,7 @@ func runAttach(ctx context.Context, invocation *cli.Invocation) cli.Result {
 	return cli.Result{Outcome: cli.OutcomeOK, Value: value}
 }
 
-func runDetach(ctx context.Context, invocation *cli.Invocation) cli.Result {
+func runDetach(ctx context.Context, invocation *cli.Invocation, updater attachmentUpdater) cli.Result {
 	if invocation == nil || len(invocation.Arguments) != 1 {
 		return commandError(cli.ErrorInternal, "detach invocation has invalid arguments")
 	}
@@ -92,7 +113,7 @@ func runDetach(ctx context.Context, invocation *cli.Invocation) cli.Result {
 	if err != nil {
 		return attachmentFailure(err, "select attachment entrypoint")
 	}
-	published, err := attachment.Detach(project, entrypoint, invocation.Arguments[0])
+	published, err := updater.Detach(project, entrypoint, invocation.Arguments[0])
 	if err != nil {
 		return attachmentFailure(err, "publish detachment")
 	}
@@ -109,5 +130,12 @@ func attachmentFailure(err error, action string) cli.Result {
 	case errors.Is(err, attachment.ErrBusy):
 		kind = cli.ErrorConcurrency
 	}
-	return commandError(kind, fmt.Sprintf("%s: %v", action, err))
+	result := commandError(kind, fmt.Sprintf("%s: %v", action, err))
+	if effect, ok := attachment.EffectOf(err); ok {
+		mutation := cli.NewMutationResult()
+		mutation.Durable = effect.Durable
+		mutation.RecoveryRequired = effect.RecoveryRequired
+		result.Value = mutation
+	}
+	return result
 }

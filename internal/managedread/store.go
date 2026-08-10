@@ -55,6 +55,13 @@ func Open(ctx context.Context, selectedPath string) (*Store, error) {
 			Detail: "selected path is not exactly the repository worktree root",
 		}
 	}
+	return newStore(repository)
+}
+
+func newStore(repository *gitraw.Repository) (*Store, error) {
+	if repository == nil {
+		return nil, &gitraw.Error{Kind: gitraw.FailureRepository, Op: "open-managed-store", Detail: "repository is unavailable"}
+	}
 	git, err := exec.LookPath("git")
 	if err != nil {
 		return nil, &gitraw.Error{Kind: gitraw.FailureCapability, Op: "locate-git", Err: err}

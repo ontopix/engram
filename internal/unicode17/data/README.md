@@ -11,10 +11,13 @@
 | `CaseFolding.txt` | `https://www.unicode.org/Public/17.0.0/ucd/CaseFolding.txt` | `ff8d8fefbf123574205085d6714c36149eb946d717a0c585c27f0f4ef58c4183` |
 | `NormalizationTest.txt` | `https://www.unicode.org/Public/17.0.0/ucd/NormalizationTest.txt` | `5019ffd530751a741900c849c0e010332f142a3612234639bd200b82138a87db` |
 
-Download the files into one directory, then run:
+In the engram source repository, the exact source files are checked in under
+`internal/unicode17/data/ucd/`, so generation and the full
+normalization/case-folding conformance corpus are network-independent. From
+the repository root, run:
 
 ```text
-go run ./internal/unicode17/cmd/gentables -ucd-dir <directory> -output internal/unicode17/tables_generated.go
+go run ./internal/unicode17/cmd/gentables -ucd-dir internal/unicode17/data/ucd -output internal/unicode17/tables_generated.go
 ```
 
 The generated tables and source data are covered by the Unicode License v3,

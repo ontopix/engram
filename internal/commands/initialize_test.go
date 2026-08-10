@@ -94,4 +94,30 @@ func TestInitializeRecoveryFailureCarriesClosedMutationResult(t *testing.T) {
 	if !ok || !mutation.Durable || !mutation.CheckoutChanged || !mutation.RecoveryRequired || len(mutation.LocalRefs) != 1 || mutation.LocalRefs[0].Before != nil || mutation.LocalRefs[0].After == nil || *mutation.LocalRefs[0].After != commit || mutation.Head != nil || mutation.Remote != nil {
 		t.Fatalf("mutation = %#v", result.Value)
 	}
+	encoded, err := json.Marshal(result.Value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"durable":true,"local_refs":[{"ref":"refs/heads/main","before":null,"after":"0123456789012345678901234567890123456789"}],"head":null,"checkout_changed":true,"remote":null,"recovery_required":true}`
+	if string(encoded) != want {
+		t.Fatalf("mutation JSON = %s, want %s", encoded, want)
+	}
+}
+
+func TestInitializeKnownNoResidualMutationCarriesClosedEmptyResult(t *testing.T) {
+	result := initializationFailure(&initialize.Error{
+		Kind: initialize.ErrorRecovery, Operation: "begin lifecycle", MutationKnown: true,
+		Underlying: errors.New("fault after cleaned publication attempt"),
+	}, "initialize")
+	if result.Outcome != cli.OutcomeError || result.Error == nil || result.Error.Kind != cli.ErrorOperational {
+		t.Fatalf("result = %#v", result)
+	}
+	encoded, err := json.Marshal(result.Value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"durable":false,"local_refs":[],"head":null,"checkout_changed":false,"remote":null,"recovery_required":false}`
+	if string(encoded) != want {
+		t.Fatalf("mutation JSON = %s, want %s", encoded, want)
+	}
 }

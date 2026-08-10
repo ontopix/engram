@@ -26,7 +26,8 @@ const (
 func (s *Store) readIndex(ctx context.Context, absoluteIndexPath string) ([]IndexEntry, error) {
 	arguments := []string{
 		"--no-pager", "--no-optional-locks", "--no-replace-objects",
-		"-c", "core.hooksPath=" + os.DevNull,
+		"-c", "core.hooksPath=" + os.DevNull, "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false",
+		"-c", "maintenance.auto=false", "-c", "gc.auto=0",
 		"-C", s.repository.Root,
 		"ls-files", "--stage", "--debug", "--full-name", "-z",
 		"--abbrev=" + strconv.Itoa(s.repository.Format.HexWidth()),

@@ -70,7 +70,10 @@ func (e *Engine) commit(ctx context.Context, input commitInput) (result *Result,
 	if !input.dryRun {
 		lock, err = rendezvous.AcquireWriter(discovered.CommonGitDir, discovered.GitDir, discovered.HeadRef)
 		if err != nil {
-			return nil, classify(PhaseLocked, err)
+			return nil, managedErrorWithEffects(
+				classify(PhaseLocked, err), PhaseLocked,
+				rendezvous.DurableMutationOf(err), false, rendezvous.RecoveryRequiredOf(err), nil,
+			)
 		}
 		e.markActive(lock.Owner().Token, true)
 		defer func() {
@@ -78,9 +81,11 @@ func (e *Engine) commit(ctx context.Context, input commitInput) (result *Result,
 				return
 			}
 			e.markActive(lock.Owner().Token, false)
-			if releaseErr := lock.Release(); releaseErr != nil {
-				result = nil
-				resultErr = errors.Join(resultErr, typed(FailureIO, PhaseLocksReleased, releaseErr))
+			if releaseErr := e.releaseLock(lock); releaseErr != nil {
+				resultErr = managedErrorWithEffects(
+					resultErr, PhaseLocksReleased, lock.Mutated(), false,
+					lock.RecoveryRequired() || rendezvous.RecoveryRequiredOf(releaseErr), releaseErr,
+				)
 			}
 		}()
 		if err := e.checkpoint(PhaseLocked); err != nil {
@@ -304,18 +309,39 @@ func (e *Engine) commit(ctx context.Context, input commitInput) (result *Result,
 	}
 	journal.Sort(&record)
 	journalPath := journal.Path(observation.repository.GitDir)
-	if err := journal.WritePending(journalPath, record); err != nil {
+	if err := e.writePending(journalPath, record); err != nil {
+		effect, _ := journal.EffectOf(err)
+		_, _, readErr := journal.Read(journalPath)
+		_, statErr := os.Lstat(journalPath)
+		if effect.Visible || readErr == nil || statErr == nil || !errors.Is(statErr, os.ErrNotExist) {
+			e.markActive(lock.Owner().Token, false)
+			lock = nil
+			return prospective, &Error{
+				Kind: FailureRecovery, Phase: PhaseJournalPending, Durable: effect.Durable, RecoveryRequired: true,
+				Commit: commitID, Err: errors.Join(ErrRecovery, err, readErr, statErr),
+			}
+		}
 		return prospective, classify(PhaseJournalPending, err)
 	}
 	_, journalBytes, err := journal.Read(journalPath)
 	if err != nil {
-		return prospective, typed(FailureRecovery, PhaseJournalPending, err)
+		e.markActive(lock.Owner().Token, false)
+		lock = nil
+		return prospective, &Error{
+			Kind: FailureRecovery, Phase: PhaseJournalPending, Durable: true, RecoveryRequired: true,
+			Commit: commitID, Err: errors.Join(ErrRecovery, err),
+		}
 	}
 	if err := e.checkpoint(PhaseJournalPending); err != nil {
 		return prospective, e.cancelPending(journalPath, journalBytes, &lock, PhaseJournalPending, err)
 	}
 	if err := lock.SetPhase(rendezvous.JournalRequired); err != nil {
-		return prospective, &Error{Kind: FailureRecovery, Phase: PhaseJournalRequired, Err: err, Commit: commitID}
+		e.markActive(lock.Owner().Token, false)
+		lock = nil
+		return prospective, &Error{
+			Kind: FailureRecovery, Phase: PhaseJournalRequired, Durable: true, RecoveryRequired: true,
+			Err: err, Commit: commitID,
+		}
 	}
 	if err := e.checkpoint(PhaseJournalRequired); err != nil {
 		return prospective, e.cancelPending(journalPath, journalBytes, &lock, PhaseJournalRequired, err)
@@ -334,51 +360,71 @@ func (e *Engine) commit(ctx context.Context, input commitInput) (result *Result,
 		retained := lock
 		lock = nil
 		_ = retained
-		return prospective, &Error{Kind: FailureRecovery, Phase: PhaseRefUpdated, UnknownCAS: true, Commit: commitID, Err: errors.Join(ErrCASUnknown, casErr)}
+		return prospective, &Error{
+			Kind: FailureRecovery, Phase: PhaseRefUpdated, Durable: true, RecoveryRequired: true,
+			UnknownCAS: true, Commit: commitID, Err: errors.Join(ErrCASUnknown, casErr),
+		}
 	}
 	// Once CAS is known to have committed, caller cancellation must not abandon
 	// the bounded local reconciliation. Use an internal deadline so cleanup is
 	// persistent but can still fail into explicit recovery-required state.
 	cleanupCtx, cancelCleanup := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancelCleanup()
+	checkoutChanged := false
 	if err := e.checkpoint(PhaseRefUpdated); err != nil {
-		return prospective, e.postCASError(&lock, PhaseRefUpdated, commitID, err)
+		return prospective, e.postCASError(&lock, PhaseRefUpdated, commitID, checkoutChanged, err)
 	}
-	if err := reconcileIndex(cleanupCtx, observation.repository.Root, record); err != nil {
-		return prospective, e.postCASError(&lock, PhaseIndexReconciled, commitID, err)
+	indexChanged, err := reconcileIndex(cleanupCtx, observation.repository.Root, record)
+	checkoutChanged = checkoutChanged || indexChanged
+	if err != nil {
+		return prospective, e.postCASError(&lock, PhaseIndexReconciled, commitID, checkoutChanged, err)
 	}
 	if err := e.checkpoint(PhaseIndexReconciled); err != nil {
-		return prospective, e.postCASError(&lock, PhaseIndexReconciled, commitID, err)
+		return prospective, e.postCASError(&lock, PhaseIndexReconciled, commitID, checkoutChanged, err)
 	}
-	if err := reconcileWorktree(observation.repository.Root, record); err != nil {
-		return prospective, e.postCASError(&lock, PhaseWorktreeReconciled, commitID, err)
+	worktreeChanged, err := reconcileWorktree(observation.repository.Root, record)
+	checkoutChanged = checkoutChanged || worktreeChanged
+	if err != nil {
+		return prospective, e.postCASError(&lock, PhaseWorktreeReconciled, commitID, checkoutChanged, err)
 	}
 	if err := e.checkpoint(PhaseWorktreeReconciled); err != nil {
-		return prospective, e.postCASError(&lock, PhaseWorktreeReconciled, commitID, err)
+		return prospective, e.postCASError(&lock, PhaseWorktreeReconciled, commitID, checkoutChanged, err)
 	}
 	completeBytes, err := journal.SetState(journalPath, journalBytes, journal.Complete)
 	if err != nil {
-		return prospective, e.postCASError(&lock, PhaseJournalComplete, commitID, err)
+		return prospective, e.postCASError(&lock, PhaseJournalComplete, commitID, checkoutChanged, err)
 	}
 	if err := e.checkpoint(PhaseJournalComplete); err != nil {
-		return prospective, e.postCASError(&lock, PhaseJournalComplete, commitID, err)
+		return prospective, e.postCASError(&lock, PhaseJournalComplete, commitID, checkoutChanged, err)
 	}
 	ownerToken := lock.Owner().Token
-	if err := lock.Release(); err != nil {
+	if err := e.releaseLock(lock); err != nil {
 		e.markActive(ownerToken, false)
 		lock = nil
-		return prospective, &Error{Kind: FailureRecovery, Phase: PhaseLocksReleased, Accepted: true, Commit: commitID, Err: errors.Join(ErrPostCAS, err)}
+		return prospective, &Error{
+			Kind: FailureRecovery, Phase: PhaseLocksReleased, Durable: true, CheckoutChanged: checkoutChanged, RecoveryRequired: true,
+			Accepted: true, Commit: commitID, Err: errors.Join(ErrPostCAS, err),
+		}
 	}
 	e.markActive(ownerToken, false)
 	lock = nil
 	if err := e.checkpoint(PhaseLocksReleased); err != nil {
-		return prospective, &Error{Kind: FailureRecovery, Phase: PhaseLocksReleased, Accepted: true, Commit: commitID, Err: errors.Join(ErrPostCAS, err)}
+		return prospective, &Error{
+			Kind: FailureRecovery, Phase: PhaseLocksReleased, Durable: true, CheckoutChanged: checkoutChanged, RecoveryRequired: true,
+			Accepted: true, Commit: commitID, Err: errors.Join(ErrPostCAS, err),
+		}
 	}
 	if err := journal.Remove(journalPath, completeBytes); err != nil {
-		return prospective, &Error{Kind: FailureRecovery, Phase: PhaseJournalRemoved, Accepted: true, Commit: commitID, Err: errors.Join(ErrPostCAS, err)}
+		return prospective, &Error{
+			Kind: FailureRecovery, Phase: PhaseJournalRemoved, Durable: true, CheckoutChanged: checkoutChanged, RecoveryRequired: true,
+			Accepted: true, Commit: commitID, Err: errors.Join(ErrPostCAS, err),
+		}
 	}
 	if err := e.checkpoint(PhaseJournalRemoved); err != nil {
-		return prospective, &Error{Kind: FailureIO, Phase: PhaseJournalRemoved, Accepted: true, Commit: commitID, Err: err}
+		return prospective, &Error{
+			Kind: FailureIO, Phase: PhaseJournalRemoved, Durable: true, CheckoutChanged: checkoutChanged,
+			Accepted: true, Commit: commitID, Err: err,
+		}
 	}
 	prospective.Created = true
 	prospective.Commit = stringPointer(commitID)
@@ -513,31 +559,60 @@ func (e *Engine) cancelPending(name string, pending []byte, lock **rendezvous.Ha
 			e.markActive((*lock).Owner().Token, false)
 			*lock = nil
 		}
-		return &Error{Kind: FailureRecovery, Phase: phase, Err: errors.Join(cause, err)}
+		return &Error{
+			Kind: FailureRecovery, Phase: phase, Durable: true, RecoveryRequired: true,
+			Err: errors.Join(cause, err),
+		}
 	}
 	if *lock == nil {
-		return &Error{Kind: FailureRecovery, Phase: phase, Err: errors.Join(cause, ErrRecovery)}
+		return &Error{
+			Kind: FailureRecovery, Phase: phase, Durable: true, RecoveryRequired: true,
+			Err: errors.Join(cause, ErrRecovery),
+		}
 	}
 	token := (*lock).Owner().Token
-	if err := (*lock).Release(); err != nil {
+	if err := e.releaseLock(*lock); err != nil {
 		e.markActive(token, false)
 		*lock = nil
-		return &Error{Kind: FailureRecovery, Phase: phase, Err: errors.Join(cause, err)}
+		return &Error{
+			Kind: FailureRecovery, Phase: phase, Durable: true, RecoveryRequired: true,
+			Err: errors.Join(cause, err),
+		}
 	}
 	e.markActive(token, false)
 	*lock = nil
 	if err := journal.Remove(name, cancelled); err != nil {
-		return &Error{Kind: FailureRecovery, Phase: phase, Err: errors.Join(cause, err)}
+		return &Error{
+			Kind: FailureRecovery, Phase: phase, Durable: true, RecoveryRequired: true,
+			Err: errors.Join(cause, err),
+		}
 	}
-	return classify(phase, cause)
+	return managedErrorWithEffects(classify(phase, cause), phase, true, false, false, nil)
 }
 
-func (e *Engine) postCASError(lock **rendezvous.Handle, phase Phase, commitID string, cause error) error {
+func (e *Engine) postCASError(lock **rendezvous.Handle, phase Phase, commitID string, checkoutChanged bool, cause error) error {
 	if *lock != nil {
 		e.markActive((*lock).Owner().Token, false)
 		*lock = nil
 	}
-	return &Error{Kind: FailureRecovery, Phase: phase, Accepted: true, Commit: commitID, Err: errors.Join(ErrPostCAS, cause)}
+	return &Error{
+		Kind: FailureRecovery, Phase: phase, Durable: true, CheckoutChanged: checkoutChanged, RecoveryRequired: true,
+		Accepted: true, Commit: commitID, Err: errors.Join(ErrPostCAS, cause),
+	}
+}
+
+func managedErrorWithEffects(err error, phase Phase, durable, checkoutChanged, recoveryRequired bool, cause error) error {
+	detail := &Error{Kind: FailureIO, Phase: phase}
+	var existing *Error
+	if errors.As(err, &existing) {
+		*detail = *existing
+		detail.Paths = append([]string(nil), existing.Paths...)
+	}
+	detail.Durable = detail.Durable || detail.Accepted || durable
+	detail.CheckoutChanged = detail.CheckoutChanged || checkoutChanged
+	detail.RecoveryRequired = detail.RecoveryRequired || recoveryRequired
+	detail.Err = errors.Join(err, cause)
+	return detail
 }
 
 func classify(phase Phase, err error) error {

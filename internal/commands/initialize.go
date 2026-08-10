@@ -123,16 +123,16 @@ func initializationFailure(err error, action string) cli.Result {
 		}
 	}
 	protocolError := &cli.ProtocolError{Kind: kind, Message: fmt.Sprintf("%s: %v", action, err)}
-	var typed *initialize.Error
-	if !errors.As(err, &typed) || !typed.Durable && !typed.RecoveryRequired && typed.Commit == nil && !typed.CheckoutChanged {
+	mutationEvidence, present := initialize.MutationOf(err)
+	if !present {
 		return cli.Result{Outcome: cli.OutcomeError, Error: protocolError}
 	}
 	mutation := cli.NewMutationResult()
-	mutation.Durable = typed.Durable
-	mutation.CheckoutChanged = typed.CheckoutChanged
-	mutation.RecoveryRequired = typed.RecoveryRequired
-	if typed.Commit != nil {
-		mutation.LocalRefs = append(mutation.LocalRefs, cli.RefMutation{Ref: "refs/heads/main", After: cloneStringForCommand(typed.Commit)})
+	mutation.Durable = mutationEvidence.Durable
+	mutation.CheckoutChanged = mutationEvidence.CheckoutChanged
+	mutation.RecoveryRequired = mutationEvidence.RecoveryRequired
+	if mutationEvidence.Commit != nil {
+		mutation.LocalRefs = append(mutation.LocalRefs, cli.RefMutation{Ref: "refs/heads/main", After: cloneStringForCommand(mutationEvidence.Commit)})
 	}
 	return cli.Result{Outcome: cli.OutcomeError, Value: mutation, Error: protocolError}
 }

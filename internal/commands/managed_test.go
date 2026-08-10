@@ -111,6 +111,72 @@ func TestManagedLogAndCheckReportMergeBoundary(t *testing.T) {
 	}
 }
 
+func TestManagedAcceptedCheckAttributesInvalidTopologyToE601(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*testing.T, string) string
+	}{
+		{
+			name: "not a worktree",
+			mutate: func(t *testing.T, _ string) string {
+				return t.TempDir()
+			},
+		},
+		{
+			name: "detached HEAD",
+			mutate: func(t *testing.T, root string) string {
+				managedGit(t, root, "checkout", "--detach")
+				return root
+			},
+		},
+		{
+			name: "selected subdirectory",
+			mutate: func(_ *testing.T, root string) string {
+				return filepath.Join(root, "topics")
+			},
+		},
+		{
+			name: "selected symlink",
+			mutate: func(t *testing.T, root string) string {
+				link := filepath.Join(t.TempDir(), "store-link")
+				if err := os.Symlink(root, link); err != nil {
+					t.Skipf("symlink unavailable: %v", err)
+				}
+				return link
+			},
+		},
+		{
+			name: "malformed loose accepted ref",
+			mutate: func(t *testing.T, root string) string {
+				name := filepath.Join(root, ".git", "refs", "heads", "main")
+				if err := os.WriteFile(name, []byte("not-an-object-id\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				return root
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := managedFixture(t)
+			target := test.mutate(t, root)
+			envelope := runManagedJSON(t, "--store", target, "check", "--accepted", "--format", "json")
+			assertEnvelope(t, envelope, "check", cli.OutcomeIssues, 1)
+			result := decodeObject(t, envelope.Result)
+			if result["target"] != "managed-store" || result["status"] != "complete" {
+				t.Fatalf("validation = %#v", result)
+			}
+			findings := result["findings"].([]any)
+			if len(findings) != 1 || findings[0].(map[string]any)["code"] != "E601" || findings[0].(map[string]any)["path"] != "." {
+				t.Fatalf("findings = %#v", findings)
+			}
+			if _, err := managedread.Open(context.Background(), target); err == nil {
+				t.Fatal("strict managedread.Open accepted invalid check target")
+			}
+		})
+	}
+}
+
 func runManagedJSON(t *testing.T, arguments ...string) wireEnvelope {
 	t.Helper()
 	app := cli.NewApp()

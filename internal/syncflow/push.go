@@ -12,6 +12,7 @@ import (
 	"github.com/ontopix/engram/internal/checker"
 	"github.com/ontopix/engram/internal/gitraw"
 	"github.com/ontopix/engram/internal/managedread"
+	"github.com/ontopix/engram/internal/networkgit"
 	"github.com/ontopix/engram/internal/remoteselect"
 )
 
@@ -25,6 +26,9 @@ type Pusher struct {
 	// afterObserve is a deterministic race/cancellation seam. Production
 	// pushers leave it nil. The operation rechecks cancellation after it runs.
 	afterObserve func(selection remoteselect.Selection, before *string)
+	// afterRewriteCheck is the final local-config race seam. Network Git uses a
+	// private repository even when a rewrite appears after this point.
+	afterRewriteCheck func()
 
 	run func(context.Context, string, string, []string, ...string) commandResult
 }
@@ -96,7 +100,12 @@ func (p *Pusher) Push(ctx context.Context, store *managedread.Store, remote, bra
 	if err := p.rejectURLRewrites(ctx, git, repository.Root); err != nil {
 		return nil, err
 	}
-	before, observeErr := p.observe(ctx, git, repository.Root, repository.Format, selection)
+	private, err := networkgit.New(repository.CommonGitDir, repository.Format)
+	if err != nil {
+		return nil, typed(ErrorCapability, "create private network context", err)
+	}
+	defer private.Close()
+	before, observeErr := p.observe(ctx, git, private.Root(), repository.Format, selection)
 	if observeErr != nil {
 		return nil, observeErr
 	}
@@ -128,8 +137,14 @@ func (p *Pusher) Push(ctx context.Context, store *managedread.Store, remote, bra
 	if err := p.rejectURLRewrites(ctx, git, repository.Root); err != nil {
 		return nil, err
 	}
+	if p != nil && p.afterRewriteCheck != nil {
+		p.afterRewriteCheck()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, typed(ErrorCancelled, "conditionally publish remote ref", err)
+	}
 
-	publication := p.command(ctx, git, repository.Root, pushArguments(selection, audit.Tip, before)...)
+	publication := p.command(ctx, git, private.Root(), pushArguments(selection, audit.Tip, before)...)
 	if !publication.started {
 		if ctx.Err() != nil || errors.Is(publication.err, context.Canceled) || errors.Is(publication.err, context.DeadlineExceeded) {
 			if ctx.Err() != nil {

@@ -2,7 +2,10 @@ name: CI
 
 on:
   push:
+    branches:
+      - "**"
   pull_request:
+  workflow_call:
 
 permissions:
   contents: read
@@ -16,12 +19,15 @@ jobs:
         go: ["1.25.x", "1.26.x"]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version: ${{ matrix.go }}
           cache: true
       - run: go mod download
+      - run: go mod verify
       - run: go test ./...
       - run: go vet ./...
       - run: go build ./cmd/engram
@@ -29,12 +35,15 @@ jobs:
   race-and-offline:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version: "1.25.x"
           cache: true
       - run: go mod download
+      - run: go mod verify
       - run: go test -race ./...
       - run: go test ./...
         env:
@@ -43,21 +52,68 @@ jobs:
   fuzz-smoke:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version: "1.25.x"
           cache: true
       - run: go mod download
+      - run: go mod verify
       - name: YAML profile
         run: go test ./internal/fuzz -run '^$' -fuzz '^FuzzYAMLProfile$' -fuzztime=2s
       - name: Document and Markdown profiles
         run: go test ./internal/fuzz -run '^$' -fuzz '^FuzzDocumentAndMarkdownProfiles$' -fuzztime=2s
       - name: Wikilink profile
         run: go test ./internal/fuzz -run '^$' -fuzz '^FuzzWikilinkProfile$' -fuzztime=2s
+      - name: Logical paths
+        run: go test ./internal/fuzz -run '^$' -fuzz '^FuzzLogicalPaths$' -fuzztime=2s
+      - name: JSON Pointer traversal
+        run: go test ./internal/fuzz -run '^$' -fuzz '^FuzzJSONPointerTraversal$' -fuzztime=2s
+      - name: Catalog profile
+        run: go test ./internal/fuzz -run '^$' -fuzz '^FuzzCatalogProfile$' -fuzztime=2s
       - name: Portable regex
         run: go test ./internal/fuzz -run '^$' -fuzz '^FuzzPortableRegex$' -fuzztime=2s
       - name: Raw commit parser
         run: go test ./internal/fuzz -run '^$' -fuzz '^FuzzRawCommit$' -fuzztime=2s
       - name: Raw tree parser
         run: go test ./internal/fuzz -run '^$' -fuzz '^FuzzRawTree$' -fuzztime=2s
+
+  repository-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version: "1.25.x"
+          cache: true
+      - run: go mod download
+      - run: go mod verify
+      - name: Go formatting
+        shell: bash
+        run: test -z "$(gofmt -l .)"
+      - name: Module graph
+        run: go mod tidy -diff
+      - name: Patch hygiene
+        run: git diff --check
+      - name: Unicode 17 generated tables
+        shell: bash
+        run: |
+          generated="$(mktemp)"
+          trap 'rm -f "${generated}"' EXIT
+          go run ./internal/unicode17/cmd/gentables \
+            -ucd-dir internal/unicode17/data/ucd \
+            -output "${generated}"
+          cmp internal/unicode17/tables_generated.go "${generated}"
+      - name: POSIX shell syntax
+        shell: bash
+        run: |
+          while IFS= read -r -d '' script; do
+            sh -n "${script}"
+          done < <(git ls-files -z '*.sh')
+      - name: Generated and tracked files are current
+        shell: bash
+        run: test -z "$(git status --porcelain=v1 --untracked-files=all)"

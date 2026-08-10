@@ -108,6 +108,18 @@ type DiffResult struct {
 	To      StateSelector      `json:"to"`
 	Changes []changeset.Change `json:"changes"`
 	Stat    ChangeStat         `json:"stat"`
+
+	// textFiles retains the byte-exact changed inputs needed by the optional
+	// human content renderer. It is not part of the protocol result.
+	textFiles []diffTextFile
+}
+
+type diffTextFile struct {
+	path          string
+	before        []byte
+	after         []byte
+	beforePresent bool
+	afterPresent  bool
 }
 
 // Diff resolves both selectors, requires complete boundary-safe projections,
@@ -171,12 +183,34 @@ func (s *Store) Diff(ctx context.Context, from, to StateSelector) (result *DiffR
 	}
 	changes := changeset.Diff(snapshotTree(fromView), snapshotTree(toView))
 	result = &DiffResult{
-		From:    normalizedFrom,
-		To:      normalizedTo,
-		Changes: changes,
-		Stat:    changeStat(changes),
+		From:      normalizedFrom,
+		To:        normalizedTo,
+		Changes:   changes,
+		Stat:      changeStat(changes),
+		textFiles: diffTextFiles(snapshotTree(fromView), snapshotTree(toView), changes),
 	}
 	return result, nil
+}
+
+func diffTextFiles(before, after *snapshot.Tree, changes []changeset.Change) []diffTextFile {
+	result := make([]diffTextFile, 0, len(changes))
+	for _, change := range changes {
+		file := diffTextFile{path: change.Path}
+		if before != nil {
+			if value, present := before.Files[change.Path]; present {
+				file.beforePresent = true
+				file.before = append([]byte(nil), value.Data...)
+			}
+		}
+		if after != nil {
+			if value, present := after.Files[change.Path]; present {
+				file.afterPresent = true
+				file.after = append([]byte(nil), value.Data...)
+			}
+		}
+		result = append(result, file)
+	}
+	return result
 }
 
 func selectorUsesIndex(selector StateSelector) bool {

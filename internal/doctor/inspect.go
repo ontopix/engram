@@ -68,6 +68,8 @@ func Inspect(ctx context.Context, target string, options Options) (Result, error
 
 	performed := false
 	var adapterAccepted *managedread.GitState
+	var adapterMutation Mutation
+	var request RecoveryRequest
 	switch {
 	case first.recoveryPlan.preJournalOnly:
 		if err := cleanStalePreJournal(first.recoveryPlan); err != nil {
@@ -75,14 +77,30 @@ func Inspect(ctx context.Context, target string, options Options) (Result, error
 			durable := errors.As(err, &cleanup) && cleanup.durable
 			return Result{}, failMutation(FailureConcurrency, "clean stale pre-journal locks", err, Mutation{Durable: durable, RecoveryRequired: true})
 		}
+		adapterMutation.Durable = true
 		performed = true
 	case options.Recovery != nil:
-		response, err := options.Recovery.Recover(ctx, RecoveryRequest{Target: absolute, Repository: first.repository})
+		var approved bool
+		request, approved = newRecoveryRequest(first)
+		if !approved {
+			return Result{}, failMutation(FailureConcurrency, "bind recognized controller state", errors.New("recovery plan no longer identifies exactly one controller"), Mutation{RecoveryRequired: true})
+		}
+		if err := request.Revalidate(ctx); err != nil {
+			return Result{}, recoveryFailure("revalidate recognized controller state", err, Mutation{RecoveryRequired: true}, FailureConcurrency)
+		}
+		response, err := options.Recovery.Recover(ctx, request)
+		adapterMutation = Mutation{
+			Durable: response.Durable, LocalRefs: response.LocalRefs, Head: response.Head,
+			CheckoutChanged:  response.CheckoutChanged,
+			RecoveryRequired: response.RecoveryRequired,
+		}
 		if err != nil {
-			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				return Result{}, failMutation(FailureCancelled, "recover recognized controller state", err, Mutation{Durable: response.Durable, RecoveryRequired: true})
+			if !adapterMutation.RecoveryRequired {
+				// An adapter error without an explicit effect report is still a
+				// failed attempt against recognized blocking state.
+				adapterMutation.RecoveryRequired = true
 			}
-			return Result{}, failMutation(FailureOperational, "recover recognized controller state", err, Mutation{Durable: response.Durable, RecoveryRequired: true})
+			return Result{}, recoveryFailure("recover recognized controller state", err, adapterMutation, response.Failure)
 		}
 		adapterAccepted = response.Accepted
 		performed = true
@@ -91,18 +109,19 @@ func Inspect(ctx context.Context, target string, options Options) (Result, error
 	}
 
 	if err := ctx.Err(); err != nil {
-		return Result{}, fail(FailureCancelled, "recheck recovered target", err)
+		return Result{}, failMutation(FailureCancelled, "recheck recovered target", err, adapterMutation)
 	}
 	after, err := inspectOnce(ctx, absolute, true)
 	if err != nil {
 		// A successful acquisition/init cleanup is allowed to leave no store.
-		if performed && KindOf(err) == FailureRepository {
+		lifecycleCleanup := request.Binding.Controller == RecoveryInitialization || request.Binding.Controller == RecoveryAcquisition
+		if performed && lifecycleCleanup && KindOf(err) == FailureRepository {
 			result := first.result
 			result.Recovery.Performed = true
 			result.Recovery.Accepted = nil
 			return result, nil
 		}
-		return Result{}, err
+		return Result{}, recoveryFailure("recheck recovered target", err, adapterMutation, FailureOperational)
 	}
 	after.result.Recovery.Requested = true
 	after.result.Recovery.Needed = first.result.Recovery.Needed
@@ -111,6 +130,20 @@ func Inspect(ctx context.Context, target string, options Options) (Result, error
 		after.result.Recovery.Accepted = adapterAccepted
 	}
 	return after.result, nil
+}
+
+func recoveryFailure(operation string, err error, mutation Mutation, fallback ErrorKind) error {
+	kind := KindOf(err)
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		kind = FailureCancelled
+	}
+	if kind == "" {
+		kind = fallback
+	}
+	if kind == "" {
+		kind = FailureOperational
+	}
+	return failMutation(kind, operation, err, mutation)
 }
 
 func inspectOnce(ctx context.Context, target string, requested bool) (inspection, error) {

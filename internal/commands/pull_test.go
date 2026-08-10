@@ -31,6 +31,7 @@ func TestPullCommandFastForwardHasClosedResult(t *testing.T) {
 	app := cli.NewApp()
 	RegisterPortable(app)
 	RegisterManagedReads(app)
+	RegisterSync(app)
 	RegisterAcceptanceAt(app, registry)
 	RegisterPullAt(app, registry)
 	envelope := runPullJSON(t, app, local, "pull", "origin", "main", "--format", "json")
@@ -57,6 +58,7 @@ func TestPullConflictMakesStatusReplayAwareAndGuardsManagedWrites(t *testing.T) 
 	app := cli.NewApp()
 	RegisterPortable(app)
 	RegisterManagedReads(app)
+	RegisterSync(app)
 	RegisterAcceptanceAt(app, registry)
 	RegisterPullAt(app, registry)
 	conflict := runPullJSON(t, app, local, "pull", "origin", "main", "--format", "json")
@@ -76,12 +78,25 @@ func TestPullConflictMakesStatusReplayAwareAndGuardsManagedWrites(t *testing.T) 
 	if replay["reason"] != "conflict" {
 		t.Fatalf("status replay = %#v", replay)
 	}
-	for _, arguments := range [][]string{{"commit", "-m", "forbidden"}, {"revert", "HEAD"}, {"pull", "origin", "main"}} {
+	for _, arguments := range [][]string{{"commit", "-m", "forbidden"}, {"revert", "HEAD"}, {"push", "origin", "main"}, {"pull", "origin", "main"}} {
 		envelope := runPullJSON(t, app, local, append(arguments, "--format", "json")...)
 		assertEnvelope(t, envelope, arguments[0], cli.OutcomeError, 2)
 		if envelope.Error == nil || envelope.Error.Kind != cli.ErrorConflict {
 			t.Fatalf("%v error = %#v", arguments, envelope.Error)
 		}
+	}
+
+	pushCalled := false
+	failureApp := cli.NewApp()
+	failureApp.Handlers[cli.CommandPush] = cli.HandlerFunc(func(context.Context, *cli.Invocation) cli.Result {
+		pushCalled = true
+		return cli.Result{Outcome: cli.OutcomeOK}
+	})
+	RegisterPullAt(failureApp, "")
+	blockedWithoutRegistry := runPullJSON(t, failureApp, local, "push", "origin", "main", "--format", "json")
+	assertEnvelope(t, blockedWithoutRegistry, "push", cli.OutcomeError, 2)
+	if blockedWithoutRegistry.Error == nil || blockedWithoutRegistry.Error.Kind != cli.ErrorConflict || pushCalled {
+		t.Fatalf("push guard with unavailable registry = error %#v, called=%v", blockedWithoutRegistry.Error, pushCalled)
 	}
 
 	aborted := runPullJSON(t, app, local, "pull", "--abort", "--format", "json")
@@ -201,6 +216,68 @@ func TestDoctorRecognizesAndRecoversPullTransitionThroughAdapter(t *testing.T) {
 	}
 	if !recoveryCheck {
 		t.Fatal("doctor omitted recovery.state")
+	}
+}
+
+func TestDoctorCleansTerminalReplayAndPreservesStructuredEffects(t *testing.T) {
+	local, remoteWork, registryPath := commandPullFixture(t)
+	appendFile(t, filepath.Join(local, "topics", "why-files.md"), "\nLocal terminal doctor replay.\n")
+	managedGit(t, local, "add", "topics/why-files.md")
+	managedGit(t, local, "commit", "--no-verify", "-m", "local terminal")
+	appendFile(t, filepath.Join(remoteWork, "topics", "derived-state.md"), "\nRemote terminal doctor replay.\n")
+	managedGit(t, remoteWork, "add", "topics/derived-state.md")
+	managedGit(t, remoteWork, "commit", "--no-verify", "-m", "remote terminal")
+	managedGit(t, remoteWork, "push", "origin", "main")
+	installManagedGuard(t, local)
+	repository, err := gitraw.Discover(t.Context(), local)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exclude := filepath.Join(repository.CommonGitDir, "info", "exclude")
+	if err := os.WriteFile(exclude, []byte(".engram/cache/\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	registry, err := hooks.NewRegistry(registryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := managedwrite.New(hookexec.New(registry))
+	puller := pullflow.New(writer)
+	puller.Fault = func(phase pullflow.Phase) error {
+		if phase == pullflow.PhaseReplayTransitioned {
+			return errors.New("interrupt terminal replay before cleanup")
+		}
+		return nil
+	}
+	app := cli.NewApp()
+	RegisterPortable(app)
+	RegisterManagedReads(app)
+	registerPullWith(app, puller)
+	RegisterDoctorWithRecovery(app, &referenceRecovery{writer: writer, puller: puller})
+
+	failed := runPullJSON(t, app, local, "pull", "origin", "main", "--format", "json")
+	assertEnvelope(t, failed, "pull", cli.OutcomeError, 2)
+	failedMutation := decodeObject(t, failed.Result)
+	if failedMutation["durable"] != true || failedMutation["recovery_required"] != true || failedMutation["head"] == nil || len(failedMutation["local_refs"].([]any)) < 2 {
+		t.Fatalf("terminal pull mutation = %#v", failedMutation)
+	}
+	puller.Fault = nil
+	before := runPullJSON(t, app, local, "doctor", "--format", "json")
+	assertEnvelope(t, before, "doctor", cli.OutcomeIssues, 1)
+	after := runPullJSON(t, app, local, "doctor", "--recover", "--format", "json")
+	assertEnvelope(t, after, "doctor", cli.OutcomeOK, 0)
+	recovery := decodeObject(t, after.Result)["recovery"].(map[string]any)
+	if recovery["needed"] != true || recovery["performed"] != true {
+		t.Fatalf("terminal doctor recovery = %#v", recovery)
+	}
+	for _, name := range []string{
+		filepath.Join(repository.GitDir, "engram", "replay", "state-v1.json"),
+		filepath.Join(repository.GitDir, "engram", "replay", "plan-v1.json"),
+		filepath.Join(repository.GitDir, "engram", "replay", "terminal-v1.json"),
+	} {
+		if _, err := os.Lstat(name); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("doctor retained terminal controller %s: %v", name, err)
+		}
 	}
 }
 

@@ -42,7 +42,11 @@ func (p *Puller) Pull(ctx context.Context, store *managedread.Store, remote, bra
 		return nil, typed(ErrorConflict, "inspect pull recovery", err)
 	}
 	if active, err := Active(repository); err != nil {
-		return nil, typed(ErrorConflict, "inspect active replay", errors.Join(ErrRecovery, err))
+		failure := typed(ErrorConflict, "inspect active replay", errors.Join(ErrRecovery, err))
+		if stateFilesExist(repository) {
+			failure = replayErrorWithMutation(failure, "inspect active replay", &Mutation{LocalRefs: []RefMutation{}, RecoveryRequired: true})
+		}
+		return nil, failure
 	} else if active != nil {
 		return nil, typed(ErrorConflict, "start pull", ErrActiveReplay)
 	}
@@ -122,7 +126,7 @@ func (p *Puller) Pull(ctx context.Context, store *managedread.Store, remote, bra
 	return p.startReplay(ctx, repository, local, incoming, common, baseResult)
 }
 
-func (p *Puller) Continue(ctx context.Context, store *managedread.Store) (*Result, error) {
+func (p *Puller) Continue(ctx context.Context, store *managedread.Store) (result *Result, resultErr error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -131,6 +135,12 @@ func (p *Puller) Continue(ctx context.Context, store *managedread.Store) (*Resul
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	var operationMutation *Mutation
+	defer func() {
+		if resultErr != nil && operationMutation != nil {
+			resultErr = replayErrorWithMutation(resultErr, "", operationMutation)
+		}
+	}()
 	if store == nil || store.Repository() == nil {
 		return nil, typed(ErrorRepository, "continue pull", errors.New("nil managed store"))
 	}
@@ -138,16 +148,27 @@ func (p *Puller) Continue(ctx context.Context, store *managedread.Store) (*Resul
 	if err != nil {
 		return nil, err
 	}
+	terminal, terminalRaw, terminalPresent, terminalErr := readReplayTerminal(repository)
+	if terminalErr != nil {
+		return nil, replayErrorWithMutation(typed(ErrorConflict, "read replay terminal state", errors.Join(ErrRecovery, terminalErr)), "read replay terminal state", &Mutation{LocalRefs: []RefMutation{}, RecoveryRequired: true})
+	}
+	if terminalPresent {
+		return p.continueReplayTerminal(ctx, repository, terminal, terminalRaw, replayFinalizing)
+	}
 	state, plan, present, err := readReplay(repository)
 	if err != nil {
-		return nil, typed(ErrorConflict, "read pull replay", errors.Join(ErrRecovery, err))
+		return nil, replayErrorWithMutation(typed(ErrorConflict, "read pull replay", errors.Join(ErrRecovery, err)), "read pull replay", &Mutation{LocalRefs: []RefMutation{}, RecoveryRequired: true})
 	}
 	if !present {
 		return nil, typed(ErrorConflict, "continue pull", ErrNoActiveReplay)
 	}
-	repository, state, plan, _, err = p.repairReplayProgress(ctx, repository, state, plan)
+	var repaired bool
+	repository, state, plan, repaired, err = p.repairReplayProgress(ctx, repository, state, plan)
 	if err != nil {
 		return nil, err
+	}
+	if repaired {
+		operationMutation = replayPairMutation(true, false)
 	}
 	if err := validateReplayPair(repository, state, plan); err != nil {
 		return nil, typed(ErrorConflict, "continue pull", errors.Join(ErrRecovery, err))
@@ -171,17 +192,17 @@ func (p *Puller) Continue(ctx context.Context, store *managedread.Store) (*Resul
 		if isCandidateRejection(writeErr) {
 			oldState, oldPlan := state, plan
 			state.Reason, state.Conflicts = "rejected", []string{}
-			if updateErr := updateReplay(repository, oldState, oldPlan, state, plan); updateErr != nil {
+			if updateErr := p.updateReplay(repository, oldState, oldPlan, state, plan); updateErr != nil {
 				return nil, typed(ErrorConcurrency, "retain rejected resolution", updateErr)
 			}
 			return replayResult(repository, state, plan, Rejected, resultChanges(accepted), resultValidation(accepted)), nil
 		}
-		return nil, classifyWriterError(repository, writeErr)
+		return nil, classifyWriterError(repository, accepted, writeErr)
 	}
 	return p.advanceReplay(ctx, repository.Root, state, plan, accepted)
 }
 
-func (p *Puller) Abort(ctx context.Context, store *managedread.Store) (*Result, error) {
+func (p *Puller) Abort(ctx context.Context, store *managedread.Store) (result *Result, resultErr error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -190,6 +211,12 @@ func (p *Puller) Abort(ctx context.Context, store *managedread.Store) (*Result, 
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	var operationMutation *Mutation
+	defer func() {
+		if resultErr != nil && operationMutation != nil {
+			resultErr = replayErrorWithMutation(resultErr, "", operationMutation)
+		}
+	}()
 	if store == nil || store.Repository() == nil {
 		return nil, typed(ErrorRepository, "abort pull", errors.New("nil managed store"))
 	}
@@ -197,16 +224,27 @@ func (p *Puller) Abort(ctx context.Context, store *managedread.Store) (*Result, 
 	if err != nil {
 		return nil, err
 	}
+	terminal, terminalRaw, terminalPresent, terminalErr := readReplayTerminal(repository)
+	if terminalErr != nil {
+		return nil, replayErrorWithMutation(typed(ErrorConflict, "read replay terminal state", errors.Join(ErrRecovery, terminalErr)), "read replay terminal state", &Mutation{LocalRefs: []RefMutation{}, RecoveryRequired: true})
+	}
+	if terminalPresent {
+		return p.continueReplayTerminal(ctx, repository, terminal, terminalRaw, replayAborting)
+	}
 	state, plan, present, err := readReplay(repository)
 	if err != nil {
-		return nil, typed(ErrorConflict, "read pull replay", errors.Join(ErrRecovery, err))
+		return nil, replayErrorWithMutation(typed(ErrorConflict, "read pull replay", errors.Join(ErrRecovery, err)), "read pull replay", &Mutation{LocalRefs: []RefMutation{}, RecoveryRequired: true})
 	}
 	if !present {
 		return nil, typed(ErrorConflict, "abort pull", ErrNoActiveReplay)
 	}
-	repository, state, plan, _, err = p.repairReplayProgress(ctx, repository, state, plan)
+	var repaired bool
+	repository, state, plan, repaired, err = p.repairReplayProgress(ctx, repository, state, plan)
 	if err != nil {
 		return nil, err
+	}
+	if repaired {
+		operationMutation = replayPairMutation(true, false)
 	}
 	if err := validateReplayPair(repository, state, plan); err != nil {
 		return nil, typed(ErrorConflict, "abort pull", errors.Join(ErrRecovery, err))
@@ -221,33 +259,7 @@ func (p *Puller) Abort(ctx context.Context, store *managedread.Store) (*Result, 
 	if state.Original.Ref == nil || state.Original.Commit == nil || state.Private.Ref == nil || state.Private.Commit == nil {
 		return nil, typed(ErrorOperational, "abort pull", errors.New("replay Git states are incomplete"))
 	}
-	target, err := snapshotAt(ctx, repository, *state.Original.Commit)
-	if err != nil {
-		return nil, classifyReadError(ctx, "read original pull snapshot", err)
-	}
-	modes, err := modesAt(ctx, repository, *state.Original.Commit)
-	if err != nil {
-		return nil, classifyReadError(ctx, "read original pull modes", err)
-	}
-	refs := sortedRefUpdates([]transitionRef{
-		{Ref: *state.Original.Ref, Before: cloneString(state.Original.Commit), After: cloneString(state.Original.Commit)},
-		{Ref: *state.Private.Ref, Before: cloneString(state.Private.Commit), After: nil},
-	})
-	_, err = p.transition(ctx, transitionRequest{repository: repository, refs: refs, headAfter: cloneGitState(state.Original), snapshot: target, modes: modes, allowDraft: true})
-	if err != nil {
-		return nil, err
-	}
-	restored, err := managedread.Open(ctx, repository.Root)
-	if err != nil {
-		return nil, classifyReadError(ctx, "verify aborted pull", err)
-	}
-	if err := removeReplay(restored.Repository(), state, plan); err != nil {
-		return nil, typed(ErrorIO, "remove aborted replay state", err)
-	}
-	result := replayResult(restored.Repository(), state, plan, Aborted, nil, nil)
-	result.After = cloneGitState(state.Original)
-	result.Conflicts = []string{}
-	return result, nil
+	return p.beginReplayTerminal(ctx, repository, state, plan, replayAborting)
 }
 
 func (p *Puller) fastForward(ctx context.Context, repository *gitraw.Repository, local *managedread.AcceptedAudit, incoming *lineageAudit, result *Result) (*Result, error) {
@@ -270,7 +282,19 @@ func (p *Puller) fastForward(ctx context.Context, repository *gitraw.Repository,
 	return result, nil
 }
 
-func (p *Puller) startReplay(ctx context.Context, repository *gitraw.Repository, local *managedread.AcceptedAudit, incoming *lineageAudit, common int, result *Result) (*Result, error) {
+func (p *Puller) startReplay(ctx context.Context, repository *gitraw.Repository, local *managedread.AcceptedAudit, incoming *lineageAudit, common int, result *Result) (out *Result, resultErr error) {
+	var state replayState
+	var plan replayPlan
+	replayPublished := false
+	var workflowMutation *Mutation
+	defer func() {
+		if resultErr == nil || !replayPublished {
+			return
+		}
+		recoveryRequired := pullRecoveryRequired(repository)
+		mutation := terminalCleanupMutation(workflowMutation, replayPublished, recoveryRequired)
+		resultErr = replayErrorWithObservedRecovery(resultErr, "", mutation, recoveryRequired)
+	}()
 	sources, err := sourceRecords(local, common)
 	if err != nil || len(sources) == 0 {
 		return nil, typed(ErrorRepository, "construct divergent replay", errors.Join(err, errors.New("divergent replay has no local source commits")))
@@ -280,42 +304,49 @@ func (p *Puller) startReplay(ctx context.Context, repository *gitraw.Repository,
 		return nil, typed(ErrorIO, "allocate private replay ref", err)
 	}
 	privateState := gitState(privateRef, incoming.Tip)
-	state := replayState{
+	state = replayState{
 		Version: 1, Original: gitState(repository.HeadRef, local.Tip), Private: privateState,
 		Base: managedread.GitState{Commit: stringPointer(sources[0].Base)}, Reason: "rejected", Conflicts: []string{},
 	}
-	plan := replayPlan{
+	plan = replayPlan{
 		Version: 1, Remote: result.Remote, RemoteRef: result.RemoteRef, Original: cloneGitState(state.Original),
 		PrivateRef: privateRef, RemoteTip: incoming.Tip, Sources: sources, Next: 0, DraftReady: false,
 		Fetched: result.Fetched, Replayed: 0, Validation: cloneValidation(incoming.Validation), Audits: cloneAudits(incoming.Audits),
 	}
-	if err := publishReplay(repository, state, plan); err != nil {
+	publication, publicationRaw, err := p.publishReplay(repository, state, plan)
+	if publication.Owner.Token != "" {
+		defer activeReplayPairs.Delete(publication.Owner.Token)
+	}
+	if err != nil {
 		return nil, typed(ErrorIO, "publish replay plan", err)
 	}
+	replayPublished = true
+	workflowMutation = replayPairMutation(true, true)
 	target := incoming.Snapshots[incoming.Tip]
 	modes, err := modesAt(ctx, repository, incoming.Tip)
 	if err != nil {
-		_ = removeReplay(repository, state, plan)
 		return nil, classifyReadError(ctx, "read incoming replay modes", err)
 	}
 	refs := sortedRefUpdates([]transitionRef{
 		{Ref: repository.HeadRef, Before: stringPointer(local.Tip), After: stringPointer(local.Tip)},
 		{Ref: privateRef, Before: nil, After: stringPointer(incoming.Tip)},
 	})
-	_, transitionErr := p.transition(ctx, transitionRequest{repository: repository, refs: refs, headAfter: privateState, snapshot: target, modes: modes})
+	activationMutation, transitionErr := p.transition(ctx, transitionRequest{repository: repository, refs: refs, headAfter: privateState, snapshot: target, modes: modes})
 	if transitionErr != nil {
-		if mutation := MutationOf(transitionErr); mutation == nil || !mutation.RecoveryRequired {
-			_ = removeReplay(repository, state, plan)
-		}
 		return nil, transitionErr
 	}
+	workflowMutation = mergePullMutations(workflowMutation, activationMutation)
+	workflowMutation.RecoveryRequired = true
 	if err := p.checkpoint(PhaseReplayActivated); err != nil {
 		return nil, &Error{Kind: ErrorOperational, Operation: "activate pull replay", Mutation: &Mutation{Durable: true, LocalRefs: []RefMutation{{Ref: privateRef, After: stringPointer(incoming.Tip)}}, Head: &HeadMutation{Before: state.Original, After: privateState}, CheckoutChanged: true}, Err: err}
+	}
+	if err := p.completeReplayPublication(ctx, repository, publication, publicationRaw); err != nil {
+		return nil, err
 	}
 	return p.processAutomatic(ctx, repository.Root, state, plan)
 }
 
-func (p *Puller) processAutomatic(ctx context.Context, root string, state replayState, plan replayPlan) (*Result, error) {
+func (p *Puller) processAutomatic(ctx context.Context, root string, state replayState, plan replayPlan) (result *Result, resultErr error) {
 	store, err := managedread.Open(ctx, root)
 	if err != nil {
 		return nil, classifyReadError(ctx, "open private replay branch", err)
@@ -349,7 +380,7 @@ func (p *Puller) processAutomatic(ctx context.Context, root string, state replay
 		oldState, oldPlan := state, plan
 		state.Reason, state.Conflicts = "conflict", append([]string(nil), applied.Conflicts...)
 		plan.DraftReady = true
-		if err := updateReplay(repository, oldState, oldPlan, state, plan); err != nil {
+		if err := p.updateReplay(repository, oldState, oldPlan, state, plan); err != nil {
 			return nil, typed(ErrorConcurrency, "publish replay conflict", err)
 		}
 		return replayResult(repository, state, plan, Conflict, nil, nil), nil
@@ -369,7 +400,7 @@ func (p *Puller) processAutomatic(ctx context.Context, root string, state replay
 	})
 	if writeErr != nil {
 		if !isCandidateRejection(writeErr) {
-			return nil, classifyWriterError(repository, writeErr)
+			return nil, classifyWriterError(repository, accepted, writeErr)
 		}
 		git, locateErr := p.gitPath()
 		if locateErr != nil {
@@ -380,29 +411,44 @@ func (p *Puller) processAutomatic(ctx context.Context, root string, state replay
 			return nil, indexErr
 		}
 		verify := transitionRef{Ref: repository.HeadRef, Before: stringPointer(repository.Head.String()), After: stringPointer(repository.Head.String())}
-		if _, draftErr := p.transition(ctx, transitionRequest{repository: repository, refs: []transitionRef{verify}, headAfter: gitState(repository.HeadRef, repository.Head.String()), snapshot: candidate, modes: modes, index: index}); draftErr != nil {
+		draftMutation, draftErr := p.transition(ctx, transitionRequest{repository: repository, refs: []transitionRef{verify}, headAfter: gitState(repository.HeadRef, repository.Head.String()), snapshot: candidate, modes: modes, index: index})
+		if draftErr != nil {
 			return nil, draftErr
 		}
 		oldState, oldPlan := state, plan
 		state.Reason, state.Conflicts = "rejected", []string{}
 		plan.DraftReady = true
-		if err := updateReplay(repository, oldState, oldPlan, state, plan); err != nil {
-			return nil, typed(ErrorConcurrency, "publish rejected replay candidate", err)
+		if err := p.updateReplay(repository, oldState, oldPlan, state, plan); err != nil {
+			return nil, replayErrorWithMutation(typed(ErrorConcurrency, "publish rejected replay candidate", err), "publish rejected replay candidate", terminalCleanupMutation(draftMutation, false, true))
 		}
 		if err := p.checkpoint(PhaseDraftPublished); err != nil {
-			return nil, typed(ErrorIO, "publish rejected replay candidate", err)
+			return nil, replayErrorWithMutation(typed(ErrorIO, "publish rejected replay candidate", err), "publish rejected replay candidate", terminalCleanupMutation(draftMutation, true, true))
 		}
 		return replayResult(repository, state, plan, Rejected, applied.Changes, &validation), nil
 	}
 	return p.advanceReplay(ctx, root, state, plan, accepted)
 }
 
-func (p *Puller) advanceReplay(ctx context.Context, root string, state replayState, plan replayPlan, accepted *managedwrite.Result) (*Result, error) {
+func (p *Puller) advanceReplay(ctx context.Context, root string, state replayState, plan replayPlan, accepted *managedwrite.Result) (result *Result, resultErr error) {
+	var repository *gitraw.Repository
+	defer func() {
+		if resultErr == nil || accepted == nil || !accepted.Created || accepted.Commit == nil || state.Private.Ref == nil || state.Private.Commit == nil {
+			return
+		}
+		recoveryRequired := pullRecoveryRequired(repository)
+		mutation := &Mutation{
+			Durable:         true,
+			LocalRefs:       []RefMutation{{Ref: *state.Private.Ref, Before: cloneString(state.Private.Commit), After: cloneString(accepted.Commit)}},
+			Head:            &HeadMutation{Before: cloneGitState(state.Private), After: gitState(*state.Private.Ref, *accepted.Commit)},
+			CheckoutChanged: false, RecoveryRequired: recoveryRequired,
+		}
+		resultErr = replayErrorWithObservedRecovery(resultErr, "", mutation, recoveryRequired)
+	}()
 	store, err := managedread.Open(ctx, root)
 	if err != nil {
 		return nil, classifyReadError(ctx, "observe replay progress", err)
 	}
-	repository := store.Repository()
+	repository = store.Repository()
 	if repository.Head == nil {
 		return nil, typed(ErrorRepository, "observe replay progress", errors.New("private replay branch is unborn"))
 	}
@@ -415,19 +461,19 @@ func (p *Puller) advanceReplay(ctx context.Context, root string, state replaySta
 	if plan.Next < len(plan.Sources) {
 		state.Base = managedread.GitState{Commit: stringPointer(plan.Sources[plan.Next].Base)}
 		state.Reason, state.Conflicts = "rejected", []string{}
-		if err := updateReplay(repository, oldState, oldPlan, state, plan); err != nil {
+		if err := p.updateReplay(repository, oldState, oldPlan, state, plan); err != nil {
 			return nil, typed(ErrorConcurrency, "advance replay state", err)
 		}
 		if err := p.checkpoint(PhaseReplayCommitted); err != nil {
-			return nil, typed(ErrorIO, "advance replay state", err)
+			return nil, replayPairError(ErrorIO, "advance replay state", err, true, true)
 		}
 		return p.processAutomatic(ctx, root, state, plan)
 	}
-	if err := updateReplay(repository, oldState, oldPlan, state, plan); err != nil {
+	if err := p.updateReplay(repository, oldState, oldPlan, state, plan); err != nil {
 		return nil, typed(ErrorConcurrency, "record final replay commit", err)
 	}
 	if err := p.checkpoint(PhaseReplayCommitted); err != nil {
-		return nil, typed(ErrorIO, "record final replay commit", err)
+		return nil, replayPairError(ErrorIO, "record final replay commit", err, true, true)
 	}
 	return p.finishReplay(ctx, repository, state, plan, accepted)
 }
@@ -436,39 +482,7 @@ func (p *Puller) finishReplay(ctx context.Context, repository *gitraw.Repository
 	if state.Original.Ref == nil || state.Original.Commit == nil || state.Private.Ref == nil || state.Private.Commit == nil {
 		return nil, typed(ErrorOperational, "finish replay", errors.New("replay Git states are incomplete"))
 	}
-	current, err := snapshotAt(ctx, repository, *state.Private.Commit)
-	if err != nil {
-		return nil, classifyReadError(ctx, "read completed private replay", err)
-	}
-	modes, err := modesAt(ctx, repository, *state.Private.Commit)
-	if err != nil {
-		return nil, classifyReadError(ctx, "read completed replay modes", err)
-	}
-	refs := sortedRefUpdates([]transitionRef{
-		{Ref: *state.Original.Ref, Before: cloneString(state.Original.Commit), After: cloneString(state.Private.Commit)},
-		{Ref: *state.Private.Ref, Before: cloneString(state.Private.Commit), After: nil},
-	})
-	if err := p.checkpoint(PhaseFinalizing); err != nil {
-		return nil, typed(ErrorIO, "finish replay", err)
-	}
-	_, err = p.transition(ctx, transitionRequest{repository: repository, refs: refs, headAfter: gitState(*state.Original.Ref, *state.Private.Commit), snapshot: current, modes: modes})
-	if err != nil {
-		return nil, err
-	}
-	finished, err := managedread.Open(ctx, repository.Root)
-	if err != nil {
-		return nil, classifyReadError(ctx, "verify completed replay", err)
-	}
-	if err := removeReplay(finished.Repository(), state, plan); err != nil {
-		return nil, typed(ErrorIO, "remove completed replay state", err)
-	}
-	original, err := snapshotAt(ctx, finished.Repository(), *state.Original.Commit)
-	if err != nil {
-		return nil, classifyReadError(ctx, "read original replay snapshot", err)
-	}
-	result := replayResult(finished.Repository(), state, plan, Replayed, changeset.Diff(original.Tree, current.Tree), nil)
-	result.After = gitState(*state.Original.Ref, *state.Private.Commit)
-	return result, nil
+	return p.beginReplayTerminal(ctx, repository, state, plan, replayFinalizing)
 }
 
 func replayResult(repository *gitraw.Repository, state replayState, plan replayPlan, outcome State, changes []changeset.Change, candidate *checker.Result) *Result {
@@ -564,7 +578,7 @@ func isCandidateRejection(err error) bool {
 	return errors.As(err, &managed) && managed.Validation != nil && managed.Kind == managedwrite.FailureHook
 }
 
-func classifyWriterError(repository *gitraw.Repository, err error) error {
+func classifyWriterError(repository *gitraw.Repository, accepted *managedwrite.Result, err error) error {
 	kind := ErrorOperational
 	switch managedwrite.KindOf(err) {
 	case managedwrite.FailureUsage:
@@ -588,14 +602,33 @@ func classifyWriterError(repository *gitraw.Repository, err error) error {
 	case managedwrite.FailureIO:
 		kind = ErrorIO
 	}
-	result := &Error{Kind: kind, Operation: "accept replay candidate", Err: err}
+	result := &Error{Kind: kind, Operation: "accept replay candidate", Err: err, Mutation: &Mutation{LocalRefs: []RefMutation{}}}
 	var managed *managedwrite.Error
-	if errors.As(err, &managed) && (managed.Accepted || managed.UnknownCAS) {
-		mutation := &Mutation{Durable: managed.Accepted, LocalRefs: []RefMutation{}, RecoveryRequired: true}
-		if repository != nil && repository.Head != nil && managed.Commit != "" {
-			mutation.LocalRefs = append(mutation.LocalRefs, RefMutation{Ref: repository.HeadRef, Before: stringPointer(repository.Head.String()), After: stringPointer(managed.Commit)})
+	knownCommit := ""
+	checkoutKnown := false
+	if errors.As(err, &managed) {
+		if managed.Accepted {
+			knownCommit = managed.Commit
 		}
-		result.Mutation = mutation
+		checkoutKnown = managed.CheckoutChanged
+		result.Mutation.Durable = result.Mutation.Durable || managed.Durable
+		result.Mutation.CheckoutChanged = result.Mutation.CheckoutChanged || managed.CheckoutChanged
+		result.Mutation.RecoveryRequired = result.Mutation.RecoveryRequired || managed.RecoveryRequired
+	}
+	if accepted != nil && accepted.Created && accepted.Commit != nil {
+		knownCommit = *accepted.Commit
+		checkoutKnown = true
+	}
+	if repository != nil && repository.Head != nil && knownCommit != "" {
+		acceptedMutation := &Mutation{
+			Durable: true, LocalRefs: []RefMutation{{Ref: repository.HeadRef, Before: stringPointer(repository.Head.String()), After: stringPointer(knownCommit)}},
+			Head: &HeadMutation{
+				Before: gitState(repository.HeadRef, repository.Head.String()),
+				After:  gitState(repository.HeadRef, knownCommit),
+			},
+			CheckoutChanged: checkoutKnown, RecoveryRequired: true,
+		}
+		result.Mutation = mergePullMutations(result.Mutation, acceptedMutation)
 	}
 	return result
 }
@@ -615,9 +648,25 @@ func resultValidation(value *managedwrite.Result) *checker.Result {
 }
 
 func stateFilesExist(repository *gitraw.Repository) bool {
+	if repository == nil {
+		return false
+	}
 	_, stateErr := os.Lstat(replayStatePath(repository))
 	_, planErr := os.Lstat(replayPlanPath(repository))
-	return stateErr == nil || planErr == nil
+	_, terminalErr := os.Lstat(replayTerminalPath(repository))
+	_, pairErr := os.Lstat(replayPairJournalPath(repository))
+	return stateErr == nil || planErr == nil || terminalErr == nil || pairErr == nil
+}
+
+func pullRecoveryRequired(repository *gitraw.Repository) bool {
+	if repository == nil {
+		return true
+	}
+	if stateFilesExist(repository) {
+		return true
+	}
+	_, present, err := readControllerFile(transitionPath(repository))
+	return err != nil || present
 }
 
 func (r *Result) String() string {

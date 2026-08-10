@@ -1,4 +1,4 @@
-//go:build aix || darwin || dragonfly || freebsd || illumos || linux || netbsd || openbsd
+//go:build darwin || dragonfly || freebsd || illumos || linux || netbsd || openbsd
 
 package rendezvous
 

@@ -2,6 +2,8 @@ package unicode17
 
 import (
 	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,14 +12,11 @@ import (
 	"testing"
 )
 
-// TestUnicodeNormalizationConformance runs the complete Unicode normalization
-// corpus when the pinned source directory is explicitly supplied. Ordinary
-// builds and tests remain network-free and use the checked-in generated tables.
+// TestUnicodeNormalizationConformance runs the complete checked-in Unicode
+// normalization corpus. An explicit directory remains available for auditing
+// a separately acquired copy of the same pinned sources.
 func TestUnicodeNormalizationConformance(t *testing.T) {
-	dir := os.Getenv("ENGRAM_UNICODE17_UCD_DIR")
-	if dir == "" {
-		t.Skip("set ENGRAM_UNICODE17_UCD_DIR to run the full Unicode corpus")
-	}
+	dir := unicodeSourceDirectory()
 
 	path := filepath.Join(dir, "NormalizationTest.txt")
 	file, err := os.Open(path)
@@ -63,10 +62,7 @@ func TestUnicodeNormalizationConformance(t *testing.T) {
 }
 
 func TestUnicodeCaseFoldingConformance(t *testing.T) {
-	dir := os.Getenv("ENGRAM_UNICODE17_UCD_DIR")
-	if dir == "" {
-		t.Skip("set ENGRAM_UNICODE17_UCD_DIR to run the full Unicode corpus")
-	}
+	dir := unicodeSourceDirectory()
 
 	path := filepath.Join(dir, "CaseFolding.txt")
 	file, err := os.Open(path)
@@ -111,6 +107,33 @@ func TestUnicodeCaseFoldingConformance(t *testing.T) {
 	if rows == 0 {
 		t.Fatal("case-folding corpus contained no applicable rows")
 	}
+}
+
+func TestPinnedUnicodeSourceHashes(t *testing.T) {
+	want := map[string]string{
+		"UnicodeData.txt":               "2e1efc1dcb59c575eedf5ccae60f95229f706ee6d031835247d843c11d96470c",
+		"DerivedNormalizationProps.txt": "71fd6a206a2c0cdd41feb6b7f656aa31091db45e9cedc926985d718397f9e488",
+		"CompositionExclusions.txt":     "2f239196ef3b5b61db5cc476e9bd80f534d15aa1b74e1be1dea5d042a344c85f",
+		"CaseFolding.txt":               "ff8d8fefbf123574205085d6714c36149eb946d717a0c585c27f0f4ef58c4183",
+		"NormalizationTest.txt":         "5019ffd530751a741900c849c0e010332f142a3612234639bd200b82138a87db",
+	}
+	for name, expected := range want {
+		data, err := os.ReadFile(filepath.Join(unicodeSourceDirectory(), name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		digest := sha256.Sum256(data)
+		if actual := hex.EncodeToString(digest[:]); actual != expected {
+			t.Errorf("%s SHA-256 = %s, want %s", name, actual, expected)
+		}
+	}
+}
+
+func unicodeSourceDirectory() string {
+	if directory := os.Getenv("ENGRAM_UNICODE17_UCD_DIR"); directory != "" {
+		return directory
+	}
+	return filepath.Join("data", "ucd")
 }
 
 func assertNFC(t *testing.T, path string, line int, field, input, want string) {

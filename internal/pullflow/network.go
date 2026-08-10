@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/ontopix/engram/internal/gitraw"
+	"github.com/ontopix/engram/internal/networkgit"
 	"github.com/ontopix/engram/internal/remoteselect"
 )
 
@@ -56,14 +57,25 @@ func (p *Puller) acquireTip(ctx context.Context, git string, repository *gitraw.
 	if err := p.rejectURLRewrites(ctx, git, repository.Root); err != nil {
 		return gitraw.OID{}, err
 	}
-	before, err := p.observe(ctx, git, repository, selection)
+	private, err := networkgit.New(repository.CommonGitDir, repository.Format)
+	if err != nil {
+		return gitraw.OID{}, typed(ErrorCapability, "create private network context", err)
+	}
+	defer private.Close()
+	if p != nil && p.afterRewriteCheck != nil {
+		p.afterRewriteCheck()
+	}
+	if err := ctx.Err(); err != nil {
+		return gitraw.OID{}, typed(ErrorCancelled, "observe incoming branch", err)
+	}
+	before, err := p.observe(ctx, git, private.Root(), repository.Format, selection)
 	if err != nil {
 		return gitraw.OID{}, err
 	}
 	if before == nil {
 		return gitraw.OID{}, typed(ErrorNetwork, "observe incoming branch", errors.New("selected remote branch is absent"))
 	}
-	fetched := p.command(ctx, git, repository.Root, nil,
+	fetched := p.command(ctx, git, private.Root(), nil,
 		"fetch", "--no-tags", "--no-write-fetch-head", "--no-recurse-submodules", selection.URL, selection.RemoteRef)
 	if !fetched.started {
 		if ctx.Err() != nil {
@@ -81,10 +93,7 @@ func (p *Puller) acquireTip(ctx context.Context, git string, repository *gitraw.
 		}
 		return gitraw.OID{}, typed(ErrorNetwork, "fetch incoming branch", errors.New(detail))
 	}
-	if err := p.rejectURLRewrites(ctx, git, repository.Root); err != nil {
-		return gitraw.OID{}, err
-	}
-	after, err := p.observe(ctx, git, repository, selection)
+	after, err := p.observe(ctx, git, private.Root(), repository.Format, selection)
 	if err != nil {
 		return gitraw.OID{}, err
 	}
@@ -94,6 +103,9 @@ func (p *Puller) acquireTip(ctx context.Context, git string, repository *gitraw.
 	oid, err := gitraw.ParseOID(repository.Format, *before)
 	if err != nil {
 		return gitraw.OID{}, typed(ErrorNetwork, "parse incoming branch", err)
+	}
+	if err := private.Promote(); err != nil {
+		return gitraw.OID{}, typed(ErrorIO, "promote fetched objects", err)
 	}
 	if _, err := repository.ReadObject(ctx, oid); err != nil {
 		return gitraw.OID{}, classifyReadError(ctx, "verify fetched tip", err)
@@ -121,8 +133,8 @@ func (p *Puller) rejectURLRewrites(ctx context.Context, git, root string) error 
 	return nil
 }
 
-func (p *Puller) observe(ctx context.Context, git string, repository *gitraw.Repository, selection remoteselect.Selection) (*string, error) {
-	result := p.command(ctx, git, repository.Root, nil, "ls-remote", "--refs", selection.URL, selection.RemoteRef)
+func (p *Puller) observe(ctx context.Context, git, root string, format gitraw.ObjectFormat, selection remoteselect.Selection) (*string, error) {
+	result := p.command(ctx, git, root, nil, "ls-remote", "--refs", selection.URL, selection.RemoteRef)
 	if !result.started {
 		if ctx.Err() != nil {
 			return nil, typed(ErrorCancelled, "observe incoming branch", ctx.Err())
@@ -135,7 +147,7 @@ func (p *Puller) observe(ctx context.Context, git string, repository *gitraw.Rep
 	if result.err != nil || result.status != 0 {
 		return nil, typed(ErrorNetwork, "observe incoming branch", errors.New(commandDetail(result)))
 	}
-	return parseObservedRef(result.stdout, selection.RemoteRef, repository.Format)
+	return parseObservedRef(result.stdout, selection.RemoteRef, format)
 }
 
 func parseObservedRef(output []byte, ref string, format gitraw.ObjectFormat) (*string, error) {

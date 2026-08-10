@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -87,9 +88,89 @@ func TestAttachMalformedBlockIsIntegrationError(t *testing.T) {
 	if envelope.Error == nil || envelope.Error.Kind != cli.ErrorIntegration {
 		t.Fatalf("error = %#v", envelope.Error)
 	}
+	if result := decodeObject(t, envelope.Result); len(result) != 0 {
+		t.Fatalf("pre-publication error result = %#v, want {}", result)
+	}
 	data, err := os.ReadFile(entrypoint)
 	if err != nil || string(data) != malformed {
 		t.Fatalf("malformed bytes changed: %v %q", err, data)
+	}
+}
+
+type fakeAttachmentUpdater struct {
+	attachErr error
+	detachErr error
+}
+
+func (f *fakeAttachmentUpdater) Attach(string, string, string) (attachment.Result, error) {
+	return attachment.Result{}, f.attachErr
+}
+
+func (f *fakeAttachmentUpdater) Detach(string, string, string) (attachment.Result, error) {
+	return attachment.Result{}, f.detachErr
+}
+
+func TestAttachmentMutationErrorsUseExactProtocolShape(t *testing.T) {
+	store := managedFixture(t)
+	project := t.TempDir()
+	tests := []struct {
+		name     string
+		command  string
+		kind     cli.ErrorKind
+		durable  bool
+		recovery bool
+		want     string
+	}{
+		{
+			name: "attach renamed before sync", command: "attach", kind: cli.ErrorIO,
+			want: `{"durable":false,"local_refs":[],"head":null,"checkout_changed":false,"remote":null,"recovery_required":false}`,
+		},
+		{
+			name: "attach durably published", command: "attach", kind: cli.ErrorIO, durable: true,
+			want: `{"durable":true,"local_refs":[],"head":null,"checkout_changed":false,"remote":null,"recovery_required":false}`,
+		},
+		{
+			name: "detach residual lock", command: "detach", kind: cli.ErrorConcurrency, durable: true, recovery: true,
+			want: `{"durable":true,"local_refs":[],"head":null,"checkout_changed":false,"remote":null,"recovery_required":true}`,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cause := errors.New("injected attachment failure")
+			if test.recovery {
+				cause = errors.Join(attachment.ErrBusy, cause)
+			}
+			err := &attachment.EffectError{
+				Effect: attachment.Effect{Durable: test.durable, RecoveryRequired: test.recovery},
+				Err:    cause,
+			}
+			updater := &fakeAttachmentUpdater{}
+			if test.command == "attach" {
+				updater.attachErr = err
+			} else {
+				updater.detachErr = err
+			}
+			app := cli.NewApp()
+			RegisterPortable(app)
+			RegisterManagedReads(app)
+			registerAttachmentsWith(app, updater)
+			envelope := runAttachmentAppJSON(t, app, test.command, store, "--project", project, "--format", "json")
+			assertEnvelope(t, envelope, test.command, cli.OutcomeError, 2)
+			if envelope.Error == nil || envelope.Error.Kind != test.kind {
+				t.Fatalf("error = %#v", envelope.Error)
+			}
+			if got := string(envelope.Result); got != test.want {
+				t.Fatalf("result = %s, want %s", got, test.want)
+			}
+			result := decodeObject(t, envelope.Result)
+			assertExactKeys(t, result, "durable", "local_refs", "head", "checkout_changed", "remote", "recovery_required")
+			if result["durable"] != test.durable || result["checkout_changed"] != false || result["recovery_required"] != test.recovery || result["head"] != nil || result["remote"] != nil {
+				t.Fatalf("mutation = %#v", result)
+			}
+			if refs := result["local_refs"].([]any); len(refs) != 0 {
+				t.Fatalf("local_refs = %#v", refs)
+			}
+		})
 	}
 }
 
@@ -99,6 +180,11 @@ func runAttachmentJSON(t *testing.T, arguments ...string) wireEnvelope {
 	RegisterPortable(app)
 	RegisterManagedReads(app)
 	RegisterAttachments(app)
+	return runAttachmentAppJSON(t, app, arguments...)
+}
+
+func runAttachmentAppJSON(t *testing.T, app *cli.App, arguments ...string) wireEnvelope {
+	t.Helper()
 	var stdout, stderr bytes.Buffer
 	status := app.Run(context.Background(), arguments, &stdout, &stderr)
 	if stderr.Len() != 0 {

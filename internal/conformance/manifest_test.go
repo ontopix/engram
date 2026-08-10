@@ -21,8 +21,8 @@ func TestLoadRepositoryManifest(t *testing.T) {
 	}
 
 	ids := manifest.SortedCaseIDs()
-	if len(ids) != 43 || !sort.StringsAreSorted(ids) {
-		t.Fatalf("case IDs = %q, want 43 sorted IDs", ids)
+	if len(ids) != 54 || !sort.StringsAreSorted(ids) {
+		t.Fatalf("case IDs = %q, want 54 sorted IDs", ids)
 	}
 
 	var snapshots, changesets, managed int
@@ -36,8 +36,8 @@ func TestLoadRepositoryManifest(t *testing.T) {
 			managed++
 		}
 	}
-	if snapshots != 35 || changesets != 5 || managed != 3 {
-		t.Fatalf("kind counts = snapshot:%d changeset:%d managed:%d, want 35, 5, and 3", snapshots, changesets, managed)
+	if snapshots != 38 || changesets != 13 || managed != 3 {
+		t.Fatalf("kind counts = snapshot:%d changeset:%d managed:%d, want 38, 13, and 3", snapshots, changesets, managed)
 	}
 }
 
@@ -133,7 +133,6 @@ func TestParseRejectsInvalidManifest(t *testing.T) {
 		{"invalid base literal", strings.Replace(validChangesetManifest, `"base":"unavailable"`, `"base":"missing"`, 1), "base literal must be"},
 		{"changeset missing status", strings.Replace(validChangesetManifest, `"status":"indeterminate",`, ``, 1), "status is required"},
 		{"unavailable base complete", strings.Replace(validChangesetManifest, `"status":"indeterminate"`, `"status":"complete"`, 1), "when base is unavailable"},
-		{"available base indeterminate", strings.Replace(validChangesetManifest, `"base":"unavailable"`, `"base":{"operations":[]}`, 1), "when base is available"},
 	}
 
 	for _, test := range tests {
@@ -159,6 +158,19 @@ func TestParseUnavailableBase(t *testing.T) {
 	base := manifest.Cases[0].Base
 	if base == nil || !base.Unavailable || base.Operations != nil {
 		t.Fatalf("base = %#v, want unavailable", base)
+	}
+}
+
+func TestParseAvailableBaseMayBeIndeterminate(t *testing.T) {
+	t.Parallel()
+	input := strings.Replace(validChangesetManifest, `"base":"unavailable"`, `"base":{"operations":[]}`, 1)
+	manifest, err := Parse([]byte(input))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	base := manifest.Cases[0].Base
+	if base == nil || base.Unavailable || base.Operations == nil {
+		t.Fatalf("base = %#v, want available base", base)
 	}
 }
 

@@ -555,8 +555,9 @@ func TestNewRollsBackRecordWhenCatalogPublicationFails(t *testing.T) {
 		return nil
 	}
 	err = plan.Publish(context.Background())
-	if KindOf(err) != ErrorIO || errors.Is(err, ErrRecoveryRequired) {
-		t.Fatalf("publish error = %v, kind %q", err, KindOf(err))
+	mutation, present := MutationOf(err)
+	if KindOf(err) != ErrorIO || errors.Is(err, ErrRecoveryRequired) || !present || !mutation.Durable || !mutation.CheckoutChanged || mutation.RecoveryRequired {
+		t.Fatalf("publish error = %v, kind %q, mutation = %#v, present = %t", err, KindOf(err), mutation, present)
 	}
 	if _, err := os.Lstat(filepath.Join(store, "topics", "rollback.md")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("rolled-back record stat = %v", err)
@@ -589,6 +590,8 @@ func TestFmtRollsBackEarlierCatalogWhenLaterPublicationFails(t *testing.T) {
 	}
 	if err := plan.Publish(context.Background()); KindOf(err) != ErrorIO {
 		t.Fatalf("publish error = %v, kind %q", err, KindOf(err))
+	} else if mutation, present := MutationOf(err); !present || !mutation.Durable || !mutation.CheckoutChanged || mutation.RecoveryRequired {
+		t.Fatalf("publish mutation = %#v, present = %t", mutation, present)
 	}
 	if !bytes.Equal(readFile(t, rootReadme), rootStale) || !bytes.Equal(readFile(t, topicsReadme), topicsStale) {
 		t.Fatal("multi-catalog failure did not restore every preimage")
@@ -609,6 +612,8 @@ func TestSchemaCopyRollsBackCreatedDirectoriesOnFailure(t *testing.T) {
 	}
 	if err := plan.Publish(context.Background()); KindOf(err) != ErrorIO {
 		t.Fatalf("publish error = %v, kind %q", err, KindOf(err))
+	} else if mutation, present := MutationOf(err); !present || !mutation.Durable || !mutation.CheckoutChanged || mutation.RecoveryRequired {
+		t.Fatalf("publish mutation = %#v, present = %t", mutation, present)
 	}
 	if _, err := os.Lstat(filepath.Join(store, "topics", ".engram")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("rollback left configuration directory: %v", err)
@@ -631,8 +636,9 @@ func TestCancellationDuringPublicationRollsBack(t *testing.T) {
 		return nil
 	}
 	err = plan.Publish(ctx)
-	if KindOf(err) != ErrorCancelled {
-		t.Fatalf("publish error = %v, kind %q", err, KindOf(err))
+	mutation, present := MutationOf(err)
+	if KindOf(err) != ErrorCancelled || !present || !mutation.Durable || !mutation.CheckoutChanged || mutation.RecoveryRequired {
+		t.Fatalf("publish error = %v, kind %q, mutation = %#v, present = %t", err, KindOf(err), mutation, present)
 	}
 	if _, err := os.Lstat(filepath.Join(store, "topics", "cancelled.md")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("cancelled publication left record: %v", err)
@@ -683,8 +689,203 @@ func TestRendezvousFailuresAreTypedAndDoNotWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = plan.PublishWith(context.Background(), failingLocker{unlockErr: errors.New("stuck lock")})
-	if KindOf(err) != ErrorConflict || !errors.Is(err, ErrRecoveryRequired) {
+	mutation, present := MutationOf(err)
+	if KindOf(err) != ErrorConflict || !errors.Is(err, ErrRecoveryRequired) || !present || !mutation.Durable || !mutation.CheckoutChanged || !mutation.RecoveryRequired {
 		t.Fatalf("unlock error = %v, kind %q", err, KindOf(err))
+	}
+}
+
+func TestDraftRollbackAndCleanupFailuresCarryExactEffects(t *testing.T) {
+	t.Run("durable published image survives failed rollback", func(t *testing.T) {
+		store := minimalStore(t)
+		name := filepath.Join(store, "topics", "README.md")
+		stale := bytes.Replace(readFile(t, name), []byte("- [why-files]"), []byte("- [stale]"), 1)
+		writeFile(t, name, stale, 0o644)
+		plan, _, err := PlanFmt(context.Background(), store, FmtOptions{Paths: []string{"topics"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		appliedErr := errors.New("fault after durable apply")
+		rollbackErr := errors.New("fault before rollback")
+		plan.fault = func(phase Phase, _ int, _ string) error {
+			switch phase {
+			case PhaseApplied:
+				return appliedErr
+			case PhaseRollback:
+				return rollbackErr
+			default:
+				return nil
+			}
+		}
+		err = plan.Publish(context.Background())
+		mutation, present := MutationOf(err)
+		if !errors.Is(err, appliedErr) || !errors.Is(err, rollbackErr) || !present || !mutation.Durable || !mutation.CheckoutChanged || mutation.RecoveryRequired {
+			t.Fatalf("error = %v, mutation = %#v, present = %t", err, mutation, present)
+		}
+		if bytes.Equal(readFile(t, name), stale) {
+			t.Fatal("failed rollback unexpectedly restored the preimage")
+		}
+	})
+
+	t.Run("temporary cleanup fails before publication", func(t *testing.T) {
+		store := minimalStore(t)
+		plan, _, err := PlanNew(context.Background(), store, "note", "topics/cleanup-fault.md", NewOptions{Description: "Cleanup fault."})
+		if err != nil {
+			t.Fatal(err)
+		}
+		applyErr := errors.New("fault before first apply")
+		cleanupErr := errors.New("fault cleaning temporary")
+		plan.beforeApply = func(int, string) error { return applyErr }
+		plan.fault = func(phase Phase, _ int, _ string) error {
+			if phase == PhaseCleanup {
+				return cleanupErr
+			}
+			return nil
+		}
+		err = plan.Publish(context.Background())
+		mutation, present := MutationOf(err)
+		if !errors.Is(err, applyErr) || !errors.Is(err, cleanupErr) || !present || mutation.Durable || !mutation.CheckoutChanged || mutation.RecoveryRequired {
+			t.Fatalf("error = %v, mutation = %#v, present = %t", err, mutation, present)
+		}
+		matches, globErr := filepath.Glob(filepath.Join(store, "topics", ".engram-draft-*"))
+		if globErr != nil || len(matches) == 0 {
+			t.Fatalf("residual temporaries = %v, %v", matches, globErr)
+		}
+	})
+}
+
+func TestDraftFsyncFailureReportsOnlyResidualCheckoutEffects(t *testing.T) {
+	store := minimalStore(t)
+	name := filepath.Join(store, "topics", "README.md")
+	stale := bytes.Replace(readFile(t, name), []byte("- [why-files]"), []byte("- [stale]"), 1)
+	writeFile(t, name, stale, 0o644)
+	plan, _, err := PlanFmt(context.Background(), store, FmtOptions{Paths: []string{"topics"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	syncErr := errors.New("injected publication fsync failure")
+	rollbackErr := errors.New("injected rollback failure")
+	calls := 0
+	plan.syncDirectory = func(root *os.Root, directory string) (bool, error) {
+		calls++
+		if calls == 1 {
+			return false, syncErr
+		}
+		return syncDirectory(root, directory)
+	}
+	plan.fault = func(phase Phase, _ int, _ string) error {
+		if phase == PhaseRollback {
+			return rollbackErr
+		}
+		return nil
+	}
+	err = plan.Publish(context.Background())
+	mutation, present := MutationOf(err)
+	if !errors.Is(err, syncErr) || !errors.Is(err, rollbackErr) || !present || mutation.Durable || !mutation.CheckoutChanged || mutation.RecoveryRequired {
+		t.Fatalf("error = %v, mutation = %#v, present = %t", err, mutation, present)
+	}
+	if bytes.Equal(readFile(t, name), stale) {
+		t.Fatal("failed rollback unexpectedly restored the preimage")
+	}
+}
+
+func TestDraftDirectorySyncTailPreservesDurableEvidence(t *testing.T) {
+	store := minimalStore(t)
+	name := filepath.Join(store, "topics", "README.md")
+	stale := bytes.Replace(readFile(t, name), []byte("- [why-files]"), []byte("- [stale]"), 1)
+	writeFile(t, name, stale, 0o644)
+	plan, _, err := PlanFmt(context.Background(), store, FmtOptions{Paths: []string{"topics"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	injected := errors.New("injected close tail after directory sync")
+	calls := 0
+	plan.syncDirectory = func(root *os.Root, directory string) (bool, error) {
+		calls++
+		durable, syncErr := syncDirectory(root, directory)
+		if calls == 1 {
+			return durable, errors.Join(syncErr, injected)
+		}
+		return durable, syncErr
+	}
+	err = plan.Publish(context.Background())
+	mutation, present := MutationOf(err)
+	if !errors.Is(err, injected) || !present || !mutation.Durable || !mutation.CheckoutChanged || mutation.RecoveryRequired {
+		t.Fatalf("error = %v, mutation = %#v, present = %t", err, mutation, present)
+	}
+	if !bytes.Equal(readFile(t, name), stale) {
+		t.Fatal("sync-tail rollback did not restore the preimage")
+	}
+}
+
+func TestDraftUnlockUsesReportedResidualState(t *testing.T) {
+	store := minimalStore(t)
+	name := filepath.Join(store, "topics", "README.md")
+	stale := bytes.Replace(readFile(t, name), []byte("- [why-files]"), []byte("- [stale]"), 1)
+	writeFile(t, name, stale, 0o644)
+	plan, _, err := PlanFmt(context.Background(), store, FmtOptions{Paths: []string{"topics"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	injected := errors.New("release failed after removing lock")
+	err = plan.PublishWith(context.Background(), reportedUnlockLocker{err: &Error{
+		Kind: ErrorConflict, Operation: "release", Err: injected,
+		Mutation: &Mutation{Durable: true, RecoveryRequired: false},
+	}})
+	mutation, present := MutationOf(err)
+	if !errors.Is(err, injected) || !present || !mutation.Durable || !mutation.CheckoutChanged || mutation.RecoveryRequired || errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("error = %v, mutation = %#v, present = %t", err, mutation, present)
+	}
+}
+
+func TestDraftMutationOfUsesFinalRecoverySnapshot(t *testing.T) {
+	first := mutationError(ErrorConflict, "first", errors.New("first"), Mutation{CheckoutChanged: true, RecoveryRequired: true})
+	last := mutationError(ErrorIO, "last", errors.New("last"), Mutation{Durable: true})
+	mutation, present := MutationOf(errors.Join(first, last))
+	if !present || !mutation.Durable || !mutation.CheckoutChanged || mutation.RecoveryRequired {
+		t.Fatalf("joined mutation = %#v, present = %t", mutation, present)
+	}
+	outer := mutationError(ErrorConflict, "outer", first, Mutation{})
+	mutation, present = MutationOf(outer)
+	if !present || mutation.Durable || !mutation.CheckoutChanged || mutation.RecoveryRequired {
+		t.Fatalf("outer mutation = %#v, present = %t", mutation, present)
+	}
+}
+
+func TestEveryDraftHelperFailsClosedWhenUnlockFails(t *testing.T) {
+	injected := errors.New("residual rendezvous")
+	tests := []struct {
+		name string
+		run  func(*testing.T) error
+	}{
+		{name: "fmt", run: func(t *testing.T) error {
+			store := minimalStore(t)
+			name := filepath.Join(store, "topics", "README.md")
+			writeFile(t, name, bytes.Replace(readFile(t, name), []byte("- [why-files]"), []byte("- [stale]"), 1), 0o644)
+			_, err := Fmt(context.Background(), store, FmtOptions{Paths: []string{"topics"}, Rendezvous: failingLocker{unlockErr: injected}})
+			return err
+		}},
+		{name: "new", run: func(t *testing.T) error {
+			_, err := New(context.Background(), minimalStore(t), "note", "topics/unlock.md", NewOptions{Description: "Unlock failure.", Rendezvous: failingLocker{unlockErr: injected}})
+			return err
+		}},
+		{name: "mv", run: func(t *testing.T) error {
+			_, err := Move(context.Background(), minimalStore(t), "topics/why-files.md", "topics/unlock-moved.md", MoveOptions{Rendezvous: failingLocker{unlockErr: injected}})
+			return err
+		}},
+		{name: "schema.copy", run: func(t *testing.T) error {
+			_, err := SchemaCopy(context.Background(), minimalStore(t), "person", SchemaCopyOptions{Rendezvous: failingLocker{unlockErr: injected}})
+			return err
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := test.run(t)
+			mutation, present := MutationOf(err)
+			if !errors.Is(err, injected) || !present || !mutation.Durable || !mutation.CheckoutChanged || !mutation.RecoveryRequired {
+				t.Fatalf("error = %v, mutation = %#v, present = %t", err, mutation, present)
+			}
+		})
 	}
 }
 
@@ -696,6 +897,12 @@ type recordingLocker struct {
 type failingLocker struct {
 	lockErr   error
 	unlockErr error
+}
+
+type reportedUnlockLocker struct{ err error }
+
+func (l reportedUnlockLocker) LockDraft(context.Context, string) (Unlock, error) {
+	return func() error { return l.err }, nil
 }
 
 func (l failingLocker) LockDraft(_ context.Context, _ string) (Unlock, error) {

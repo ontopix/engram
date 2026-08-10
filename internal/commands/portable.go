@@ -44,10 +44,10 @@ func runCheck(ctx context.Context, invocation *cli.Invocation) cli.Result {
 		return commandError(cli.ErrorInternal, "check invocation is nil")
 	}
 	if invocation.Options.Has("accepted") {
-		return commandError(cli.ErrorCapability, "accepted managed-store checking is not available in this build")
+		return commandError(cli.ErrorCapability, "accepted managed-store checking requires the managed-read adapter")
 	}
 	if invocation.Options.Has("staged") {
-		return commandError(cli.ErrorCapability, "staged candidate checking is not available in this build")
+		return commandError(cli.ErrorCapability, "staged candidate checking requires the managed-read adapter")
 	}
 	if baseName, pair := invocation.Options.One("base"); pair {
 		candidateName, _ := invocation.Options.One("candidate")

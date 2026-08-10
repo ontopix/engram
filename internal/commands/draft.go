@@ -130,12 +130,24 @@ type draftLocker struct {
 	root         string
 }
 
+type draftRendezvousHandle interface {
+	Release() error
+	Mutated() bool
+	RecoveryRequired() bool
+}
+
 func (l draftLocker) LockDraft(ctx context.Context, _ string) (draft.Unlock, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	handle, err := rendezvous.AcquireWorktree(l.gitDirectory)
 	if err != nil {
+		if durable, recoveryRequired := rendezvous.DurableMutationOf(err), rendezvous.RecoveryRequiredOf(err); durable || recoveryRequired {
+			return nil, &draft.Error{
+				Kind: draft.ErrorConcurrency, Operation: "acquire worktree rendezvous", Err: err,
+				Mutation: &draft.Mutation{Durable: durable, RecoveryRequired: recoveryRequired},
+			}
+		}
 		return nil, err
 	}
 	store, err := managedread.Open(ctx, l.root)
@@ -147,9 +159,29 @@ func (l draftLocker) LockDraft(ctx context.Context, _ string) (draft.Unlock, err
 		}
 	}
 	if err != nil {
-		return nil, errors.Join(err, handle.Release())
+		return nil, errors.Join(err, releaseDraftRendezvous(handle))
 	}
-	return handle.Release, nil
+	return func() error {
+		return releaseDraftRendezvous(handle)
+	}, nil
+}
+
+func releaseDraftRendezvous(handle draftRendezvousHandle) error {
+	if handle == nil {
+		return nil
+	}
+	err := handle.Release()
+	recoveryRequired := handle.RecoveryRequired() || rendezvous.RecoveryRequiredOf(err)
+	if err == nil && !recoveryRequired {
+		return nil
+	}
+	if err == nil {
+		err = errors.New("worktree rendezvous release retained an owned lock")
+	}
+	return &draft.Error{
+		Kind: draft.ErrorConflict, Operation: "release worktree rendezvous", Err: err,
+		Mutation: &draft.Mutation{Durable: handle.Mutated() || rendezvous.DurableMutationOf(err), RecoveryRequired: recoveryRequired},
+	}
 }
 
 func openDraft(ctx context.Context, invocation *cli.Invocation) (string, draft.Locker, *cli.Result) {
@@ -215,5 +247,14 @@ func draftFailure(err error, action string) cli.Result {
 			kind = cli.ErrorConcurrency
 		}
 	}
-	return commandError(kind, fmt.Sprintf("%s: %v", action, err))
+	protocolError := &cli.ProtocolError{Kind: kind, Message: fmt.Sprintf("%s: %v", action, err)}
+	mutationEvidence, present := draft.MutationOf(err)
+	if !present {
+		return cli.Result{Outcome: cli.OutcomeError, Error: protocolError}
+	}
+	mutation := cli.NewMutationResult()
+	mutation.Durable = mutationEvidence.Durable
+	mutation.CheckoutChanged = mutationEvidence.CheckoutChanged
+	mutation.RecoveryRequired = mutationEvidence.RecoveryRequired
+	return cli.Result{Outcome: cli.OutcomeError, Value: mutation, Error: protocolError}
 }

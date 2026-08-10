@@ -4,12 +4,24 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/ontopix/engram/internal/cli"
+	"github.com/ontopix/engram/internal/hooks"
 )
+
+func TestHookFailureClassifiesInvalidRevokeNameAsUsage(t *testing.T) {
+	result := hookFailure(errors.Join(hooks.ErrInvalidName, errors.New("bad name")), "revoke hook trust")
+	if result.Error == nil || result.Error.Kind != cli.ErrorUsage {
+		t.Fatalf("result = %#v, want usage error", result)
+	}
+	if result.Value != nil {
+		t.Fatalf("pre-publication result = %#v, want nil", result.Value)
+	}
+}
 
 func TestHooksListTrustAndRevokeJSON(t *testing.T) {
 	root := managedFixture(t)
@@ -48,12 +60,97 @@ func TestHooksListTrustAndRevokeJSON(t *testing.T) {
 	}
 }
 
+type fakeHookRegistry struct {
+	trustErr  error
+	revokeErr error
+}
+
+func (*fakeHookRegistry) List(string, hooks.Set) (hooks.Selection, error) {
+	return hooks.Selection{}, nil
+}
+
+func (f *fakeHookRegistry) Trust(string, hooks.Set) (hooks.Selection, error) {
+	return hooks.Selection{}, f.trustErr
+}
+
+func (f *fakeHookRegistry) Revoke(string, ...string) (hooks.RevokeResult, error) {
+	return hooks.RevokeResult{}, f.revokeErr
+}
+
+func TestHookMutationErrorsUseExactProtocolShape(t *testing.T) {
+	root := managedFixture(t)
+	tests := []struct {
+		name     string
+		command  string
+		durable  bool
+		recovery bool
+		kind     cli.ErrorKind
+		want     string
+	}{
+		{
+			name: "trust renamed before sync", command: "trust", kind: cli.ErrorIO,
+			want: `{"durable":false,"local_refs":[],"head":null,"checkout_changed":false,"remote":null,"recovery_required":false}`,
+		},
+		{
+			name: "trust durably published", command: "trust", kind: cli.ErrorIO, durable: true,
+			want: `{"durable":true,"local_refs":[],"head":null,"checkout_changed":false,"remote":null,"recovery_required":false}`,
+		},
+		{
+			name: "revoke residual lock", command: "revoke", durable: true, recovery: true, kind: cli.ErrorConcurrency,
+			want: `{"durable":true,"local_refs":[],"head":null,"checkout_changed":false,"remote":null,"recovery_required":true}`,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			underlying := errors.New("injected hook registry failure")
+			if test.recovery {
+				underlying = errors.Join(hooks.ErrConcurrent, underlying)
+			}
+			err := &hooks.EffectError{
+				Effect: hooks.Effect{Durable: test.durable, RecoveryRequired: test.recovery},
+				Err:    underlying,
+			}
+			registry := &fakeHookRegistry{}
+			if test.command == "trust" {
+				registry.trustErr = err
+			} else {
+				registry.revokeErr = err
+			}
+			app := cli.NewApp()
+			RegisterPortable(app)
+			RegisterManagedReads(app)
+			registerHooksWith(app, registry)
+			envelope := runHooksAppJSON(t, app, root, "hooks", test.command, "--format", "json")
+			assertEnvelope(t, envelope, "hooks."+test.command, cli.OutcomeError, 2)
+			if envelope.Error == nil || envelope.Error.Kind != test.kind {
+				t.Fatalf("error = %#v", envelope.Error)
+			}
+			if got := string(envelope.Result); got != test.want {
+				t.Fatalf("result = %s, want %s", got, test.want)
+			}
+			result := decodeObject(t, envelope.Result)
+			assertExactKeys(t, result, "durable", "local_refs", "head", "checkout_changed", "remote", "recovery_required")
+			if result["durable"] != test.durable || result["checkout_changed"] != false || result["recovery_required"] != test.recovery || result["head"] != nil || result["remote"] != nil {
+				t.Fatalf("mutation = %#v", result)
+			}
+			if refs := result["local_refs"].([]any); len(refs) != 0 {
+				t.Fatalf("local_refs = %#v", refs)
+			}
+		})
+	}
+}
+
 func runHooksJSON(t *testing.T, root, registry string, arguments ...string) wireEnvelope {
 	t.Helper()
 	app := cli.NewApp()
 	RegisterPortable(app)
 	RegisterManagedReads(app)
 	RegisterHooksAt(app, registry)
+	return runHooksAppJSON(t, app, root, arguments...)
+}
+
+func runHooksAppJSON(t *testing.T, app *cli.App, root string, arguments ...string) wireEnvelope {
+	t.Helper()
 	arguments = append([]string{"--store", root}, arguments...)
 	var stdout, stderr bytes.Buffer
 	status := app.Run(context.Background(), arguments, &stdout, &stderr)

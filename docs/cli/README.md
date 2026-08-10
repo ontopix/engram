@@ -475,9 +475,11 @@ are never reused implicitly.
 Clone selects the remote branch named by its symbolic default `HEAD`, audits
 the complete accepted lineage, and publishes only a verified byte-transparent
 worktree. It records that URL as `origin`, configures the selected branch's
-upstream, installs the owned local guard, and does not trust store hooks,
-attach a project, or authorize push. An invalid or indeterminate lineage is
-reported without publishing a fresh destination.
+upstream, installs the owned local guard, and does not copy ambient Git author
+identity, trust store hooks, attach a project, or authorize push. Author name
+and email must be configured in the cloned repository before a managed
+commit. An invalid or indeterminate lineage is reported without publishing a
+fresh destination.
 
 The command is the only acquisition operation and therefore requires explicit
 network and credential authority. It follows

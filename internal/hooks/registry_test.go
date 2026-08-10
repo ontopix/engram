@@ -217,8 +217,8 @@ func TestSelectiveAndTotalRevokeHistoricalSets(t *testing.T) {
 func TestRevokeRejectsNonDirectHookNames(t *testing.T) {
 	registry, store := registryFixture(t)
 	for _, name := range []string{"", "../10-a.sh", "prepare-changeset/10-a.sh", "10-BAD.sh"} {
-		if _, err := registry.Revoke(store, name); err == nil {
-			t.Fatalf("Revoke(%q) succeeded", name)
+		if _, err := registry.Revoke(store, name); !errors.Is(err, ErrInvalidName) {
+			t.Fatalf("Revoke(%q) error = %v, want ErrInvalidName", name, err)
 		}
 	}
 }
@@ -347,6 +347,196 @@ func TestRegistryDetectsCooperatingAndObservedConcurrentChanges(t *testing.T) {
 			t.Fatalf("concurrent replacement was overwritten: %s", content)
 		}
 	})
+}
+
+func TestRegistryReportsPostMutationEffects(t *testing.T) {
+	fault := errors.New("injected registry fault")
+	tests := []struct {
+		name             string
+		configure        func(*Registry)
+		wantDurable      bool
+		wantRecovery     bool
+		wantLockResidual bool
+	}{
+		{
+			name: "after rename",
+			configure: func(registry *Registry) {
+				registry.afterRename = func(string) error { return fault }
+			},
+		},
+		{
+			name: "after directory sync",
+			configure: func(registry *Registry) {
+				registry.afterSync = func(string) error { return fault }
+			},
+			wantDurable: true,
+		},
+		{
+			name: "after release without residual lock",
+			configure: func(registry *Registry) {
+				registry.afterRelease = func(string) error { return fault }
+			},
+			wantDurable: true,
+		},
+		{
+			name: "lock removal failure",
+			configure: func(registry *Registry) {
+				registry.beforeRemove = func(string) error { return fault }
+			},
+			wantDurable:      true,
+			wantRecovery:     true,
+			wantLockResidual: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			registry, store := registryFixture(t)
+			set := mustSelect(t, map[string][]byte{"10-a.sh": []byte("#!/usr/bin/env sh\n")})
+			test.configure(registry)
+			selection, err := registry.Trust(store, set)
+			if err == nil || selection.Changed || selection.SHA256 != "" || selection.Trusted || selection.Hooks != nil {
+				t.Fatalf("selection=%#v error=%v", selection, err)
+			}
+			effect, ok := EffectOf(err)
+			if !ok || effect.Durable != test.wantDurable || effect.RecoveryRequired != test.wantRecovery {
+				t.Fatalf("effect=%#v present=%v error=%v", effect, ok, err)
+			}
+			_, lockErr := os.Lstat(registry.Path() + ".lock")
+			if test.wantLockResidual && lockErr != nil {
+				t.Fatalf("residual lock missing: %v", lockErr)
+			}
+			if !test.wantLockResidual && !errors.Is(lockErr, os.ErrNotExist) {
+				t.Fatalf("unexpected residual lock: %v", lockErr)
+			}
+			if test.wantLockResidual {
+				if err := os.Remove(registry.Path() + ".lock"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			observed, err := registry.List(store, set)
+			if err != nil || !observed.Trusted {
+				t.Fatalf("published registry not observable: %#v %v", observed, err)
+			}
+		})
+	}
+}
+
+func TestRegistryDoesNotInventEffectAfterUnchangedRelease(t *testing.T) {
+	t.Parallel()
+	registry, store := registryFixture(t)
+	set := mustSelect(t, map[string][]byte{"10-a.sh": []byte("#!/usr/bin/env sh\n")})
+	if _, err := registry.Trust(store, set); err != nil {
+		t.Fatal(err)
+	}
+	fault := errors.New("injected release fault")
+	registry.afterRelease = func(string) error { return fault }
+	selection, err := registry.Trust(store, set)
+	if !errors.Is(err, fault) || selection.Changed || selection.SHA256 != "" || selection.Trusted || selection.Hooks != nil {
+		t.Fatalf("selection=%#v error=%v", selection, err)
+	}
+	if effect, ok := EffectOf(err); ok {
+		t.Fatalf("invented effect=%#v error=%v", effect, err)
+	}
+	if _, statErr := os.Lstat(registry.Path() + ".lock"); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("lock remains: %v", statErr)
+	}
+}
+
+func TestRegistryResidualLockWithoutPublicationIsNotDurable(t *testing.T) {
+	t.Parallel()
+	registry, store := registryFixture(t)
+	set := mustSelect(t, map[string][]byte{"10-a.sh": []byte("#!/usr/bin/env sh\n")})
+	if _, err := registry.Trust(store, set); err != nil {
+		t.Fatal(err)
+	}
+	registry.beforeRemove = func(string) error { return errors.New("injected lock removal failure") }
+	selection, err := registry.Trust(store, set)
+	if err == nil || selection.Changed || selection.SHA256 != "" || selection.Trusted || selection.Hooks != nil {
+		t.Fatalf("selection=%#v error=%v", selection, err)
+	}
+	effect, ok := EffectOf(err)
+	if !ok || effect.Durable || !effect.RecoveryRequired {
+		t.Fatalf("effect=%#v present=%v error=%v", effect, ok, err)
+	}
+}
+
+func TestRegistryLockReleaseDoesNotClaimANextOwnerAsResidual(t *testing.T) {
+	t.Parallel()
+	name := filepath.Join(t.TempDir(), "hook-trust-v1.json.lock")
+	first, err := acquireRegistryLock(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var next *registryLock
+	residual, err := first.release(nil, func(string) error {
+		var acquireErr error
+		next, acquireErr = acquireRegistryLock(name)
+		return acquireErr
+	})
+	if err != nil || residual || next == nil {
+		t.Fatalf("residual=%v next=%#v error=%v", residual, next, err)
+	}
+	if _, err := next.release(nil, nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRegistryLockReleaseNeverUnlinksAReplacementOwner(t *testing.T) {
+	t.Parallel()
+	name := filepath.Join(t.TempDir(), "hook-trust-v1.json.lock")
+	first, err := acquireRegistryLock(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var next *registryLock
+	residual, err := first.release(func(string) error {
+		if removeErr := os.Remove(name); removeErr != nil {
+			return removeErr
+		}
+		var acquireErr error
+		next, acquireErr = acquireRegistryLock(name)
+		return acquireErr
+	}, nil)
+	if err == nil || residual || next == nil || !errors.Is(err, ErrConcurrent) {
+		t.Fatalf("residual=%v next=%#v error=%v", residual, next, err)
+	}
+	owned, statErr := next.file.Stat()
+	current, pathErr := os.Lstat(name)
+	if statErr != nil || pathErr != nil || !os.SameFile(owned, current) {
+		t.Fatalf("replacement owner was unlinked: stat=%v path=%v", statErr, pathErr)
+	}
+	if _, err := next.release(nil, nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRegistryRevokeCannotSucceedWithResidualLock(t *testing.T) {
+	t.Parallel()
+	registry, store := registryFixture(t)
+	set := mustSelect(t, map[string][]byte{"10-a.sh": []byte("#!/usr/bin/env sh\n")})
+	if _, err := registry.Trust(store, set); err != nil {
+		t.Fatal(err)
+	}
+	registry.beforeRemove = func(string) error { return errors.New("injected lock removal failure") }
+	result, err := registry.Revoke(store)
+	if err == nil || result.Changed || result.RevokedSets != nil {
+		t.Fatalf("result=%#v error=%v", result, err)
+	}
+	effect, ok := EffectOf(err)
+	if !ok || !effect.Durable || !effect.RecoveryRequired {
+		t.Fatalf("effect=%#v present=%v error=%v", effect, ok, err)
+	}
+	if _, err := os.Lstat(registry.Path() + ".lock"); err != nil {
+		t.Fatalf("residual lock missing: %v", err)
+	}
+	if err := os.Remove(registry.Path() + ".lock"); err != nil {
+		t.Fatal(err)
+	}
+	listed, err := registry.List(store, set)
+	if err != nil || listed.Trusted {
+		t.Fatalf("revocation was not published: %#v %v", listed, err)
+	}
 }
 
 func registryFixture(t *testing.T) (*Registry, string) {

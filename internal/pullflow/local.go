@@ -25,6 +25,8 @@ import (
 
 type transitionPhase string
 
+var errTransitionChanged = errors.New("local transition journal changed concurrently")
+
 const (
 	transitionPrepared      transitionPhase = "prepared"
 	transitionRefDispatched transitionPhase = "ref-dispatched"
@@ -112,7 +114,14 @@ func (p *Puller) transition(ctx context.Context, request transitionRequest) (mut
 		}
 		activeTransitionTokens.Delete(lock.Owner().Token)
 		if err := lock.Release(); err != nil {
-			resultErr = errors.Join(resultErr, typed(ErrorIO, "release local synchronization locks", err))
+			operation := "release local synchronization locks"
+			priorMutation := MutationOf(resultErr)
+			releaseErr := classifyLocal(ctx, operation, err)
+			combined := mergePullMutations(priorMutation, rendezvousMutation(lock, err))
+			resultErr = errors.Join(resultErr, releaseErr)
+			if combined != nil {
+				resultErr = replayErrorWithMutation(resultErr, operation, combined)
+			}
 		}
 	}()
 
@@ -190,7 +199,16 @@ func (p *Puller) transition(ctx context.Context, request transitionRequest) (mut
 		return nil, typed(ErrorOperational, "validate local transition journal", err)
 	}
 	journalBytes, _ := encodeCanonical(record)
-	if err := createControllerFile(transitionPath(current), journalBytes); err != nil {
+	if err := createControllerFileAfter(transitionPath(current), journalBytes, func() error {
+		return p.checkpoint(PhaseTransitionPublished)
+	}); err != nil {
+		if controllerFilePublished(err) {
+			// The exact prepared journal may now be durable. Retain its
+			// pre-journal rendezvous owner so bounded recovery can either
+			// cancel it or prove a later transition.
+			release = false
+			return nil, recoveryError("publish local transition journal", record, false, false, err)
+		}
 		return nil, typed(ErrorIO, "publish local transition journal", err)
 	}
 	if err := lock.SetPhase(rendezvous.JournalRequired); err != nil {
@@ -253,51 +271,56 @@ func (p *Puller) transition(ctx context.Context, request transitionRequest) (mut
 		release = false
 		return nil, recoveryError("symbolic HEAD update", record, true, false, err)
 	}
-	if err := installIndex(current, record); err != nil {
+	checkoutChanged := false
+	indexChanged, err := installIndex(current, record)
+	checkoutChanged = checkoutChanged || indexChanged
+	if err != nil {
 		release = false
-		return nil, recoveryError("reconcile synchronization index", record, true, false, err)
+		return nil, recoveryError("reconcile synchronization index", record, true, checkoutChanged, err)
 	}
 	record, journalBytes, err = setTransitionPhase(current, record, journalBytes, transitionIndexUpdated)
 	if err != nil {
 		release = false
-		return nil, recoveryError("record index reconciliation", record, true, true, err)
+		return nil, recoveryError("record index reconciliation", record, true, checkoutChanged, err)
 	}
 	if err := p.checkpoint(PhaseIndexUpdated); err != nil {
 		release = false
-		return nil, recoveryError("index reconciliation", record, true, true, err)
+		return nil, recoveryError("index reconciliation", record, true, checkoutChanged, err)
 	}
-	if err := reconcilePaths(current.Root, record.Paths); err != nil {
+	pathsChanged, err := reconcilePaths(current.Root, record.Paths)
+	checkoutChanged = checkoutChanged || pathsChanged
+	if err != nil {
 		release = false
-		return nil, recoveryError("reconcile synchronization worktree", record, true, true, err)
+		return nil, recoveryError("reconcile synchronization worktree", record, true, checkoutChanged, err)
 	}
 	record, journalBytes, err = setTransitionPhase(current, record, journalBytes, transitionWorktreeDone)
 	if err != nil {
 		release = false
-		return nil, recoveryError("record worktree reconciliation", record, true, true, err)
+		return nil, recoveryError("record worktree reconciliation", record, true, checkoutChanged, err)
 	}
 	if err := p.checkpoint(PhaseWorktreeUpdated); err != nil {
 		release = false
-		return nil, recoveryError("worktree reconciliation", record, true, true, err)
+		return nil, recoveryError("worktree reconciliation", record, true, checkoutChanged, err)
 	}
 	if err := verifyTransitionResult(ctx, current.Root, record); err != nil {
 		release = false
-		return nil, recoveryError("verify local synchronization", record, true, true, err)
+		return nil, recoveryError("verify local synchronization", record, true, checkoutChanged, err)
 	}
 	record, journalBytes, err = setTransitionPhase(current, record, journalBytes, transitionComplete)
 	if err != nil {
 		release = false
-		return nil, recoveryError("complete local transition journal", record, true, true, err)
+		return nil, recoveryError("complete local transition journal", record, true, checkoutChanged, err)
 	}
 	if err := lock.Release(); err != nil {
 		release = false
-		return nil, recoveryError("release local transition locks", record, true, true, err)
+		return nil, recoveryRendezvousError("release local transition locks", record, true, checkoutChanged, lock, err)
 	}
 	activeTransitionTokens.Delete(lock.Owner().Token)
 	release = false
 	if err := removeTransition(current, record, journalBytes); err != nil {
-		return nil, recoveryError("remove local transition journal", record, true, true, err)
+		return nil, recoveryError("remove local transition journal", record, true, checkoutChanged, err)
 	}
-	return mutationFromRecord(record, true, true, false), nil
+	return mutationFromRecord(record, true, checkoutChanged, false), nil
 }
 
 func phaseForTransition(request transitionRequest, fallback Phase) Phase {
@@ -316,7 +339,7 @@ func (p *Puller) cancelTransition(repository *gitraw.Repository, record transiti
 		return recoveryError("release cancelled local transition", updated, false, false, errors.Join(cause, ErrRecovery))
 	}
 	if err := lock.Release(); err != nil {
-		return recoveryError("release cancelled local transition", updated, false, false, errors.Join(cause, err))
+		return recoveryRendezvousError("release cancelled local transition", updated, false, false, lock, errors.Join(cause, err))
 	}
 	if err := removeTransition(repository, updated, bytes); err != nil {
 		return recoveryError("clean cancelled local transition", updated, false, false, errors.Join(cause, err))
@@ -326,6 +349,9 @@ func (p *Puller) cancelTransition(repository *gitraw.Repository, record transiti
 
 func transitionMutation(record transitionRecord, durable, checkout, recovery bool) *Mutation {
 	result := &Mutation{Durable: durable, LocalRefs: []RefMutation{}, CheckoutChanged: checkout, RecoveryRequired: recovery}
+	if !durable {
+		return result
+	}
 	for _, update := range record.Refs {
 		if equalString(update.Before, update.After) {
 			continue
@@ -343,7 +369,19 @@ func mutationFromRecord(record transitionRecord, durable, checkout, recovery boo
 }
 
 func recoveryError(operation string, record transitionRecord, durable, checkout bool, err error) error {
-	return &Error{Kind: ErrorOperational, Operation: operation, Mutation: transitionMutation(record, durable, checkout, true), Err: errors.Join(ErrRecovery, err)}
+	mutation := mergePullMutations(transitionMutation(record, durable, checkout, true), rendezvousMutation(nil, err))
+	// A controller publication can be durable before any ref effect is known.
+	// Preserve that fact without turning the journal's planned refs/HEAD into
+	// effects of this invocation.
+	mutation.Durable = mutation.Durable || controllerFileDurable(err)
+	mutation.RecoveryRequired = true
+	return &Error{Kind: ErrorOperational, Operation: operation, Mutation: mutation, Err: errors.Join(ErrRecovery, err)}
+}
+
+func recoveryRendezvousError(operation string, record transitionRecord, refsKnown, checkout bool, handle *rendezvous.Handle, err error) error {
+	mutation := mergePullMutations(transitionMutation(record, refsKnown, checkout, true), rendezvousMutation(handle, err))
+	mutation.RecoveryRequired = true
+	return &Error{Kind: ErrorOperational, Operation: operation, Mutation: mutation, Err: errors.Join(ErrRecovery, err)}
 }
 
 func (p *Puller) indexForCommit(ctx context.Context, git string, repository *gitraw.Repository, commit string) ([]byte, error) {
@@ -444,7 +482,11 @@ func (p *Puller) indexForSnapshot(ctx context.Context, git string, repository *g
 }
 
 func execCommand(ctx context.Context, executable, root string, environment []string, input []byte, arguments ...string) commandResult {
-	global := []string{"--no-pager", "--no-optional-locks", "--no-replace-objects", "-c", "core.hooksPath=" + os.DevNull, "-C", root}
+	global := []string{
+		"--no-pager", "--no-optional-locks", "--no-replace-objects",
+		"-c", "core.hooksPath=" + os.DevNull, "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false",
+		"-c", "maintenance.auto=false", "-c", "gc.auto=0", "-C", root,
+	}
 	command := exec.CommandContext(ctx, executable, append(global, arguments...)...)
 	command.Env = environment
 	command.Stdin = bytes.NewReader(input)
@@ -671,22 +713,22 @@ func resolveRef(ctx context.Context, root, ref string, format gitraw.ObjectForma
 	return stringPointer(value), nil
 }
 
-func installIndex(repository *gitraw.Repository, record transitionRecord) error {
+func installIndex(repository *gitraw.Repository, record transitionRecord) (bool, error) {
 	name := filepath.Join(repository.GitDir, "index")
 	current, present, err := readOptionalFile(name)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if present && bytes.Equal(current, record.IndexAfter.Data) {
-		return nil
+		return false, nil
 	}
 	if present != record.IndexBefore.Present || !bytes.Equal(current, record.IndexBefore.Data) {
-		return errors.New("index has neither its recorded preimage nor final image")
+		return false, errors.New("index has neither its recorded preimage nor final image")
 	}
 	lockName := name + ".lock"
 	file, err := os.OpenFile(lockName, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
-		return err
+		return false, err
 	}
 	remove := true
 	defer func() {
@@ -697,35 +739,36 @@ func installIndex(repository *gitraw.Repository, record transitionRecord) error 
 	current, present, err = readOptionalFile(name)
 	if err != nil || present != record.IndexBefore.Present || !bytes.Equal(current, record.IndexBefore.Data) {
 		file.Close()
-		return errors.New("index changed before native publication")
+		return false, errors.New("index changed before native publication")
 	}
 	if _, err := file.Write(record.IndexAfter.Data); err != nil {
 		file.Close()
-		return err
+		return false, err
 	}
 	if err := file.Sync(); err != nil {
 		file.Close()
-		return err
+		return false, err
 	}
 	if err := file.Close(); err != nil {
-		return err
+		return false, err
 	}
 	if err := os.Rename(lockName, name); err != nil {
-		return err
+		return false, err
 	}
 	remove = false
-	return syncDirectory(filepath.Dir(name))
+	return true, syncDirectory(filepath.Dir(name))
 }
 
-func reconcilePaths(root string, transitions []pathTransition) error {
+func reconcilePaths(root string, transitions []pathTransition) (bool, error) {
+	changed := false
 	current := make(map[string]*pathImage, len(transitions))
 	for _, update := range transitions {
 		observed, err := observePath(root, update.Path)
 		if err != nil {
-			return err
+			return changed, err
 		}
 		if !samePathImage(observed, update.Before) && !samePathImage(observed, update.After) {
-			return fmt.Errorf("worktree path %q has neither recorded image", update.Path)
+			return changed, fmt.Errorf("worktree path %q has neither recorded image", update.Path)
 		}
 		current[update.Path] = observed
 	}
@@ -751,8 +794,9 @@ func reconcilePaths(root string, transitions []pathTransition) error {
 				err = os.Remove(name)
 			}
 			if err != nil {
-				return err
+				return changed, err
 			}
+			changed = true
 			current[update.Path] = nil
 		}
 	}
@@ -771,27 +815,28 @@ func reconcilePaths(root string, transitions []pathTransition) error {
 		switch update.After.Kind {
 		case "directory":
 			if current[update.Path] != nil {
-				return fmt.Errorf("cannot create directory at %q", update.Path)
+				return changed, fmt.Errorf("cannot create directory at %q", update.Path)
 			}
 			if err := os.Mkdir(name, fs.FileMode(update.After.Mode)); err != nil {
-				return err
+				return changed, err
 			}
 		case "regular":
 			if err := replaceRegular(name, update.After); err != nil {
-				return err
+				return changed, err
 			}
 		default:
-			return fmt.Errorf("unsupported final path kind %q", update.After.Kind)
+			return changed, fmt.Errorf("unsupported final path kind %q", update.After.Kind)
 		}
+		changed = true
 		current[update.Path] = update.After
 	}
 	for _, update := range transitions {
 		observed, err := observePath(root, update.Path)
 		if err != nil || !samePathImage(observed, update.After) {
-			return fmt.Errorf("worktree path %q did not reach its final image", update.Path)
+			return changed, fmt.Errorf("worktree path %q did not reach its final image", update.Path)
 		}
 	}
-	return nil
+	return changed, nil
 }
 
 func replaceRegular(name string, image *pathImage) error {
@@ -920,7 +965,34 @@ func validTransitionPhase(phase transitionPhase) bool {
 	}
 }
 
+type controllerPublicationError struct {
+	path    string
+	durable bool
+	err     error
+}
+
+func (e *controllerPublicationError) Error() string { return e.err.Error() }
+func (e *controllerPublicationError) Unwrap() error { return e.err }
+
+func controllerFilePublished(err error) bool {
+	var published *controllerPublicationError
+	return errors.As(err, &published)
+}
+
+func controllerFileDurable(err error) bool {
+	var published *controllerPublicationError
+	return errors.As(err, &published) && published.durable
+}
+
 func createControllerFile(name string, data []byte) error {
+	return createControllerFileAfter(name, data, nil)
+}
+
+// createControllerFileAfter exposes the first post-link boundary to callers
+// that publish recovery authority. Every error after link(2) is typed so the
+// caller cannot accidentally report an ordinary I/O failure after durable
+// controller state may already exist.
+func createControllerFileAfter(name string, data []byte, afterLink func() error) error {
 	if err := os.MkdirAll(filepath.Dir(name), 0o700); err != nil {
 		return err
 	}
@@ -948,19 +1020,30 @@ func createControllerFile(name string, data []byte) error {
 	if err := os.Link(temporary, name); err != nil {
 		return err
 	}
+	publishedError := func(err error, durable bool) error {
+		if err == nil {
+			return nil
+		}
+		return &controllerPublicationError{path: name, durable: durable, err: err}
+	}
+	if afterLink != nil {
+		if err := afterLink(); err != nil {
+			return publishedError(err, false)
+		}
+	}
 	if err := syncDirectory(filepath.Dir(name)); err != nil {
-		return err
+		return publishedError(err, false)
 	}
 	if err := os.Remove(temporary); err != nil {
-		return err
+		return publishedError(err, true)
 	}
-	return syncDirectory(filepath.Dir(name))
+	return publishedError(syncDirectory(filepath.Dir(name)), true)
 }
 
 func setTransitionPhase(repository *gitraw.Repository, record transitionRecord, expected []byte, phase transitionPhase) (transitionRecord, []byte, error) {
 	current, present, err := readControllerFile(transitionPath(repository))
 	if err != nil || !present || !bytes.Equal(current, expected) {
-		return record, expected, errors.New("local transition journal changed concurrently")
+		return record, expected, errTransitionChanged
 	}
 	record.Phase = phase
 	updated, err := encodeCanonical(record)
@@ -979,7 +1062,7 @@ func removeTransition(repository *gitraw.Repository, record transitionRecord, ex
 	}
 	current, present, err := readControllerFile(transitionPath(repository))
 	if err != nil || !present || !bytes.Equal(current, expected) {
-		return errors.New("local transition journal changed concurrently")
+		return errTransitionChanged
 	}
 	if err := os.Remove(transitionPath(repository)); err != nil {
 		return err
@@ -1000,11 +1083,27 @@ func classifyLocal(ctx context.Context, operation string, err error) error {
 	if errors.As(err, &existing) {
 		return err
 	}
+	kind := ErrorIO
 	if ctx != nil && ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return typed(ErrorCancelled, operation, err)
+		kind = ErrorCancelled
+	} else if errors.Is(err, rendezvous.ErrBusy) {
+		kind = ErrorConcurrency
 	}
-	if errors.Is(err, rendezvous.ErrBusy) {
-		return typed(ErrorConcurrency, operation, err)
+	return &Error{Kind: kind, Operation: operation, Mutation: rendezvousMutation(nil, err), Err: err}
+}
+
+// rendezvousMutation reports only effects attributable to this invocation.
+// Error metadata covers partial acquisition/adoption; a live handle adds the
+// exact locks it still owns when an adapter obscures the underlying error.
+func rendezvousMutation(handle *rendezvous.Handle, err error) *Mutation {
+	durable := rendezvous.DurableMutationOf(err)
+	recoveryRequired := rendezvous.RecoveryRequiredOf(err)
+	if handle != nil {
+		durable = durable || handle.Mutated()
+		recoveryRequired = recoveryRequired || handle.RecoveryRequired()
 	}
-	return typed(ErrorIO, operation, err)
+	if !durable && !recoveryRequired {
+		return nil
+	}
+	return &Mutation{Durable: durable, LocalRefs: []RefMutation{}, RecoveryRequired: recoveryRequired}
 }

@@ -20,6 +20,8 @@ import (
 
 const maxControllerStateBytes = 32 << 20
 
+var errReplayControllerBusy = errors.New("pull replay controller is busy")
+
 type replayState struct {
 	Version   int                  `json:"version"`
 	Original  managedread.GitState `json:"original"`
@@ -67,6 +69,12 @@ func replayPlanPath(repository *gitraw.Repository) string {
 // orphaned state or plan as recognized recovery-required state, never as an
 // absent replay.
 func Active(repository *gitraw.Repository) (*managedread.ReplayState, error) {
+	if _, _, present, err := readReplayTerminal(repository); err != nil || present {
+		if err == nil {
+			err = ErrRecovery
+		}
+		return nil, errors.Join(ErrRecovery, err)
+	}
 	state, plan, present, err := readReplay(repository)
 	if err != nil || !present {
 		return nil, err
@@ -84,6 +92,16 @@ func Active(repository *gitraw.Repository) (*managedread.ReplayState, error) {
 }
 
 func readReplay(repository *gitraw.Repository) (replayState, replayPlan, bool, error) {
+	if _, _, present, err := readReplayPairJournal(repository); err != nil || present {
+		if err == nil {
+			err = ErrRecovery
+		}
+		return replayState{}, replayPlan{}, true, errors.Join(ErrRecovery, err)
+	}
+	return readReplayFiles(repository)
+}
+
+func readReplayFiles(repository *gitraw.Repository) (replayState, replayPlan, bool, error) {
 	if repository == nil {
 		return replayState{}, replayPlan{}, false, errors.New("nil repository")
 	}
@@ -165,90 +183,7 @@ func validateReplayPair(repository *gitraw.Repository, state replayState, plan r
 	return nil
 }
 
-func publishReplay(repository *gitraw.Repository, state replayState, plan replayPlan) error {
-	if err := validateReplayPair(nil, state, plan); err != nil {
-		return err
-	}
-	directory := replayDirectory(repository)
-	if err := os.MkdirAll(directory, 0o700); err != nil {
-		return err
-	}
-	planBytes, err := encodeCanonical(plan)
-	if err != nil {
-		return err
-	}
-	stateBytes, err := encodeCanonical(state)
-	if err != nil {
-		return err
-	}
-	return withReplayLock(repository, func() error {
-		// The plan is installed first; state-v1.json is the public active-replay
-		// signal understood by status and doctor. No existing state is replaced.
-		if err := createControllerFile(replayPlanPath(repository), planBytes); err != nil {
-			return err
-		}
-		if err := createControllerFile(replayStatePath(repository), stateBytes); err != nil {
-			_ = os.Remove(replayPlanPath(repository))
-			_ = syncDirectory(directory)
-			return err
-		}
-		return syncDirectory(directory)
-	})
-}
-
-func updateReplay(repository *gitraw.Repository, oldState replayState, oldPlan replayPlan, state replayState, plan replayPlan) error {
-	if err := validateReplayPair(nil, state, plan); err != nil {
-		return err
-	}
-	return withReplayLock(repository, func() error {
-		oldStateBytes, _ := encodeCanonical(oldState)
-		oldPlanBytes, _ := encodeCanonical(oldPlan)
-		currentState, present, err := readControllerFile(replayStatePath(repository))
-		if err != nil || !present || !bytes.Equal(currentState, oldStateBytes) {
-			return errors.New("pull replay state changed concurrently")
-		}
-		currentPlan, present, err := readControllerFile(replayPlanPath(repository))
-		if err != nil || !present || !bytes.Equal(currentPlan, oldPlanBytes) {
-			return errors.New("pull replay plan changed concurrently")
-		}
-		planBytes, _ := encodeCanonical(plan)
-		stateBytes, _ := encodeCanonical(state)
-		if err := replaceControllerFile(replayPlanPath(repository), planBytes); err != nil {
-			return err
-		}
-		if err := replaceControllerFile(replayStatePath(repository), stateBytes); err != nil {
-			return err
-		}
-		return nil
-	})
-}
-
-func removeReplay(repository *gitraw.Repository, state replayState, plan replayPlan) error {
-	return withReplayLock(repository, func() error {
-		stateBytes, _ := encodeCanonical(state)
-		planBytes, _ := encodeCanonical(plan)
-		current, present, err := readControllerFile(replayStatePath(repository))
-		if err != nil || !present || !bytes.Equal(current, stateBytes) {
-			return errors.New("pull replay state changed concurrently")
-		}
-		current, present, err = readControllerFile(replayPlanPath(repository))
-		if err != nil || !present || !bytes.Equal(current, planBytes) {
-			return errors.New("pull replay plan changed concurrently")
-		}
-		if err := os.Remove(replayStatePath(repository)); err != nil {
-			return err
-		}
-		if err := syncDirectory(replayDirectory(repository)); err != nil {
-			return err
-		}
-		if err := os.Remove(replayPlanPath(repository)); err != nil {
-			return err
-		}
-		return syncDirectory(replayDirectory(repository))
-	})
-}
-
-func withReplayLock(repository *gitraw.Repository, action func() error) error {
+func withReplayLock(repository *gitraw.Repository, action func() error) (result error) {
 	if repository == nil {
 		return errors.New("nil replay repository")
 	}
@@ -257,22 +192,52 @@ func withReplayLock(repository *gitraw.Repository, action func() error) error {
 		return err
 	}
 	name := filepath.Join(directory, "controller.lock")
-	lock, err := os.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	before, beforeErr := os.Lstat(name)
+	if beforeErr == nil && (before.Mode()&os.ModeSymlink != 0 || !before.Mode().IsRegular() || before.Mode().Perm()&0o077 != 0) {
+		return errors.New("unsafe replay controller lock")
+	}
+	if beforeErr != nil && !errors.Is(beforeErr, os.ErrNotExist) {
+		return beforeErr
+	}
+	lock, err := os.OpenFile(name, os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
 		return err
 	}
-	if err := lock.Close(); err != nil {
-		_ = os.Remove(name)
+	locked := false
+	defer func() {
+		var unlockErr error
+		if locked {
+			unlockErr = unlockReplayControllerFile(lock)
+		}
+		result = errors.Join(result, unlockErr, lock.Close())
+	}()
+	opened, err := lock.Stat()
+	if err != nil || !opened.Mode().IsRegular() || opened.Mode().Perm()&0o077 != 0 || beforeErr == nil && !os.SameFile(before, opened) {
+		if err != nil {
+			return err
+		}
+		return errors.New("replay controller lock changed while opening")
+	}
+	named, err := os.Lstat(name)
+	if err != nil || named.Mode()&os.ModeSymlink != 0 || !os.SameFile(opened, named) {
+		if err != nil {
+			return err
+		}
+		return errors.New("replay controller lock changed while opening")
+	}
+	if err := lockReplayControllerFile(lock); err != nil {
 		return err
 	}
-	if err := syncDirectory(directory); err != nil {
-		return err
+	locked = true
+	after, err := os.Lstat(name)
+	if err != nil || after.Mode()&os.ModeSymlink != 0 || !os.SameFile(opened, after) {
+		if err != nil {
+			return err
+		}
+		return errors.New("replay controller lock changed while held")
 	}
-	result := action()
-	if err := os.Remove(name); err != nil {
-		return errors.Join(result, err)
-	}
-	return errors.Join(result, syncDirectory(directory))
+	result = action()
+	return result
 }
 
 func encodeCanonical(value any) ([]byte, error) {

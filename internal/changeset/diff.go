@@ -72,10 +72,22 @@ func PreflightOK(tree *snapshot.Tree) bool {
 		return false
 	}
 	for _, issue := range tree.Issues {
-		switch issue.Code {
-		case "E102", "E103", "E104", "E106", "E107", "E109", "E110", "E303", "E308":
+		if IsPreflightIssue(issue) {
 			return false
 		}
 	}
 	return true
+}
+
+// IsPreflightIssue reports whether one traversal finding makes the logical
+// tree unavailable for changeset serialization. E102 is deliberately absent:
+// a nested root is an ordinary static candidate defect that preparation may
+// repair, not a boundary, collision, or closed-tree-layout failure.
+func IsPreflightIssue(issue snapshot.Issue) bool {
+	switch issue.Code {
+	case "E103", "E104", "E106", "E107", "E109", "E110", "E303", "E308":
+		return true
+	default:
+		return false
+	}
 }

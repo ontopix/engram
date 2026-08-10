@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"path/filepath"
 	"strconv"
 
 	"github.com/ontopix/engram/internal/cli"
@@ -37,22 +39,39 @@ func RegisterManagedReads(app *cli.App) {
 }
 
 func runManagedCheck(ctx context.Context, invocation *cli.Invocation) cli.Result {
-	store, result := openManaged(ctx, invocation)
-	if result != nil {
-		return *result
+	if invocation == nil {
+		return commandError(cli.ErrorInternal, "managed check invocation is nil")
 	}
 	if invocation.Options.Has("accepted") {
-		audit, err := store.AuditAccepted(ctx)
+		target, err := selectedAcceptedCheckTarget(invocation)
+		if err != nil {
+			return failure(err, cli.ErrorRepository, "select managed check target")
+		}
+		validation, err := managedread.CheckAccepted(ctx, target)
 		if err != nil {
 			return managedFailure(err, "audit accepted history")
 		}
-		return validationResult(audit.Validation)
+		return validationResult(validation)
+	}
+	store, result := openManaged(ctx, invocation)
+	if result != nil {
+		return *result
 	}
 	validation, _, err := store.CheckStaged(ctx)
 	if err != nil {
 		return managedFailure(err, "check staged candidate")
 	}
 	return validationResult(validation)
+}
+
+func selectedAcceptedCheckTarget(invocation *cli.Invocation) (string, error) {
+	if invocation != nil && invocation.Globals.StoreSet {
+		if invocation.Globals.Store == "" {
+			return "", fmt.Errorf("store path is empty")
+		}
+		return filepath.Abs(invocation.Globals.Store)
+	}
+	return selectedStore(invocation)
 }
 
 func runStatus(ctx context.Context, invocation *cli.Invocation) cli.Result {
@@ -89,7 +108,19 @@ func runDiff(ctx context.Context, invocation *cli.Invocation) cli.Result {
 	if err != nil {
 		return managedFailure(err, "compare managed states")
 	}
-	return cli.Result{Outcome: cli.OutcomeOK, Value: diff}
+	mode := managedread.DiffTextContent
+	if invocation.Options.Has("stat") {
+		mode = managedread.DiffTextStat
+	} else if invocation.Options.Has("name-only") {
+		mode = managedread.DiffTextNames
+	}
+	return cli.Result{
+		Outcome: cli.OutcomeOK,
+		Value:   diff,
+		Text: cli.TextRendererFunc(func(output io.Writer) error {
+			return managedread.WriteDiffText(output, diff, mode)
+		}),
+	}
 }
 
 func runLog(ctx context.Context, invocation *cli.Invocation) cli.Result {
@@ -116,7 +147,17 @@ func runLog(ctx context.Context, invocation *cli.Invocation) cli.Result {
 	if log.MergeBoundary != nil {
 		outcome = cli.OutcomeIssues
 	}
-	return cli.Result{Outcome: outcome, Value: log}
+	mode := managedread.LogTextFull
+	if invocation.Options.Has("oneline") {
+		mode = managedread.LogTextOneline
+	}
+	return cli.Result{
+		Outcome: outcome,
+		Value:   log,
+		Text: cli.TextRendererFunc(func(output io.Writer) error {
+			return managedread.WriteLogText(output, log, mode)
+		}),
+	}
 }
 
 func openManaged(ctx context.Context, invocation *cli.Invocation) (*managedread.Store, *cli.Result) {

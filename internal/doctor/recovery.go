@@ -29,8 +29,28 @@ type recoveryPlan struct {
 	blocked        bool
 	preJournalOnly bool
 	worktreeGitDir string
+	localCleanup   bool
 	locks          []lockObservation
 	lifecycle      []lifecycleObservation
+	approvals      []recoveryApproval
+}
+
+func pullRecoveryApproval(inspection pullflow.RecoveryInspection, locks []lockObservation) recoveryApproval {
+	approval := recoveryApproval{
+		binding: RecoveryBinding{
+			Controller: RecoverySynchronization, OwnerToken: inspection.OwnerToken,
+			StateSHA256: inspection.StateSHA256,
+		},
+		files:    lockProofs(locks),
+		pullRefs: append([]string(nil), inspection.RefNames...),
+	}
+	if inspection.ControllerPath != "" && len(inspection.ControllerRaw) != 0 {
+		approval.files = append([]recoveryFileProof{{
+			base: filepath.Dir(inspection.ControllerPath), path: inspection.ControllerPath,
+			raw: append([]byte(nil), inspection.ControllerRaw...),
+		}}, approval.files...)
+	}
+	return approval
 }
 
 func combineRecoveryPlans(plans ...recoveryPlan) recoveryPlan {
@@ -47,7 +67,9 @@ func combineRecoveryPlans(plans ...recoveryPlan) recoveryPlan {
 		combined.safe = combined.safe && plan.safe
 		combined.preJournalOnly = combined.preJournalOnly && plan.preJournalOnly
 		combined.locks = append(combined.locks, plan.locks...)
+		combined.localCleanup = combined.localCleanup || plan.localCleanup
 		combined.lifecycle = append(combined.lifecycle, plan.lifecycle...)
+		combined.approvals = append(combined.approvals, plan.approvals...)
 		if plan.worktreeGitDir != "" {
 			combined.worktreeGitDir = plan.worktreeGitDir
 		}
@@ -58,6 +80,9 @@ func combineRecoveryPlans(plans ...recoveryPlan) recoveryPlan {
 	}
 	if len(combined.lifecycle) != 0 {
 		combined.preJournalOnly = false
+	}
+	if len(combined.approvals) > 1 || len(combined.approvals) != 0 && combined.localCleanup {
+		combined.safe = false
 	}
 	return combined
 }
@@ -101,6 +126,27 @@ func inspectRecoveryState(ctx context.Context, current *inspection) recoveryPlan
 		setRequired(&current.result, "recovery.state", Error, nil, strings.Join(problem, "; "))
 		plan.needed = true
 		plan.safe = false
+		return plan
+	}
+	if pullInspection.CleanupOnly && pullPresent {
+		plan.preJournalOnly = false
+		if journalPresent || len(locks) != 0 {
+			plan.needed, plan.safe = true, false
+			setRequired(&current.result, "recovery.state", Error, nil, "terminal replay cleanup overlaps another journal or rendezvous owner")
+			return plan
+		}
+		switch pullInspection.Disposition {
+		case pullflow.RecoveryActive:
+			plan.blocked = true
+			setRequired(&current.result, "recovery.state", Error, pathPointer(pullInspection.ControllerPath), "coherent live replay terminal operation")
+		case pullflow.RecoveryRecoverable:
+			plan.needed = true
+			plan.approvals = append(plan.approvals, pullRecoveryApproval(pullInspection, nil))
+			setRequired(&current.result, "recovery.state", Error, pathPointer(pullInspection.ControllerPath), "recognized terminal replay requires bounded cleanup")
+		default:
+			plan.needed, plan.safe = true, false
+			setRequired(&current.result, "recovery.state", Error, pathPointer(pullInspection.ControllerPath), "terminal replay recovery state is inconsistent")
+		}
 		return plan
 	}
 	if len(locks) == 0 && !journalPresent && !pullPresent {
@@ -171,6 +217,7 @@ func inspectRecoveryState(ctx context.Context, current *inspection) recoveryPlan
 				plan.needed = true
 				plan.preJournalOnly = false
 				plan.locks = append(plan.locks, group...)
+				plan.approvals = append(plan.approvals, pullRecoveryApproval(pullInspection, group))
 				details = append(details, "recognized stale pull transition requires bounded recovery")
 			}
 			continue
@@ -194,6 +241,7 @@ func inspectRecoveryState(ctx context.Context, current *inspection) recoveryPlan
 				plan.needed = true
 				plan.preJournalOnly = false
 				plan.locks = append(plan.locks, group...)
+				plan.approvals = append(plan.approvals, managedRecoveryApproval(record.OwnerToken, journalPath, rawJournal, group))
 				details = append(details, "recognized stale pre-CAS journal requires bounded cleanup")
 				continue
 			}
@@ -212,10 +260,10 @@ func inspectRecoveryState(ctx context.Context, current *inspection) recoveryPlan
 				details = append(details, "coherent live journaled operation")
 				continue
 			}
-			_ = rawJournal // The recovery engine re-reads and owns the exact journal.
 			plan.needed = true
 			plan.preJournalOnly = false
 			plan.locks = append(plan.locks, group...)
+			plan.approvals = append(plan.approvals, managedRecoveryApproval(record.OwnerToken, journalPath, rawJournal, group))
 			details = append(details, "recognized stale journaled operation requires bounded recovery")
 			continue
 		}
@@ -232,6 +280,7 @@ func inspectRecoveryState(ctx context.Context, current *inspection) recoveryPlan
 				continue
 			}
 			plan.needed = true
+			plan.localCleanup = true
 			plan.locks = append(plan.locks, group...)
 			details = append(details, "recognized stale pre-journal locks require cleanup")
 		case rendezvous.JournalRequired:
@@ -256,6 +305,10 @@ func inspectRecoveryState(ctx context.Context, current *inspection) recoveryPlan
 	if (pullInspection.Disposition == pullflow.RecoveryActive || pullInspection.Disposition == pullflow.RecoveryRecoverable) && !pullMatched {
 		plan.needed, plan.safe = true, false
 		details = append(details, "pull transition owner does not match every exact rendezvous lock")
+	}
+	if len(plan.approvals) > 1 {
+		plan.safe = false
+		details = append(details, "multiple recovery controllers claim the target")
 	}
 	if !plan.needed {
 		plan.safe = false
@@ -415,7 +468,7 @@ func nativeLockPathsFor(gitDir, commonGitDir, headRef string) []string {
 }
 
 func cleanStalePreJournal(plan recoveryPlan) (result error) {
-	if !plan.needed || !plan.safe || !plan.preJournalOnly || plan.worktreeGitDir == "" || len(plan.locks) == 0 || len(plan.lifecycle) != 0 {
+	if !plan.needed || !plan.safe || !plan.preJournalOnly || !plan.localCleanup || plan.worktreeGitDir == "" || len(plan.locks) == 0 || len(plan.lifecycle) != 0 || len(plan.approvals) != 0 {
 		return errors.New("recovery plan is not a stale pre-journal cleanup")
 	}
 	lease, err := rendezvous.AcquireRecovery(plan.worktreeGitDir)

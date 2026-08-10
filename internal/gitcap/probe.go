@@ -103,9 +103,18 @@ func probeUpdateRefTransaction(ctx context.Context, git, root string) (bool, err
 }
 
 func run(ctx context.Context, git, repository string, input []byte, args ...string) ([]byte, error) {
-	if repository != "" {
-		args = append([]string{"-C", repository}, args...)
+	global := []string{
+		"--no-pager", "--no-optional-locks", "--no-replace-objects",
+		"-c", "core.hooksPath=" + os.DevNull,
+		"-c", "core.fsmonitor=false",
+		"-c", "core.untrackedCache=false",
+		"-c", "maintenance.auto=false",
+		"-c", "gc.auto=0",
 	}
+	if repository != "" {
+		global = append(global, "-C", repository)
+	}
+	args = append(global, args...)
 	command := exec.CommandContext(ctx, git, args...)
 	command.Env = isolatedEnvironment(os.Environ())
 	command.Stdin = bytes.NewReader(input)
@@ -123,7 +132,7 @@ func run(ctx context.Context, git, repository string, input []byte, args ...stri
 }
 
 func isolatedEnvironment(environment []string) []string {
-	result := make([]string, 0, len(environment)+3)
+	result := make([]string, 0, len(environment)+8)
 	for _, item := range environment {
 		name, _, _ := strings.Cut(item, "=")
 		upper := strings.ToUpper(name)
@@ -134,8 +143,13 @@ func isolatedEnvironment(environment []string) []string {
 	}
 	return append(result,
 		"GIT_CONFIG_NOSYSTEM=1",
+		"GIT_CONFIG_GLOBAL="+os.DevNull,
 		"GIT_CONFIG_COUNT=0",
+		"GIT_NO_LAZY_FETCH=1",
 		"GIT_TERMINAL_PROMPT=0",
+		"GIT_OPTIONAL_LOCKS=0",
+		"GIT_PAGER=cat",
+		"LC_ALL=C",
 	)
 }
 

@@ -108,77 +108,78 @@ func verifyRecoverableInputs(ctx context.Context, git *gitClient, root string, r
 	return nil
 }
 
-func reconcileIndex(ctx context.Context, root string, record journal.Record) error {
+func reconcileIndex(ctx context.Context, root string, record journal.Record) (bool, error) {
 	indexPath, err := liveIndexPath(ctx, root)
 	if err != nil {
-		return err
+		return false, err
 	}
 	current, exists, _, err := readOptionalRealFile(indexPath)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if exists == record.IndexAfter.Present && bytes.Equal(current, record.IndexAfter.Data) {
-		return cleanupOwnedIndexState(indexPath, record)
+		return false, cleanupOwnedIndexState(indexPath, record)
 	}
 	beforeExists := recordedIndexPresent(record)
 	if exists != beforeExists || !bytes.Equal(current, record.IndexBefore.Data) {
-		return typedPaths(FailureRecovery, PhaseIndexReconciled, []string{"index"}, ErrRecovery)
+		return false, typedPaths(FailureRecovery, PhaseIndexReconciled, []string{"index"}, ErrRecovery)
 	}
 	lockName := indexPath + ".lock"
 	temporaryName := ownedIndexTemporary(indexPath, record.OwnerToken)
 	temporaryData, temporaryExists, _, err := readOptionalRealFile(temporaryName)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if temporaryExists && !bytes.Equal(temporaryData, record.IndexAfter.Data) {
 		if err := os.Remove(temporaryName); err != nil {
-			return err
+			return false, err
 		}
 		if err := syncDirectory(filepath.Dir(indexPath)); err != nil {
-			return err
+			return false, err
 		}
 		temporaryExists = false
 	}
 	if !temporaryExists {
 		file, err := os.OpenFile(temporaryName, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 		if err != nil {
-			return err
+			return false, err
 		}
 		if _, err := file.Write(record.IndexAfter.Data); err != nil {
 			_ = file.Close()
-			return err
+			return false, err
 		}
 		if err := file.Sync(); err != nil {
 			_ = file.Close()
-			return err
+			return false, err
 		}
 		if err := file.Close(); err != nil {
-			return err
+			return false, err
 		}
 	}
 	if err := os.Link(temporaryName, lockName); err != nil {
 		if !errors.Is(err, os.ErrExist) || !sameRealFile(lockName, temporaryName, record.IndexAfter.Data) {
-			return rendezvous.ErrBusy
+			return false, rendezvous.ErrBusy
 		}
 	} else if err := syncDirectory(filepath.Dir(indexPath)); err != nil {
-		return err
+		return false, err
 	}
 	// Git's native index lock is now held by a fully written, durable image.
 	// Recheck the live index one last time before the atomic replacement.
 	current, exists, _, err = readOptionalRealFile(indexPath)
 	if err != nil || exists != beforeExists || !bytes.Equal(current, record.IndexBefore.Data) {
-		return typedPaths(FailureRecovery, PhaseIndexReconciled, []string{"index"}, ErrRecovery)
+		return false, typedPaths(FailureRecovery, PhaseIndexReconciled, []string{"index"}, ErrRecovery)
 	}
 	if err := os.Rename(lockName, indexPath); err != nil {
-		return err
+		return false, err
 	}
+	changed := true
 	if err := syncDirectory(filepath.Dir(indexPath)); err != nil {
-		return err
+		return changed, err
 	}
 	if err := os.Remove(temporaryName); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
+		return changed, err
 	}
-	return syncDirectory(filepath.Dir(indexPath))
+	return changed, syncDirectory(filepath.Dir(indexPath))
 }
 
 func ownedIndexTemporary(indexPath, token string) string {
@@ -235,12 +236,12 @@ func recordedIndexPresent(record journal.Record) bool {
 	return record.IndexBefore.Present
 }
 
-func reconcileWorktree(root string, record journal.Record) error {
+func reconcileWorktree(root string, record journal.Record) (changed bool, resultErr error) {
 	if len(record.Paths) == 0 {
-		return nil
+		return false, nil
 	}
 	if err := validateReconciliationPlan(record.Paths); err != nil {
-		return err
+		return false, err
 	}
 	current := make(map[string]*journal.Image, len(record.Paths))
 	byPath := make(map[string]journal.PathUpdate, len(record.Paths))
@@ -249,7 +250,7 @@ func reconcileWorktree(root string, record journal.Record) error {
 		byPath[update.Path] = update
 		value, err := observePath(root, update.Path)
 		if err != nil {
-			return err
+			return false, err
 		}
 		current[update.Path] = value
 		if !sameJournalImage(value, update.Before) && !sameJournalImage(value, update.After) {
@@ -257,11 +258,11 @@ func reconcileWorktree(root string, record journal.Record) error {
 		}
 	}
 	if len(conflicts) != 0 {
-		return typedPaths(FailureRecovery, PhaseWorktreeReconciled, conflicts, ErrRecovery)
+		return false, typedPaths(FailureRecovery, PhaseWorktreeReconciled, conflicts, ErrRecovery)
 	}
 	rootHandle, err := os.OpenRoot(root)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer rootHandle.Close()
 
@@ -282,25 +283,26 @@ func reconcileWorktree(root string, record journal.Record) error {
 			continue
 		}
 		if !sameJournalImage(value, update.Before) {
-			return typedPaths(FailureRecovery, PhaseWorktreeReconciled, []string{update.Path}, ErrRecovery)
+			return changed, typedPaths(FailureRecovery, PhaseWorktreeReconciled, []string{update.Path}, ErrRecovery)
 		}
 		if err := recheckPathAndDependencies(rootHandle, update, value, byPath, false); err != nil {
-			return err
+			return changed, err
 		}
 		parent, base, err := openLogicalParent(rootHandle, update.Path)
 		if err != nil {
-			return err
+			return changed, err
 		}
 		if err := parent.Remove(base); err != nil {
 			_ = parent.Close()
-			return fmt.Errorf("remove worktree preimage %q: %w", update.Path, err)
+			return changed, fmt.Errorf("remove worktree preimage %q: %w", update.Path, err)
 		}
+		changed = true
 		if err := syncOpenedRoot(parent); err != nil {
 			_ = parent.Close()
-			return err
+			return changed, err
 		}
 		if err := parent.Close(); err != nil {
-			return err
+			return changed, err
 		}
 		current[update.Path] = nil
 	}
@@ -318,22 +320,23 @@ func reconcileWorktree(root string, record journal.Record) error {
 			continue
 		}
 		if current[update.Path] != nil || update.Before != nil {
-			return typedPaths(FailureRecovery, PhaseWorktreeReconciled, []string{update.Path}, ErrRecovery)
+			return changed, typedPaths(FailureRecovery, PhaseWorktreeReconciled, []string{update.Path}, ErrRecovery)
 		}
 		if err := recheckPathAndDependencies(rootHandle, update, nil, byPath, true); err != nil {
-			return err
+			return changed, err
 		}
 		parent, base, err := openLogicalParent(rootHandle, update.Path)
 		if err != nil {
-			return err
+			return changed, err
 		}
 		if err := parent.Mkdir(base, os.FileMode(update.After.Mode)); err != nil {
 			_ = parent.Close()
-			return fmt.Errorf("create worktree directory %q: %w", update.Path, err)
+			return changed, fmt.Errorf("create worktree directory %q: %w", update.Path, err)
 		}
+		changed = true
 		err = errors.Join(syncOpenedRoot(parent), parent.Close())
 		if err != nil {
-			return err
+			return changed, err
 		}
 		current[update.Path] = cloneJournalImage(update.After)
 	}
@@ -344,34 +347,36 @@ func reconcileWorktree(root string, record journal.Record) error {
 		}
 		if sameJournalImage(current[update.Path], update.After) {
 			if err := cleanupRootTemporary(rootHandle, update.Path, record.OwnerToken); err != nil {
-				return err
+				return changed, err
 			}
 			continue
 		}
 		if !sameJournalImage(current[update.Path], update.Before) {
-			return typedPaths(FailureRecovery, PhaseWorktreeReconciled, []string{update.Path}, ErrRecovery)
+			return changed, typedPaths(FailureRecovery, PhaseWorktreeReconciled, []string{update.Path}, ErrRecovery)
 		}
 		if err := recheckPathAndDependencies(rootHandle, update, current[update.Path], byPath, true); err != nil {
-			return err
+			return changed, err
 		}
-		if err := replaceRootPath(rootHandle, update.Path, update.Before, update.After, record.OwnerToken); err != nil {
-			return err
+		replaced, err := replaceRootPath(rootHandle, update.Path, update.Before, update.After, record.OwnerToken)
+		changed = changed || replaced
+		if err != nil {
+			return changed, err
 		}
 		current[update.Path] = cloneJournalImage(update.After)
 	}
 	for _, update := range record.Paths {
 		value, err := observePath(root, update.Path)
 		if err != nil {
-			return err
+			return changed, err
 		}
 		if !sameJournalImage(value, update.After) {
 			conflicts = append(conflicts, update.Path)
 		}
 	}
 	if len(conflicts) != 0 {
-		return typedPaths(FailureRecovery, PhaseWorktreeReconciled, compactSorted(conflicts), ErrRecovery)
+		return changed, typedPaths(FailureRecovery, PhaseWorktreeReconciled, compactSorted(conflicts), ErrRecovery)
 	}
-	return nil
+	return changed, nil
 }
 
 func validateReconciliationPlan(updates []journal.PathUpdate) error {
@@ -449,69 +454,72 @@ func cleanupRootTemporary(root *os.Root, logical, token string) error {
 	return syncOpenedRoot(parent)
 }
 
-func replaceRootPath(root *os.Root, logical string, before, image *journal.Image, token string) error {
+func replaceRootPath(root *os.Root, logical string, before, image *journal.Image, token string) (bool, error) {
 	parent, base, err := openLogicalParent(root, logical)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer parent.Close()
 	temporary := reconciliationTemporary(logical, token)
 	if _, err := parent.Lstat(temporary); err == nil {
 		if err := parent.Remove(temporary); err != nil {
-			return err
+			return false, err
 		}
 		if err := syncOpenedRoot(parent); err != nil {
-			return err
+			return false, err
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
+		return false, err
 	}
 	switch image.Kind {
 	case "regular":
 		file, err := parent.OpenFile(temporary, os.O_WRONLY|os.O_CREATE|os.O_EXCL, os.FileMode(image.Mode))
 		if err != nil {
-			return err
+			return false, err
 		}
 		if _, err := file.Write(image.Data); err != nil {
 			_ = file.Close()
-			return err
+			return false, err
 		}
 		if err := file.Chmod(os.FileMode(image.Mode)); err != nil {
 			_ = file.Close()
-			return err
+			return false, err
 		}
 		if err := file.Sync(); err != nil {
 			_ = file.Close()
-			return err
+			return false, err
 		}
 		if err := file.Close(); err != nil {
-			return err
+			return false, err
 		}
 	case "symlink":
 		if err := parent.Symlink(string(image.Data), temporary); err != nil {
-			return err
+			return false, err
 		}
 	default:
-		return fmt.Errorf("cannot publish journal image kind %q", image.Kind)
+		return false, fmt.Errorf("cannot publish journal image kind %q", image.Kind)
 	}
 	observed, err := observePathRoot(root, logical)
 	if err != nil || !sameJournalImage(observed, before) {
-		return typedPaths(FailureRecovery, PhaseWorktreeReconciled, []string{logical}, errors.Join(ErrRecovery, err))
+		return false, typedPaths(FailureRecovery, PhaseWorktreeReconciled, []string{logical}, errors.Join(ErrRecovery, err))
 	}
 	if before == nil {
 		if err := parent.Link(temporary, base); err != nil {
-			return err
+			return false, err
 		}
+		changed := true
 		if err := syncOpenedRoot(parent); err != nil {
-			return err
+			return changed, err
 		}
 		if err := parent.Remove(temporary); err != nil {
-			return err
+			return changed, err
 		}
-	} else if err := parent.Rename(temporary, base); err != nil {
-		return err
+		return changed, syncOpenedRoot(parent)
 	}
-	return syncOpenedRoot(parent)
+	if err := parent.Rename(temporary, base); err != nil {
+		return false, err
+	}
+	return true, syncOpenedRoot(parent)
 }
 
 func syncOpenedRoot(root *os.Root) error {

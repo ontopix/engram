@@ -156,7 +156,11 @@ func (b *synchronizedBuffer) bytes() []byte {
 }
 
 func (g *gitClient) run(ctx context.Context, input []byte, extraEnvironment []string, arguments ...string) (gitResult, error) {
-	global := []string{"--no-pager", "--no-optional-locks", "--no-replace-objects", "-c", "core.hooksPath=" + os.DevNull, "-c", "core.fsync=loose-object", "-C", g.root}
+	global := []string{
+		"--no-pager", "--no-optional-locks", "--no-replace-objects",
+		"-c", "core.hooksPath=" + os.DevNull, "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false",
+		"-c", "maintenance.auto=false", "-c", "gc.auto=0", "-c", "core.fsync=loose-object", "-C", g.root,
+	}
 	command := exec.CommandContext(ctx, g.executable, append(global, arguments...)...)
 	command.Env = append(isolatedGitEnvironment(os.Environ()), extraEnvironment...)
 	command.Stdin = bytes.NewReader(input)
@@ -444,7 +448,11 @@ func updateRefCAS(ctx context.Context, git *gitClient, repository *gitraw.Reposi
 // non-updating; after it is sent only an exact commit acknowledgement and
 // successful process exit establish a known update.
 func updateRefPreparedCAS(ctx context.Context, git *gitClient, repository *gitraw.Repository, newID string, old *gitraw.OID, recheck func() error) (outcome casOutcome, resultErr error) {
-	global := []string{"--no-pager", "--no-optional-locks", "--no-replace-objects", "-c", "core.hooksPath=" + os.DevNull, "-c", "core.fsync=reference", "-C", git.root}
+	global := []string{
+		"--no-pager", "--no-optional-locks", "--no-replace-objects",
+		"-c", "core.hooksPath=" + os.DevNull, "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false",
+		"-c", "maintenance.auto=false", "-c", "gc.auto=0", "-c", "core.fsync=reference", "-C", git.root,
+	}
 	command := exec.CommandContext(ctx, git.executable, append(global, "update-ref", "--no-deref", "--stdin", "-m", "engram managed acceptance")...)
 	command.Env = isolatedGitEnvironment(os.Environ())
 	stdin, err := command.StdinPipe()

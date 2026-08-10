@@ -2,7 +2,10 @@
 
 package hooks
 
-import "os"
+import (
+	"errors"
+	"os"
+)
 
 func privateRegistryFileMode(mode os.FileMode) bool {
 	return mode.Perm()&0o077 == 0
@@ -13,14 +16,19 @@ func safeRegistryDirectoryMode(mode os.FileMode) bool {
 }
 
 func syncRegistryDirectory(directory string) error {
+	_, err := syncRegistryDirectoryState(directory)
+	return err
+}
+
+func syncRegistryDirectoryState(directory string) (bool, error) {
 	handle, err := os.Open(directory)
 	if err != nil {
-		return err
+		return false, err
 	}
 	syncErr := handle.Sync()
 	closeErr := handle.Close()
 	if syncErr != nil {
-		return syncErr
+		return false, errors.Join(syncErr, closeErr)
 	}
-	return closeErr
+	return true, closeErr
 }
