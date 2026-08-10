@@ -130,7 +130,7 @@ func WriteLogText(output io.Writer, result *LogResult, mode LogTextMode) error {
 	if output == nil || result == nil {
 		return fmt.Errorf("render log: missing output or result")
 	}
-	for _, commit := range result.Commits {
+	for index, commit := range result.Commits {
 		switch mode {
 		case LogTextOneline:
 			subject, _, _ := strings.Cut(commit.Message, "\n")
@@ -138,6 +138,11 @@ func WriteLogText(output io.Writer, result *LogResult, mode LogTextMode) error {
 				return err
 			}
 		case LogTextFull:
+			if index != 0 {
+				if _, err := io.WriteString(output, "\n"); err != nil {
+					return err
+				}
+			}
 			if err := writeFullCommit(output, commit); err != nil {
 				return err
 			}
@@ -166,8 +171,7 @@ func writeFullCommit(output io.Writer, commit CommitView) error {
 			return err
 		}
 	}
-	_, err := io.WriteString(output, "\n")
-	return err
+	return nil
 }
 
 func formatIdentity(identity *Identity) string {

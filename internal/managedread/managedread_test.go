@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io/fs"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,6 +17,19 @@ import (
 	"github.com/ontopix/engram/internal/checker"
 	"github.com/ontopix/engram/internal/gitraw"
 )
+
+func TestLogMaximumCountTraversesOnlyAvailableHistory(t *testing.T) {
+	root := newGitRepository(t, gitraw.SHA1, true)
+	store := openStore(t, root)
+
+	log, err := store.Log(context.Background(), math.MaxInt32)
+	if err != nil {
+		t.Fatalf("Log: %v", err)
+	}
+	if len(log.Commits) != 1 {
+		t.Fatalf("commits = %d, want 1", len(log.Commits))
+	}
+}
 
 func TestBaseAbsentProjectsStagedInitialization(t *testing.T) {
 	root := newGitRepository(t, gitraw.SHA1, false)
@@ -592,6 +606,7 @@ func tryNewSHA256Repository(t *testing.T) (string, bool) {
 
 func configureRepository(t *testing.T, root string) {
 	t.Helper()
+	runGit(t, root, nil, "config", "core.autocrlf", "false")
 	runGit(t, root, nil, "config", "user.name", "Ada")
 	runGit(t, root, nil, "config", "user.email", "ada@example.test")
 	runGit(t, root, nil, "config", "commit.gpgsign", "false")

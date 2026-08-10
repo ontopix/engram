@@ -7,10 +7,11 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/ontopix/engram/internal/gitpath"
 )
 
 type Repository struct {
@@ -184,10 +185,11 @@ func (r gitRunner) pathOutput(ctx context.Context, selector string) (string, err
 		return "", &Error{Kind: FailureRepository, Op: "discover-path", Err: err}
 	}
 	value := stringLine(output)
-	if value == "" || !utf8.ValidString(value) || !filepath.IsAbs(value) {
+	path, pathErr := gitpath.Absolute(value)
+	if pathErr != nil {
 		return "", &Error{Kind: FailureRepository, Op: "discover-path", Detail: fmt.Sprintf("Git returned invalid absolute path %q", value)}
 	}
-	return filepath.Clean(value), nil
+	return path, nil
 }
 
 func (r gitRunner) output(ctx context.Context, input []byte, arguments ...string) ([]byte, error) {

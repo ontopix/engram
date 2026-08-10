@@ -28,7 +28,12 @@ jobs:
           cache: true
       - run: go mod download
       - run: go mod verify
-      - run: go test ./...
+      - name: Test
+        if: runner.os != 'Windows'
+        run: go test ./...
+      - name: Test (bounded Windows build parallelism)
+        if: runner.os == 'Windows'
+        run: go test -p 2 ./...
       - run: go vet ./...
       - run: go build ./cmd/engram
 

@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"github.com/ontopix/engram/internal/gitpath"
 )
 
 // Configure writes only the repository-local keys required by the managed
@@ -31,8 +33,8 @@ func Configure(ctx context.Context, root string) error {
 	if err != nil || status != 0 {
 		return errors.Join(err, fmt.Errorf("resolve Git directory exited %d", status))
 	}
-	gitDir := strings.TrimSuffix(string(repositoryGitDir), "\n")
-	if !filepath.IsAbs(gitDir) || filepath.Clean(gitDir) != gitDir {
+	gitDir, err := gitpath.Absolute(strings.TrimSuffix(string(repositoryGitDir), "\n"))
+	if err != nil {
 		return errors.New("Git returned a non-canonical administration path")
 	}
 	return InstallCacheExclusion(gitDir)

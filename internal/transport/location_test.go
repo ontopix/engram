@@ -7,6 +7,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/ontopix/engram/internal/testpath"
 )
 
 func TestValidateLocationClosedSurface(t *testing.T) {
@@ -25,6 +27,9 @@ func TestValidateLocationClosedSurface(t *testing.T) {
 			t.Errorf("ValidateLocation(%q) = %v", location, err)
 		}
 	}
+	if location := testpath.FileURL(t.TempDir()); ValidateLocation(location) != nil {
+		t.Errorf("ValidateLocation(host file URL %q) failed", location)
+	}
 	invalid := []string{
 		"", "-uhoh", "http://example.test/store", "git://example.test/store",
 		"ext::command", "ftp://example.test/store", "https://example.test",
@@ -40,16 +45,17 @@ func TestValidateLocationClosedSurface(t *testing.T) {
 
 func TestDataRootByPlatform(t *testing.T) {
 	t.Parallel()
-	environment := map[string]string{"LOCALAPPDATA": filepath.Join(string(filepath.Separator), "local"), "XDG_DATA_HOME": filepath.Join(string(filepath.Separator), "xdg")}
+	base := t.TempDir()
+	environment := map[string]string{"LOCALAPPDATA": filepath.Join(base, "local"), "XDG_DATA_HOME": filepath.Join(base, "xdg")}
 	getenv := func(name string) string { return environment[name] }
-	home := func() (string, error) { return filepath.Join(string(filepath.Separator), "home", "ada"), nil }
+	home := func() (string, error) { return filepath.Join(base, "home", "ada"), nil }
 	tests := []struct {
 		goos string
 		want string
 	}{
-		{"darwin", filepath.Join(string(filepath.Separator), "home", "ada", "Library", "Application Support")},
-		{"windows", filepath.Join(string(filepath.Separator), "local")},
-		{"linux", filepath.Join(string(filepath.Separator), "xdg")},
+		{"darwin", filepath.Join(base, "home", "ada", "Library", "Application Support")},
+		{"windows", filepath.Join(base, "local")},
+		{"linux", filepath.Join(base, "xdg")},
 	}
 	for _, test := range tests {
 		got, err := dataRoot(test.goos, getenv, home)

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +12,7 @@ import (
 	"github.com/ontopix/engram/internal/checker"
 	"github.com/ontopix/engram/internal/cli"
 	"github.com/ontopix/engram/internal/syncflow"
+	"github.com/ontopix/engram/internal/testpath"
 )
 
 func TestPushCommandCreatesThenObservesRemoteBranch(t *testing.T) {
@@ -23,7 +23,7 @@ func TestPushCommandCreatesThenObservesRemoteBranch(t *testing.T) {
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("init bare remote: %v\n%s", err, output)
 	}
-	location := (&url.URL{Scheme: "file", Path: remote}).String()
+	location := testpath.FileURL(remote)
 	managedGit(t, root, "remote", "add", "origin", location)
 	managedGit(t, root, "config", "branch.main.remote", "origin")
 	managedGit(t, root, "config", "branch.main.merge", "refs/heads/main")

@@ -3,7 +3,6 @@ package acquire
 import (
 	"context"
 	"errors"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,6 +15,7 @@ import (
 	"github.com/ontopix/engram/internal/lifecycle"
 	"github.com/ontopix/engram/internal/managedread"
 	"github.com/ontopix/engram/internal/rendezvous"
+	"github.com/ontopix/engram/internal/testpath"
 )
 
 func TestClonePublishesOnlyVerifiedManagedStore(t *testing.T) {
@@ -68,7 +68,7 @@ func TestClonePrePublicationFailureCleansExactLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	destination := filepath.Join(parent, "failed")
-	missing := (&url.URL{Scheme: "file", Path: filepath.Join(parent, "missing.git")}).String()
+	missing := testpath.FileURL(filepath.Join(parent, "missing.git"))
 	if _, err := Clone(context.Background(), missing, Options{Destination: destination, DestinationProvided: true}); KindOf(err) != ErrorNetwork {
 		t.Fatalf("clone error = %v", err)
 	}
@@ -91,7 +91,7 @@ func TestCloneExistingLifecycleBlocksBeforeNetwork(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = handle.Remove() })
-	missing := (&url.URL{Scheme: "file", Path: filepath.Join(filepath.Dir(destination), "missing.git")}).String()
+	missing := testpath.FileURL(filepath.Join(filepath.Dir(destination), "missing.git"))
 	if _, err := Clone(context.Background(), missing, Options{Destination: destination, DestinationProvided: true}); KindOf(err) != ErrorConflict {
 		t.Fatalf("clone error = %v", err)
 	}
@@ -883,7 +883,7 @@ func bareFixture(t *testing.T, invalid bool) string {
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("bare clone: %v\n%s", err, output)
 	}
-	value := (&url.URL{Scheme: "file", Path: bare}).String()
+	value := testpath.FileURL(bare)
 	return value
 }
 

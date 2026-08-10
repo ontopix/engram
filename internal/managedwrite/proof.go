@@ -323,7 +323,7 @@ func sameJournalImage(left, right *journal.Image) bool {
 	// permission bits are presentation evidence, not a reconciled tree image;
 	// treating an umask-restricted newly created directory as an intermediate
 	// third image would make portable crash recovery impossible.
-	return left.Kind == "directory" || left.Mode == right.Mode
+	return left.Kind == "directory" || equivalentPathPermissions(left.Mode, right.Mode)
 }
 
 func captureDirectoryFingerprint(root, logical string) (journal.Fingerprint, error) {

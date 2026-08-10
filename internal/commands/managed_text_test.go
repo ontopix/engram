@@ -69,7 +69,7 @@ func assertGolden(t *testing.T, name string, got []byte) {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(got, want) {
-		t.Fatalf("%s mismatch\nwant:\n%s\ngot:\n%s", name, want, got)
+		t.Fatalf("%s mismatch\nwant (%d bytes): %q\ngot  (%d bytes): %q", name, len(want), want, len(got), got)
 	}
 }
 

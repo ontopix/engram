@@ -6,8 +6,12 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
+	"sort"
 	"strings"
 	"testing"
+
+	"github.com/ontopix/engram/internal/lockidentity"
 )
 
 func TestAttachDetachPreserveSurroundingBytes(t *testing.T) {
@@ -45,10 +49,22 @@ func TestAttachDetachPreserveSurroundingBytes(t *testing.T) {
 	if !strings.HasPrefix(string(data), "before\n\nafter\n\n") {
 		t.Fatalf("surrounding prefix changed: %q", data)
 	}
-	firstIndex := strings.Index(string(data), filepath.Clean(first))
-	secondIndex := strings.Index(string(data), filepath.Clean(second))
-	if firstIndex < 0 || secondIndex <= firstIndex {
-		t.Fatalf("stores not sorted in block: %q", data)
+	block, present, err := parse(data)
+	if err != nil || !present {
+		t.Fatalf("parse attached block: present=%v error=%v\n%s", present, err, data)
+	}
+	canonicalFirst, err := CanonicalStore(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalSecond, err := CanonicalStore(second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantStores := []string{canonicalFirst, canonicalSecond}
+	sort.Strings(wantStores)
+	if !slices.Equal(block.stores, wantStores) {
+		t.Fatalf("stores = %#v, want sorted %#v", block.stores, wantStores)
 	}
 	if strings.Count(string(data), OpenMarker) != 1 || strings.Count(string(data), CloseMarker) != 1 {
 		t.Fatalf("owned markers = %q", data)
@@ -351,6 +367,43 @@ func TestUpdaterResidualLockWithoutPublicationIsNotDurable(t *testing.T) {
 	effect, ok := EffectOf(err)
 	if !ok || effect.Durable || !effect.RecoveryRequired {
 		t.Fatalf("effect=%#v present=%v error=%v", effect, ok, err)
+	}
+}
+
+func TestUpdaterIdentityEstablishFailureLeavesRecoveryRequiredLock(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	project := filepath.Join(root, "project")
+	store := filepath.Join(root, "store")
+	for _, directory := range []string{project, store} {
+		if err := os.Mkdir(directory, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	entrypoint := filepath.Join(project, "AGENTS.md")
+	fault := errors.New("injected identity establishment failure")
+	updater := NewUpdater()
+	updater.establishLockIdentity = func(*os.File) (lockidentity.Identity, error) {
+		return lockidentity.Identity{}, fault
+	}
+
+	result, err := updater.Attach(project, entrypoint, store)
+	if !errors.Is(err, fault) || result != (Result{}) {
+		t.Fatalf("result=%#v error=%v", result, err)
+	}
+	effect, ok := EffectOf(err)
+	if !ok || effect.Durable || !effect.RecoveryRequired {
+		t.Fatalf("effect=%#v present=%v error=%v", effect, ok, err)
+	}
+	lockInfo, statErr := os.Lstat(entrypoint + ".engram.lock")
+	if statErr != nil || !lockInfo.Mode().IsRegular() {
+		t.Fatalf("recovery lock info=%#v error=%v", lockInfo, statErr)
+	}
+	if _, retryErr := acquireLock(entrypoint + ".engram.lock"); !errors.Is(retryErr, ErrBusy) {
+		t.Fatalf("retry error=%v, want ErrBusy", retryErr)
+	}
+	if _, statErr := os.Lstat(entrypoint); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("entrypoint was published: %v", statErr)
 	}
 }
 

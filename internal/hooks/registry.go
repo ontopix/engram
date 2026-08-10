@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/ontopix/engram/internal/lockidentity"
 )
 
 const maxRegistryBytes = 8 << 20
@@ -42,10 +44,11 @@ type Registry struct {
 	beforePublish func()
 	// Publication and release checkpoints are instance-local fault seams.
 	// Production registries leave them nil.
-	afterRename  func(string) error
-	afterSync    func(string) error
-	beforeRemove func(string) error
-	afterRelease func(string) error
+	afterRename           func(string) error
+	afterSync             func(string) error
+	beforeRemove          func(string) error
+	afterRelease          func(string) error
+	establishLockIdentity func(*os.File) (lockidentity.Identity, error)
 }
 
 type registryPublication struct {
@@ -282,7 +285,7 @@ func (r *Registry) update(mutate func(*registryDocument) (bool, error)) (changed
 	if err := ensurePrivateDirectory(filepath.Dir(r.path)); err != nil {
 		return false, err
 	}
-	lock, err := acquireRegistryLock(r.path + ".lock")
+	lock, err := acquireRegistryLockWith(r.path+".lock", r.establishLockIdentity)
 	if err != nil {
 		return false, err
 	}
@@ -686,11 +689,16 @@ func sameFileSnapshot(left, right fileSnapshot) bool {
 }
 
 type registryLock struct {
-	name string
-	file *os.File
+	name     string
+	file     *os.File
+	identity lockidentity.Identity
 }
 
 func acquireRegistryLock(name string) (*registryLock, error) {
+	return acquireRegistryLockWith(name, nil)
+}
+
+func acquireRegistryLockWith(name string, establish func(*os.File) (lockidentity.Identity, error)) (*registryLock, error) {
 	file, err := os.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if errors.Is(err, os.ErrExist) {
 		return nil, ErrConcurrent
@@ -698,18 +706,28 @@ func acquireRegistryLock(name string) (*registryLock, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &registryLock{name: name, file: file}, nil
+	if establish == nil {
+		establish = lockidentity.Establish
+	}
+	identity, identityErr := establish(file)
+	if identityErr != nil {
+		closeErr := file.Close()
+		return nil, &EffectError{
+			Effect: Effect{RecoveryRequired: true},
+			Err:    errors.Join(fmt.Errorf("establish registry lock identity: %w", identityErr), closeErr),
+		}
+	}
+	return &registryLock{name: name, file: file, identity: identity}, nil
 }
 
 func (lock *registryLock) release(beforeRemove, afterRelease func(string) error) (bool, error) {
 	if lock == nil {
 		return false, nil
 	}
-	var ownedInfo os.FileInfo
 	var ownershipErr error
 	var closeErr error
 	if lock.file != nil {
-		ownedInfo, ownershipErr = lock.file.Stat()
+		_, ownershipErr = lock.file.Stat()
 		closeErr = lock.file.Close()
 	}
 	var beforeRemoveErr error
@@ -719,19 +737,16 @@ func (lock *registryLock) release(beforeRemove, afterRelease func(string) error)
 	var removeErr error
 	ownedAtName := false
 	var identityErr error
-	if beforeRemoveErr == nil && ownershipErr == nil && ownedInfo != nil {
-		currentInfo, statErr := os.Lstat(lock.name)
+	if beforeRemoveErr == nil && ownershipErr == nil {
+		state, inspectErr := lock.identity.Inspect(lock.name)
 		switch {
-		case statErr == nil && os.SameFile(ownedInfo, currentInfo):
+		case inspectErr != nil:
+			identityErr = inspectErr
+		case state == lockidentity.Owned:
 			ownedAtName = true
-		case statErr == nil:
+		case state == lockidentity.Other:
 			identityErr = fmt.Errorf("%w: registry lock ownership changed before release", ErrConcurrent)
-		case !errors.Is(statErr, os.ErrNotExist):
-			identityErr = statErr
 		}
-	}
-	if beforeRemoveErr == nil && ownershipErr == nil && ownedInfo == nil {
-		identityErr = fmt.Errorf("%w: registry lock ownership is unavailable", ErrConcurrent)
 	}
 	if ownedAtName {
 		removeErr = os.Remove(lock.name)
@@ -749,15 +764,14 @@ func (lock *registryLock) release(beforeRemove, afterRelease func(string) error)
 	}
 	residual := false
 	var inspectErr error
-	currentInfo, statErr := os.Lstat(lock.name)
-	switch {
-	case statErr == nil && ownedInfo != nil:
-		residual = os.SameFile(ownedInfo, currentInfo)
-	case statErr == nil:
+	state, inspectErr := lock.identity.Inspect(lock.name)
+	switch state {
+	case lockidentity.Owned:
 		residual = true
-	case !errors.Is(statErr, os.ErrNotExist):
-		residual = true
-		inspectErr = statErr
+	case lockidentity.Other:
+		if inspectErr != nil {
+			residual = true
+		}
 	}
 	var residualErr error
 	if residual {

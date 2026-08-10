@@ -16,6 +16,7 @@ import (
 	"github.com/ontopix/engram/internal/gitraw"
 	"github.com/ontopix/engram/internal/guard"
 	"github.com/ontopix/engram/internal/journal"
+	"github.com/ontopix/engram/internal/lifecycle"
 	"github.com/ontopix/engram/internal/rendezvous"
 	"github.com/ontopix/engram/internal/snapshot"
 )
@@ -344,7 +345,13 @@ func TestRecoveryRequestBindsLifecyclePublicationPlan(t *testing.T) {
 	if err := os.WriteFile(name, canonicalJSON(state), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	stage := target + ".engram-acquisition-v1-" + state.Owner.Token + ".stage"
+	stage, err := lifecycle.Stage(lifecycle.State{
+		Version: state.Version, Operation: lifecycle.Acquisition, Target: state.Target,
+		Owner: state.Owner, Phase: lifecycle.CleanupRequired,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := os.Mkdir(stage, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -353,7 +360,7 @@ func TestRecoveryRequestBindsLifecyclePublicationPlan(t *testing.T) {
 		t.Fatal(err)
 	}
 	called := false
-	_, err := Inspect(context.Background(), target, Options{
+	_, err = Inspect(context.Background(), target, Options{
 		Recover: true,
 		Recovery: RecoveryFunc(func(ctx context.Context, request RecoveryRequest) (RecoveryResponse, error) {
 			called = true

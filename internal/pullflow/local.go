@@ -660,7 +660,16 @@ func imageFromTree(entry treeimage.Entry) *pathImage {
 }
 
 func samePathImage(left, right *pathImage) bool {
-	return left == nil && right == nil || left != nil && right != nil && left.Kind == right.Kind && left.Mode == right.Mode && bytes.Equal(left.Data, right.Data)
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	if left.Kind != right.Kind || !bytes.Equal(left.Data, right.Data) {
+		return false
+	}
+	// Directory permission bits are presentation evidence and are subject to
+	// the host umask. Windows also cannot represent POSIX group/other or
+	// executable bits for regular files, so compare only host-observable bits.
+	return left.Kind == "directory" || equivalentPathPermissions(left.Mode, right.Mode)
 }
 
 func verifyTransitionInputs(ctx context.Context, repository *gitraw.Repository, record transitionRecord) error {
@@ -950,7 +959,31 @@ func validateTransition(record transitionRecord) error {
 		if !validLogicalPath(update.Path) || previous != "" && previous >= update.Path || update.Before == nil && update.After == nil {
 			return errors.New("invalid or unordered transition paths")
 		}
+		if err := validatePathImage(update.Before); err != nil {
+			return err
+		}
+		if err := validatePathImage(update.After); err != nil {
+			return err
+		}
 		previous = update.Path
+	}
+	return nil
+}
+
+func validatePathImage(image *pathImage) error {
+	if image == nil {
+		return nil
+	}
+	switch image.Kind {
+	case "regular", "directory", "symlink":
+	default:
+		return fmt.Errorf("invalid transition path image kind %q", image.Kind)
+	}
+	if image.Mode&^0o777 != 0 {
+		return errors.New("transition path image has non-permission mode bits")
+	}
+	if image.Kind == "directory" && len(image.Data) != 0 {
+		return errors.New("transition directory image carries bytes")
 	}
 	return nil
 }

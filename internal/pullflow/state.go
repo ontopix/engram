@@ -193,7 +193,7 @@ func withReplayLock(repository *gitraw.Repository, action func() error) (result 
 	}
 	name := filepath.Join(directory, "controller.lock")
 	before, beforeErr := os.Lstat(name)
-	if beforeErr == nil && (before.Mode()&os.ModeSymlink != 0 || !before.Mode().IsRegular() || before.Mode().Perm()&0o077 != 0) {
+	if beforeErr == nil && (before.Mode()&os.ModeSymlink != 0 || !privateControllerMode(before.Mode())) {
 		return errors.New("unsafe replay controller lock")
 	}
 	if beforeErr != nil && !errors.Is(beforeErr, os.ErrNotExist) {
@@ -212,7 +212,7 @@ func withReplayLock(repository *gitraw.Repository, action func() error) (result 
 		result = errors.Join(result, unlockErr, lock.Close())
 	}()
 	opened, err := lock.Stat()
-	if err != nil || !opened.Mode().IsRegular() || opened.Mode().Perm()&0o077 != 0 || beforeErr == nil && !os.SameFile(before, opened) {
+	if err != nil || !privateControllerMode(opened.Mode()) || beforeErr == nil && !os.SameFile(before, opened) {
 		if err != nil {
 			return err
 		}
@@ -274,7 +274,7 @@ func readControllerFile(name string) ([]byte, bool, error) {
 	if err != nil {
 		return nil, true, err
 	}
-	if before.Mode()&os.ModeSymlink != 0 || !before.Mode().IsRegular() || before.Mode().Perm()&0o077 != 0 {
+	if before.Mode()&os.ModeSymlink != 0 || !privateControllerMode(before.Mode()) {
 		return nil, true, errors.New("controller state is not a private real regular file")
 	}
 	file, err := os.Open(name)

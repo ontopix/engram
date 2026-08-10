@@ -28,7 +28,8 @@ func TestBeginTransitionAndRemoveExactState(t *testing.T) {
 		t.Fatalf("state = %#v, raw = %q", state, raw)
 	}
 	stage, err := Stage(state)
-	if err != nil || filepath.Dir(stage) != filepath.Dir(target) || bytes.Contains([]byte(filepath.Base(stage)), []byte("..")) {
+	wantStage := target + ".engram-initialization-v1-" + state.Owner.Token[:20] + ".stage"
+	if err != nil || stage != wantStage || filepath.Dir(stage) != filepath.Dir(target) || bytes.Contains([]byte(filepath.Base(stage)), []byte("..")) || len(filepath.Base(stage)) >= len(filepath.Base(target))+64 {
 		t.Fatalf("stage = %q, %v", stage, err)
 	}
 	if err := handle.RequireCleanup(); err != nil {
@@ -141,6 +142,14 @@ func TestBeginCleanupFailureRetainsOnlyExactOwnedSidecar(t *testing.T) {
 				replacement := file.Name() + ".replacement"
 				if err := os.WriteFile(replacement, replacementBytes, 0o600); err != nil {
 					return written, errors.Join(writeErr, err)
+				}
+				// Windows cannot replace this still-open pathname with Rename. The
+				// created handle permits delete sharing, so unlinking the name first
+				// models the same foreign inode substitution tested on Unix.
+				if runtime.GOOS == "windows" {
+					if err := os.Remove(file.Name()); err != nil {
+						return written, errors.Join(writeErr, err)
+					}
 				}
 				if err := os.Rename(replacement, file.Name()); err != nil {
 					return written, errors.Join(writeErr, err)
@@ -418,6 +427,11 @@ func TestHandleRecoveryRequiredUsesExactIdentityAndBytes(t *testing.T) {
 		replacement := Sidecar(target, Initialization) + ".replacement"
 		if err := os.WriteFile(replacement, raw, 0o600); err != nil {
 			t.Fatal(err)
+		}
+		if runtime.GOOS == "windows" {
+			if err := os.Remove(Sidecar(target, Initialization)); err != nil {
+				t.Fatal(err)
+			}
 		}
 		if err := os.Rename(replacement, Sidecar(target, Initialization)); err != nil {
 			t.Fatal(err)

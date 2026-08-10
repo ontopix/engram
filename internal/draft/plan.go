@@ -526,7 +526,7 @@ func (p *Plan) rollback(root *os.Root, fileIndexes, directoryIndexes []int, chec
 				edit.durable = false
 				continue
 			}
-			if current.kind != observationRegular || !bytes.Equal(current.data, edit.after) || current.mode.Perm() != edit.mode.Perm() {
+			if current.kind != observationRegular || !bytes.Equal(current.data, edit.after) || !equivalentPermissions(current.mode, edit.mode) {
 				failures = append(failures, fmt.Errorf("%s no longer equals its planned final image", edit.path))
 				continue
 			}
@@ -541,7 +541,7 @@ func (p *Plan) rollback(root *os.Root, fileIndexes, directoryIndexes []int, chec
 				edit.durable = false
 				continue
 			}
-			if current.kind != observationRegular || !bytes.Equal(current.data, edit.after) || current.mode.Perm() != edit.mode.Perm() {
+			if current.kind != observationRegular || !bytes.Equal(current.data, edit.after) || !equivalentPermissions(current.mode, edit.mode) {
 				failures = append(failures, fmt.Errorf("%s no longer equals its planned final image", edit.path))
 				continue
 			}

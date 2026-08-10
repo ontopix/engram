@@ -18,6 +18,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/ontopix/engram/internal/checker"
+	"github.com/ontopix/engram/internal/gitpath"
 	"github.com/ontopix/engram/internal/gitraw"
 )
 
@@ -67,7 +68,8 @@ func (s *Store) auditPresentation(ctx context.Context, repository *gitraw.Reposi
 	builder.add("root.git.stdout", topLevel)
 	builder.add("root.git.stderr", stderr)
 	builder.addInt("root.git.status", status)
-	if status != 0 || strings.TrimSuffix(string(topLevel), "\n") != repository.Root {
+	gitRoot, rootPathErr := gitpath.Absolute(strings.TrimSuffix(string(topLevel), "\n"))
+	if status != 0 || rootPathErr != nil || gitRoot != repository.Root {
 		issues = append(issues, "managed target does not exactly match Git's worktree root")
 	}
 

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io/fs"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,6 +16,7 @@ import (
 	"github.com/ontopix/engram/internal/gitraw"
 	"github.com/ontopix/engram/internal/managedread"
 	"github.com/ontopix/engram/internal/remoteselect"
+	"github.com/ontopix/engram/internal/testpath"
 )
 
 func TestPushCreatesThenObservesAndAdvancesExactRemoteBranch(t *testing.T) {
@@ -323,7 +323,7 @@ func TestPushBlocksRepositoryURLRewritesBeforeNetwork(t *testing.T) {
 	for _, variable := range []string{"insteadOf", "pushInsteadOf"} {
 		t.Run(variable, func(t *testing.T) {
 			fixture := newPushFixture(t, true)
-			rewritten := (&url.URL{Scheme: "file", Path: filepath.Join(fixture.root, "redirected.git")}).String()
+			rewritten := testpath.FileURL(filepath.Join(fixture.root, "redirected.git"))
 			testGit(t, fixture.local, "config", "url."+rewritten+"."+variable, fixture.remoteURL)
 			testGit(t, fixture.local, "config", "protocol.ext.allow", "always")
 			pusher := NewPusher()
@@ -346,7 +346,7 @@ func TestPushBlocksRepositoryURLRewritesBeforeNetwork(t *testing.T) {
 func TestPushPrivateNetworkContextDefeatsRewriteAfterFinalCheck(t *testing.T) {
 	fixture := newPushFixture(t, true)
 	redirected := filepath.Join(fixture.root, "redirected.git")
-	redirectedURL := (&url.URL{Scheme: "file", Path: redirected}).String()
+	redirectedURL := testpath.FileURL(redirected)
 	pusher := NewPusher()
 	pusher.afterRewriteCheck = func() {
 		testGit(t, fixture.local, "config", "url."+redirectedURL+".insteadOf", fixture.remoteURL)
@@ -507,7 +507,7 @@ func newPushFixture(t *testing.T, createRemote bool) pushFixture {
 	if createRemote {
 		testGit(t, root, "init", "--bare", "--initial-branch=main", remote)
 	}
-	remoteURL := (&url.URL{Scheme: "file", Path: remote}).String()
+	remoteURL := testpath.FileURL(remote)
 	testGit(t, local, "remote", "add", "origin", remoteURL)
 	testGit(t, local, "config", "branch.main.remote", "origin")
 	testGit(t, local, "config", "branch.main.merge", "refs/heads/main")

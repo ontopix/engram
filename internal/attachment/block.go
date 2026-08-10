@@ -17,6 +17,8 @@ import (
 	"sort"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/ontopix/engram/internal/lockidentity"
 )
 
 const (
@@ -87,10 +89,11 @@ func EffectOf(err error) (Effect, bool) {
 // Updater owns one attachment operation and its instance-local fault seams.
 // Package-level Attach and Detach create a fresh production updater.
 type Updater struct {
-	afterRename  func(string) error
-	afterSync    func(string) error
-	beforeRemove func(string) error
-	afterRelease func(string) error
+	afterRename           func(string) error
+	afterSync             func(string) error
+	beforeRemove          func(string) error
+	afterRelease          func(string) error
+	establishLockIdentity func(*os.File) (lockidentity.Identity, error)
 }
 
 func NewUpdater() *Updater { return &Updater{} }
@@ -226,7 +229,7 @@ func (u *Updater) update(project, entrypoint, store string, attach bool) (result
 	}
 	result = Result{Project: project, Store: store, Entrypoint: entrypoint}
 
-	lock, err := acquireLock(entrypoint + ".engram.lock")
+	lock, err := acquireLockWith(entrypoint+".engram.lock", u.establishLockIdentity)
 	if err != nil {
 		return Result{}, err
 	}
@@ -565,11 +568,16 @@ func syncAttachmentDirectory(directory string) (bool, error) {
 }
 
 type lockFile struct {
-	name string
-	file *os.File
+	name     string
+	file     *os.File
+	identity lockidentity.Identity
 }
 
 func acquireLock(name string) (*lockFile, error) {
+	return acquireLockWith(name, nil)
+}
+
+func acquireLockWith(name string, establish func(*os.File) (lockidentity.Identity, error)) (*lockFile, error) {
 	file, err := os.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if errors.Is(err, os.ErrExist) {
 		return nil, ErrBusy
@@ -577,18 +585,28 @@ func acquireLock(name string) (*lockFile, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &lockFile{name: name, file: file}, nil
+	if establish == nil {
+		establish = lockidentity.Establish
+	}
+	identity, identityErr := establish(file)
+	if identityErr != nil {
+		closeErr := file.Close()
+		return nil, &EffectError{
+			Effect: Effect{RecoveryRequired: true},
+			Err:    errors.Join(fmt.Errorf("establish attachment lock identity: %w", identityErr), closeErr),
+		}
+	}
+	return &lockFile{name: name, file: file, identity: identity}, nil
 }
 
 func (l *lockFile) release(beforeRemove, afterRelease func(string) error) (bool, error) {
 	if l == nil {
 		return false, nil
 	}
-	var ownedInfo os.FileInfo
 	var ownershipErr error
 	var closeErr error
 	if l.file != nil {
-		ownedInfo, ownershipErr = l.file.Stat()
+		_, ownershipErr = l.file.Stat()
 		closeErr = l.file.Close()
 	}
 	var beforeRemoveErr error
@@ -598,19 +616,16 @@ func (l *lockFile) release(beforeRemove, afterRelease func(string) error) (bool,
 	var removeErr error
 	ownedAtName := false
 	var identityErr error
-	if beforeRemoveErr == nil && ownershipErr == nil && ownedInfo != nil {
-		currentInfo, statErr := os.Lstat(l.name)
+	if beforeRemoveErr == nil && ownershipErr == nil {
+		state, inspectErr := l.identity.Inspect(l.name)
 		switch {
-		case statErr == nil && os.SameFile(ownedInfo, currentInfo):
+		case inspectErr != nil:
+			identityErr = inspectErr
+		case state == lockidentity.Owned:
 			ownedAtName = true
-		case statErr == nil:
+		case state == lockidentity.Other:
 			identityErr = fmt.Errorf("%w: attachment lock ownership changed before release", ErrBusy)
-		case !errors.Is(statErr, os.ErrNotExist):
-			identityErr = statErr
 		}
-	}
-	if beforeRemoveErr == nil && ownershipErr == nil && ownedInfo == nil {
-		identityErr = fmt.Errorf("%w: attachment lock ownership is unavailable", ErrBusy)
 	}
 	if ownedAtName {
 		removeErr = os.Remove(l.name)
@@ -628,15 +643,14 @@ func (l *lockFile) release(beforeRemove, afterRelease func(string) error) (bool,
 	}
 	residual := false
 	var inspectErr error
-	currentInfo, statErr := os.Lstat(l.name)
-	switch {
-	case statErr == nil && ownedInfo != nil:
-		residual = os.SameFile(ownedInfo, currentInfo)
-	case statErr == nil:
+	state, inspectErr := l.identity.Inspect(l.name)
+	switch state {
+	case lockidentity.Owned:
 		residual = true
-	case !errors.Is(statErr, os.ErrNotExist):
-		residual = true
-		inspectErr = statErr
+	case lockidentity.Other:
+		if inspectErr != nil {
+			residual = true
+		}
 	}
 	var residualErr error
 	if residual {

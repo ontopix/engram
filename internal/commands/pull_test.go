@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,6 +18,7 @@ import (
 	"github.com/ontopix/engram/internal/managedread"
 	"github.com/ontopix/engram/internal/managedwrite"
 	"github.com/ontopix/engram/internal/pullflow"
+	"github.com/ontopix/engram/internal/testpath"
 )
 
 func TestPullCommandFastForwardHasClosedResult(t *testing.T) {
@@ -291,7 +291,7 @@ func commandPullFixture(t *testing.T) (local, remoteWork, registry string) {
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("init bare remote: %v\n%s", err, output)
 	}
-	location := (&url.URL{Scheme: "file", Path: remote}).String()
+	location := testpath.FileURL(remote)
 	managedGit(t, local, "remote", "add", "origin", location)
 	managedGit(t, local, "config", "branch.main.remote", "origin")
 	managedGit(t, local, "config", "branch.main.merge", "refs/heads/main")

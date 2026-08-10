@@ -48,7 +48,11 @@ func (s *Store) Log(ctx context.Context, count int) (*LogResult, error) {
 	if count < 1 || int64(count) > 2147483647 {
 		return nil, fmt.Errorf("log count must be between 1 and 2147483647")
 	}
-	result := &LogResult{Commits: make([]CommitView, 0, count)}
+	// Count is a caller-provided traversal bound, not an estimate of the
+	// history size. In particular, the CLI uses the protocol maximum when no
+	// explicit count is supplied. Grow the result only as commits are read so
+	// a short history with a large bound cannot trigger an enormous allocation.
+	result := &LogResult{Commits: make([]CommitView, 0)}
 	if s.repository.Head == nil {
 		return result, nil
 	}

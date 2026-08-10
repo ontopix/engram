@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -24,6 +23,7 @@ import (
 	"github.com/ontopix/engram/internal/managedread"
 	"github.com/ontopix/engram/internal/managedwrite"
 	"github.com/ontopix/engram/internal/rendezvous"
+	"github.com/ontopix/engram/internal/testpath"
 )
 
 func TestPullFastForwardsOnlyAfterCompleteIncomingAudit(t *testing.T) {
@@ -72,7 +72,7 @@ func TestPullPrivateNetworkContextDefeatsRewriteAfterFinalCheck(t *testing.T) {
 	gitTest(t, fixture.remoteWork, "push", "origin", "main")
 	want := testTip(t, fixture.remoteWork)
 	redirected := filepath.Join(fixture.root, "redirected.git")
-	redirectedURL := (&url.URL{Scheme: "file", Path: redirected}).String()
+	redirectedURL := testpath.FileURL(redirected)
 	puller := New(noopWriter{})
 	puller.afterRewriteCheck = func() {
 		gitTest(t, fixture.local, "config", "url."+redirectedURL+".insteadOf", fixture.remoteURL)
@@ -1303,7 +1303,7 @@ func newPullFixture(t *testing.T) pullFixture {
 	gitTest(t, local, "commit", "--no-verify", "-m", "initial")
 	remote := filepath.Join(root, "remote.git")
 	gitTest(t, root, "init", "--bare", "--initial-branch=main", remote)
-	remoteURL := (&url.URL{Scheme: "file", Path: remote}).String()
+	remoteURL := testpath.FileURL(remote)
 	gitTest(t, local, "remote", "add", "origin", remoteURL)
 	gitTest(t, local, "config", "branch.main.remote", "origin")
 	gitTest(t, local, "config", "branch.main.merge", "refs/heads/main")

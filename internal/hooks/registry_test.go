@@ -6,9 +6,12 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/ontopix/engram/internal/lockidentity"
 )
 
 func TestEmptySetIsTrustedWithoutGrant(t *testing.T) {
@@ -66,14 +69,14 @@ func TestTrustBindsExactSetAndPublishesStablePrivateRegistry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := info.Mode().Perm(); got != 0o600 {
+	if got := info.Mode().Perm(); runtime.GOOS != "windows" && got != 0o600 {
 		t.Fatalf("registry mode = %o, want 600", got)
 	}
 	parentInfo, err := os.Stat(filepath.Dir(registry.Path()))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := parentInfo.Mode().Perm(); got&0o077 != 0 {
+	if got := parentInfo.Mode().Perm(); !safeRegistryDirectoryMode(parentInfo.Mode()) {
 		t.Fatalf("created registry directory mode = %o, want private", got)
 	}
 	document, err := decodeRegistry(content)
@@ -266,7 +269,16 @@ func TestRegistryRejectsCorruptionAndUnsafePermissions(t *testing.T) {
 	t.Run("permissions", func(t *testing.T) {
 		registry, store := registryFixture(t)
 		writeRegistryFixture(t, registry.Path(), []byte("{\"version\":1,\"stores\":[]}\n"), 0o644)
-		if _, err := registry.List(store, EmptySet()); !errors.Is(err, ErrUnsafePermissions) {
+		info, err := os.Stat(registry.Path())
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = registry.List(store, EmptySet())
+		if privateRegistryFileMode(info.Mode()) {
+			if err != nil {
+				t.Fatalf("platform considers permissions safe: %v", err)
+			}
+		} else if !errors.Is(err, ErrUnsafePermissions) {
 			t.Fatalf("error = %v, want ErrUnsafePermissions", err)
 		}
 	})
@@ -458,6 +470,35 @@ func TestRegistryResidualLockWithoutPublicationIsNotDurable(t *testing.T) {
 	effect, ok := EffectOf(err)
 	if !ok || effect.Durable || !effect.RecoveryRequired {
 		t.Fatalf("effect=%#v present=%v error=%v", effect, ok, err)
+	}
+}
+
+func TestRegistryIdentityEstablishFailureLeavesRecoveryRequiredLock(t *testing.T) {
+	t.Parallel()
+	registry, store := registryFixture(t)
+	set := mustSelect(t, map[string][]byte{"10-a.sh": []byte("#!/usr/bin/env sh\n")})
+	fault := errors.New("injected identity establishment failure")
+	registry.establishLockIdentity = func(*os.File) (lockidentity.Identity, error) {
+		return lockidentity.Identity{}, fault
+	}
+
+	selection, err := registry.Trust(store, set)
+	if !errors.Is(err, fault) || selection.Changed || selection.SHA256 != "" || selection.Trusted || selection.Hooks != nil {
+		t.Fatalf("selection=%#v error=%v", selection, err)
+	}
+	effect, ok := EffectOf(err)
+	if !ok || effect.Durable || !effect.RecoveryRequired {
+		t.Fatalf("effect=%#v present=%v error=%v", effect, ok, err)
+	}
+	lockInfo, statErr := os.Lstat(registry.Path() + ".lock")
+	if statErr != nil || !lockInfo.Mode().IsRegular() {
+		t.Fatalf("recovery lock info=%#v error=%v", lockInfo, statErr)
+	}
+	if _, retryErr := acquireRegistryLock(registry.Path() + ".lock"); !errors.Is(retryErr, ErrConcurrent) {
+		t.Fatalf("retry error=%v, want ErrConcurrent", retryErr)
+	}
+	if _, statErr := os.Lstat(registry.Path()); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("registry was published: %v", statErr)
 	}
 }
 
