@@ -128,6 +128,53 @@ func TestParseRejectsInvalidGrammar(t *testing.T) {
 	}
 }
 
+func TestParseUsageFailuresCarryOnlyRelevantHelpContext(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		args      []string
+		wantRoot  bool
+		wantOnly  bool
+		wantGroup string
+		want      CommandName
+	}{
+		{name: "empty invocation", wantRoot: true, wantOnly: true},
+		{name: "missing group subcommand", args: []string{"schema"}, wantGroup: "schema"},
+		{name: "missing command arguments", args: []string{"clone"}, want: CommandClone},
+		{name: "unknown command", args: []string{"wat"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			_, failed := Parse(DefaultModel(), test.args)
+			if failed == nil {
+				t.Fatal("Parse() unexpectedly succeeded")
+			}
+			if test.wantRoot {
+				if failed.Help == nil || failed.Help.Command != nil || failed.Help.Group != "" || failed.HelpOnly != test.wantOnly {
+					t.Fatalf("failure = %#v, want root help context", failed)
+				}
+				return
+			}
+			if test.wantGroup != "" {
+				if failed.Help == nil || failed.Help.Group != test.wantGroup || failed.Help.Command != nil || failed.HelpOnly {
+					t.Fatalf("failure = %#v, want group help %q", failed, test.wantGroup)
+				}
+				return
+			}
+			if test.want != "" {
+				if failed.Help == nil || failed.Help.Command == nil || failed.Help.Command.Name != test.want || failed.HelpOnly {
+					t.Fatalf("failure = %#v, want command help %q", failed, test.want)
+				}
+				return
+			}
+			if failed.Help != nil || failed.HelpOnly {
+				t.Fatalf("failure = %#v, unknown command must not dump root help", failed)
+			}
+		})
+	}
+}
+
 func TestParseDelimiterMakesFollowingOptionsPositional(t *testing.T) {
 	t.Parallel()
 	invocation, failure := Parse(DefaultModel(), []string{"add", "--", "--all"})
@@ -166,5 +213,52 @@ func TestModelHasUniqueCanonicalCommandsAndAliases(t *testing.T) {
 	}
 	if len(commands) != 25 {
 		t.Fatalf("command count = %d, want 25", len(commands))
+	}
+}
+
+func TestHelpMetadataCoversEveryTopLevelAndCanonicalCommand(t *testing.T) {
+	t.Parallel()
+	model := DefaultModel()
+	topLevels := make(map[string]bool)
+	groups := make(map[string]bool)
+	for _, command := range model.Commands {
+		if command.Summary == "" {
+			t.Fatalf("command %q has no help summary", command.Name)
+		}
+		topLevels[command.Path[0]] = true
+		if len(command.Path) > 1 {
+			groups[command.Path[0]] = true
+		}
+	}
+
+	declaredGroups := make(map[string]bool)
+	for _, group := range model.CommandGroups {
+		if group.Name == "" || group.Summary == "" || declaredGroups[group.Name] || !groups[group.Name] {
+			t.Fatalf("invalid command group metadata: %#v", group)
+		}
+		declaredGroups[group.Name] = true
+	}
+	for group := range groups {
+		if !declaredGroups[group] {
+			t.Fatalf("command group %q has no help metadata", group)
+		}
+	}
+
+	covered := make(map[string]bool)
+	for _, category := range model.HelpCategories {
+		if category.Title == "" || len(category.Commands) == 0 {
+			t.Fatalf("invalid help category: %#v", category)
+		}
+		for _, name := range category.Commands {
+			if !topLevels[name] || covered[name] || topLevelSummary(model, name) == "" {
+				t.Fatalf("invalid categorized command %q in %#v", name, category)
+			}
+			covered[name] = true
+		}
+	}
+	for name := range topLevels {
+		if !covered[name] {
+			t.Fatalf("top-level command %q is absent from categorized help", name)
+		}
 	}
 }

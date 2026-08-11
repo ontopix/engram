@@ -87,7 +87,7 @@ func (emptyReader) Read([]byte) (int, error) { return 0, io.EOF }
 func (a *App) Run(ctx context.Context, arguments []string, stdout, stderr io.Writer) int {
 	invocation, parseFailure := Parse(a.Model, arguments)
 	if parseFailure != nil {
-		return writeFailure(stdout, stderr, parseFailure.Globals.Format, parseFailure.Command, parseFailure.Error)
+		return writeParseFailure(stdout, stderr, a.Model, parseFailure)
 	}
 	if invocation.Globals.Help {
 		if writeError := WriteHelp(stdout, a.Model, invocation); writeError != nil {
@@ -148,6 +148,45 @@ func (a *App) Run(ctx context.Context, arguments []string, stdout, stderr io.Wri
 		}
 	}
 	return result.Outcome.ExitStatus()
+}
+
+func writeParseFailure(stdout, stderr io.Writer, model *Model, failed *ParseFailure) int {
+	if failed.Globals.Format == FormatJSON {
+		return writeFailure(stdout, stderr, failed.Globals.Format, failed.Command, failed.Error)
+	}
+	if failed.Help == nil && len(failed.Suggestions) == 0 {
+		return writeFailure(stdout, stderr, failed.Globals.Format, failed.Command, failed.Error)
+	}
+	wroteSection := false
+	if !failed.HelpOnly {
+		fmt.Fprintf(stderr, "engram: %s\n", failed.Error.Message)
+		wroteSection = true
+	}
+	if len(failed.Suggestions) > 0 {
+		if wroteSection {
+			fmt.Fprintln(stderr)
+		}
+		writeSuggestions(stderr, failed.Suggestions)
+		wroteSection = true
+	}
+	if failed.Help != nil {
+		if wroteSection {
+			fmt.Fprintln(stderr)
+		}
+		_ = WriteHelp(stderr, model, failed.Help)
+	}
+	return OutcomeError.ExitStatus()
+}
+
+func writeSuggestions(writer io.Writer, suggestions []string) {
+	if len(suggestions) == 1 {
+		fmt.Fprintf(writer, "Did you mean '%s'?\n", suggestions[0])
+		return
+	}
+	fmt.Fprintln(writer, "Did you mean one of these?")
+	for _, suggestion := range suggestions {
+		fmt.Fprintf(writer, "  %s\n", suggestion)
+	}
 }
 
 func writeFailure(stdout, stderr io.Writer, format OutputFormat, command *CommandName, protocolError *ProtocolError) int {

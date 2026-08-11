@@ -60,9 +60,12 @@ func (i *Invocation) CommandName() *CommandName {
 }
 
 type ParseFailure struct {
-	Command *CommandName
-	Globals GlobalOptions
-	Error   *ProtocolError
+	Command     *CommandName
+	Globals     GlobalOptions
+	Error       *ProtocolError
+	Help        *Invocation
+	HelpOnly    bool
+	Suggestions []string
 }
 
 func Parse(model *Model, arguments []string) (*Invocation, *ParseFailure) {
@@ -90,19 +93,21 @@ func Parse(model *Model, arguments []string) (*Invocation, *ParseFailure) {
 			if option, ok := model.globalOption(token); ok {
 				next, parseError := consumeGlobal(invocation, seenGlobals, option, arguments, index)
 				if parseError != nil {
-					return nil, failure(invocation, parseError)
+					return nil, failureWithHelp(invocation, parseError)
 				}
 				index = next
 				continue
 			}
 			if strings.HasPrefix(token, "-") && token != "-" {
-				return nil, failure(invocation, usageError("unknown global option %q", token))
+				return nil, failureWithHelp(invocation, usageError("unknown global option %q", token))
 			}
 		}
 
 		if len(commandPath) == 0 {
 			if !model.isTopLevel(token) {
-				return nil, failure(invocation, usageError("unknown command %q", token))
+				failed := failure(invocation, usageError("unknown command %q", token))
+				failed.Suggestions = commandSuggestions(model, "", token)
+				return nil, failed
 			}
 			commandPath = append(commandPath, token)
 			explicitCommand = true
@@ -119,7 +124,9 @@ func Parse(model *Model, arguments []string) (*Invocation, *ParseFailure) {
 		index++
 		invocation.Command = model.command(commandPath)
 		if invocation.Command == nil {
-			return nil, failure(invocation, usageError("unknown %s subcommand %q", commandPath[0], token))
+			failed := failureWithHelp(invocation, usageError("unknown %s subcommand %q", commandPath[0], token))
+			failed.Suggestions = commandSuggestions(model, commandPath[0], token)
+			return nil, failed
 		}
 	}
 
@@ -130,9 +137,9 @@ func Parse(model *Model, arguments []string) (*Invocation, *ParseFailure) {
 		case invocation.Globals.Help:
 			return invocation, validateHelp(invocation)
 		case invocation.Group != "":
-			return nil, failure(invocation, usageError("%s requires a subcommand", invocation.Group))
+			return nil, failureWithHelp(invocation, usageError("%s requires a subcommand", invocation.Group))
 		default:
-			return nil, failure(invocation, usageError("a command is required"))
+			return nil, helpOnlyFailure(invocation, usageError("a command is required"))
 		}
 	}
 
@@ -147,7 +154,7 @@ func Parse(model *Model, arguments []string) (*Invocation, *ParseFailure) {
 			if option, ok := invocation.Command.option(token); ok {
 				next, parseError := consumeCommandOption(invocation, option, arguments, index)
 				if parseError != nil {
-					return nil, failure(invocation, parseError)
+					return nil, failureWithHelp(invocation, parseError)
 				}
 				index = next
 				continue
@@ -155,13 +162,13 @@ func Parse(model *Model, arguments []string) (*Invocation, *ParseFailure) {
 			if option, ok := model.globalOption(token); ok {
 				next, parseError := consumeGlobal(invocation, seenGlobals, option, arguments, index)
 				if parseError != nil {
-					return nil, failure(invocation, parseError)
+					return nil, failureWithHelp(invocation, parseError)
 				}
 				index = next
 				continue
 			}
 			if strings.HasPrefix(token, "-") && token != "-" {
-				return nil, failure(invocation, usageError("unknown option %q for %s", token, invocation.Command.Name))
+				return nil, failureWithHelp(invocation, usageError("unknown option %q for %s", token, invocation.Command.Name))
 			}
 		}
 		invocation.Arguments = append(invocation.Arguments, token)
@@ -169,16 +176,16 @@ func Parse(model *Model, arguments []string) (*Invocation, *ParseFailure) {
 	}
 
 	if invocation.Globals.VersionAlias && explicitCommand {
-		return nil, failure(invocation, usageError("--version cannot be combined with another command"))
+		return nil, failureWithHelp(invocation, usageError("--version cannot be combined with another command"))
 	}
 	if invocation.Globals.VersionAlias && invocation.Globals.Help {
-		return nil, failure(invocation, usageError("--version cannot be combined with --help"))
+		return nil, failureWithHelp(invocation, usageError("--version cannot be combined with --help"))
 	}
 	if invocation.Globals.Help {
 		return invocation, validateHelp(invocation)
 	}
 	if parseError := validateInvocation(invocation); parseError != nil {
-		return nil, failure(invocation, parseError)
+		return nil, failureWithHelp(invocation, parseError)
 	}
 	return invocation, nil
 }
@@ -397,6 +404,18 @@ func validatePull(invocation *Invocation) *ProtocolError {
 
 func failure(invocation *Invocation, protocolError *ProtocolError) *ParseFailure {
 	return &ParseFailure{Command: invocation.CommandName(), Globals: invocation.Globals, Error: protocolError}
+}
+
+func failureWithHelp(invocation *Invocation, protocolError *ProtocolError) *ParseFailure {
+	failed := failure(invocation, protocolError)
+	failed.Help = invocation
+	return failed
+}
+
+func helpOnlyFailure(invocation *Invocation, protocolError *ProtocolError) *ParseFailure {
+	failed := failureWithHelp(invocation, protocolError)
+	failed.HelpOnly = true
+	return failed
 }
 
 func (i Invocation) String() string {

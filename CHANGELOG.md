@@ -4,6 +4,11 @@
 
 ### Reference implementation
 
+- Made human CLI discovery follow Git-style conventions: an empty invocation
+  shows root help, root commands are grouped by workflow with short
+  descriptions, group help describes its subcommands, and incomplete known
+  commands print contextual usage. Close command misspellings receive bounded,
+  deterministic suggestions while JSON protocol output remains unchanged.
 - Hardened initialization and clone recovery against concurrent lifecycle,
   target, stage, and publication-plan replacement. Recovery now seals the
   approved plan bytes, binds observations to descriptor-derived physical

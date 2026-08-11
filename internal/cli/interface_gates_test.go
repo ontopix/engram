@@ -95,25 +95,16 @@ func TestInterfaceGateCommandHelpExactBeforeAndAfter(t *testing.T) {
 
 func TestInterfaceGateRootAndGroupHelpExact(t *testing.T) {
 	app := protocolGateApp()
-	root := "Usage:\n" +
-		"  engram [GLOBAL-OPTIONS] COMMAND [ARGS]\n\n" +
-		"Commands:\n" +
-		"  init\n  clone\n  attach\n  detach\n  status\n  diff\n  log\n  add\n  check\n  fmt\n  new\n  mv\n" +
-		"  schema\n  commit\n  revert\n  hooks\n  doctor\n  pull\n  push\n  version\n\n" +
-		"Global options:\n" +
-		"  -s, --store PATH\n      --format text|json\n      --no-color\n  -q, --quiet\n  -h, --help\n  -V, --version\n"
-	schema := "Usage:\n  engram schema COMMAND [ARGS]\n\nCommands:\n  inventory\n  list\n  show\n  copy\n"
-	hooks := "Usage:\n  engram hooks COMMAND [ARGS]\n\nCommands:\n  list\n  trust\n  revoke\n"
 	tests := []struct {
 		name string
 		args []string
 		want string
 	}{
-		{"root", []string{"--quiet", "--no-color", "--help"}, root},
-		{"schema before", []string{"--help", "schema"}, schema},
-		{"schema after", []string{"schema", "--help"}, schema},
-		{"hooks before", []string{"--help", "hooks"}, hooks},
-		{"hooks after", []string{"hooks", "--help"}, hooks},
+		{"root", []string{"--quiet", "--no-color", "--help"}, rootHelpGolden},
+		{"schema before", []string{"--help", "schema"}, schemaHelpGolden},
+		{"schema after", []string{"schema", "--help"}, schemaHelpGolden},
+		{"hooks before", []string{"--help", "hooks"}, hooksHelpGolden},
+		{"hooks after", []string{"hooks", "--help"}, hooksHelpGolden},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -122,6 +113,60 @@ func TestInterfaceGateRootAndGroupHelpExact(t *testing.T) {
 		})
 	}
 }
+
+const rootHelpGolden = "Usage:\n" +
+	"  engram [GLOBAL-OPTIONS] COMMAND [ARGS]\n\n" +
+	"These are the engram commands grouped by workflow:\n\n" +
+	"Create and obtain stores:\n" +
+	"  init     Create or initialize a managed store\n" +
+	"  clone    Clone a managed store into a new directory\n" +
+	"  attach   Attach a store to an agent project\n" +
+	"  detach   Detach a store from an agent project\n\n" +
+	"Inspect state:\n" +
+	"  status   Show working draft and initial candidate status\n" +
+	"  diff     Show changes between store states\n" +
+	"  log      Show accepted store history\n" +
+	"  check    Validate a snapshot, candidate, or transition\n\n" +
+	"Work on the current draft:\n" +
+	"  add      Add working draft changes to the initial candidate\n" +
+	"  fmt      Regenerate catalog marker regions\n" +
+	"  new      Create one typed record and update its catalog\n" +
+	"  mv       Move one record and preserve link meaning\n" +
+	"  schema   Inspect and copy schemas\n\n" +
+	"Accept and undo changes:\n" +
+	"  commit   Prepare, validate, and accept the initial candidate\n" +
+	"  revert   Revert an accepted commit through a new transaction\n\n" +
+	"Manage hooks and trust:\n" +
+	"  hooks    Inspect and manage preparation-hook trust\n\n" +
+	"Synchronize repositories:\n" +
+	"  pull     Synchronize accepted history from a remote\n" +
+	"  push     Publish accepted history to a remote\n\n" +
+	"Diagnose and inspect runtime:\n" +
+	"  doctor   Diagnose integration and recovery state\n" +
+	"  version  Show CLI and specification compatibility\n\n" +
+	"Global options:\n" +
+	"  -s, --store PATH       Select a store root\n" +
+	"      --format FORMAT    Set output format: text or json\n" +
+	"      --no-color         Disable ANSI styling\n" +
+	"  -q, --quiet            Suppress ordinary successful text\n" +
+	"  -h, --help             Show help\n" +
+	"  -V, --version          Show CLI version\n\n" +
+	"Run 'engram COMMAND --help' for more information on a command.\n"
+
+const schemaHelpGolden = "Usage:\n  engram schema COMMAND [ARGS]\n\n" +
+	"Commands:\n" +
+	"  inventory  List schemas bundled with the CLI\n" +
+	"  list       List schemas visible at a content path\n" +
+	"  show       Show one resolved local schema\n" +
+	"  copy       Copy one bundled schema into a store\n\n" +
+	"Run 'engram schema COMMAND --help' for more information on a command.\n"
+
+const hooksHelpGolden = "Usage:\n  engram hooks COMMAND [ARGS]\n\n" +
+	"Commands:\n" +
+	"  list    List hooks and their local trust state\n" +
+	"  trust   Trust one complete selected hook set\n" +
+	"  revoke  Revoke hook trust grants\n\n" +
+	"Run 'engram hooks COMMAND --help' for more information on a command.\n"
 
 func TestInterfaceGateGlobalOptionsBeforeAndAfterEveryCommand(t *testing.T) {
 	model := DefaultModel()
@@ -293,13 +338,19 @@ func TestInterfaceGateRepresentativeErrorsHaveExactBytes(t *testing.T) {
 		wantStdout string
 		wantStderr string
 	}{
-		{"missing command text", nil, "", "engram: a command is required\n"},
+		{"missing command text", nil, "", rootHelpGolden},
+		{"missing group subcommand text", []string{"schema"}, "", "engram: schema requires a subcommand\n\n" + schemaHelpGolden},
+		{"missing command arguments text", []string{"clone"}, "", "engram: clone requires URL\n\nUsage:\n  engram clone URL [PATH]\n"},
+		{"missing command arguments JSON", []string{"clone", "--format", "json"}, "{\"version\":1,\"command\":\"clone\",\"outcome\":\"error\",\"exit_status\":2,\"result\":{},\"error\":{\"kind\":\"usage\",\"message\":\"clone requires URL\"}}\n", ""},
+		{"unknown command text suggestion", []string{"statsu"}, "", "engram: unknown command \"statsu\"\n\nDid you mean 'status'?\n"},
+		{"unknown command text without suggestion", []string{"wat"}, "", "engram: unknown command \"wat\"\n"},
+		{"unknown group subcommand text", []string{"schema", "shwo"}, "", "engram: unknown schema subcommand \"shwo\"\n\nDid you mean 'show'?\n\n" + schemaHelpGolden},
 		{"unknown command JSON", []string{"--format", "json", "wat"}, "{\"version\":1,\"command\":null,\"outcome\":\"error\",\"exit_status\":2,\"result\":{},\"error\":{\"kind\":\"usage\",\"message\":\"unknown command \\\"wat\\\"\"}}\n", ""},
 		{"known command JSON", []string{"status", "extra", "--format", "json"}, "{\"version\":1,\"command\":\"status\",\"outcome\":\"error\",\"exit_status\":2,\"result\":{},\"error\":{\"kind\":\"usage\",\"message\":\"too many arguments for status\"}}\n", ""},
 		{"JSON help", []string{"status", "--help", "--format", "json"}, "{\"version\":1,\"command\":\"status\",\"outcome\":\"error\",\"exit_status\":2,\"result\":{},\"error\":{\"kind\":\"usage\",\"message\":\"JSON help is not part of protocol v1\"}}\n", ""},
 		{"forbidden store JSON", []string{"version", "--store", "memory", "--format", "json"}, "{\"version\":1,\"command\":\"version\",\"outcome\":\"error\",\"exit_status\":2,\"result\":{},\"error\":{\"kind\":\"usage\",\"message\":\"--store is not accepted by version\"}}\n", ""},
-		{"duplicate global text", []string{"--quiet", "status", "--quiet"}, "", "engram: global option --quiet cannot be repeated\n"},
-		{"unknown option text", []string{"status", "--wat"}, "", "engram: unknown option \"--wat\" for status\n"},
+		{"duplicate global text", []string{"--quiet", "status", "--quiet"}, "", "engram: global option --quiet cannot be repeated\n\nUsage:\n  engram status\n"},
+		{"unknown option text", []string{"status", "--wat"}, "", "engram: unknown option \"--wat\" for status\n\nUsage:\n  engram status\n"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

@@ -85,7 +85,7 @@ func TestAppRootHelp(t *testing.T) {
 	app := NewApp()
 	var stdout, stderr bytes.Buffer
 	status := app.Run(context.Background(), []string{"--help"}, &stdout, &stderr)
-	if status != 0 || stderr.Len() != 0 || !strings.Contains(stdout.String(), "Commands:") {
+	if status != 0 || stderr.Len() != 0 || !strings.Contains(stdout.String(), "commands grouped by workflow") {
 		t.Fatalf("status = %d, stdout = %q, stderr = %q", status, stdout.String(), stderr.String())
 	}
 }

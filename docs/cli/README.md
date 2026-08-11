@@ -2,7 +2,7 @@
 
 **Version:** v1
 **Status:** Draft
-**Revision:** 2026-08-09
+**Revision:** 2026-08-11
 **Normative status:** Non-normative with respect to the engram standard
 
 This document defines the observable contract of the reference `engram`
@@ -91,6 +91,33 @@ GLOBAL-OPTIONS
   -h, --help             Show help
   -V, --version          Show CLI version
 ```
+
+Root help groups commands by workflow and gives each top-level command a short
+description:
+
+| Help category | Commands |
+|---|---|
+| Create and obtain stores | `init`, `clone`, `attach`, `detach` |
+| Inspect state | `status`, `diff`, `log`, `check` |
+| Work on the current draft | `add`, `fmt`, `new`, `mv`, `schema` |
+| Accept and undo changes | `commit`, `revert` |
+| Manage hooks and trust | `hooks` |
+| Synchronize repositories | `pull`, `push` |
+| Diagnose and inspect runtime | `doctor`, `version` |
+
+In human text mode, invoking `engram` without a command writes the same root
+help as `engram --help` to standard error and exits `2`; explicit help writes
+to standard output and exits `0`. A recognized command with invalid or
+incomplete grammar writes its usage error followed by that command's help. A
+recognized group without a valid subcommand writes its group help, including
+descriptions of the available subcommands. An unrecognized top-level command
+remains a concise usage error rather than dumping the full help screen. A
+close misspelling of a top-level command or group subcommand also receives a
+deterministic `Did you mean ...?` suggestion.
+
+These contextual help additions are human presentation only. JSON mode always
+emits the protocol v1 error envelope without help prose, including when no
+command or a required argument is missing.
 
 Global options may appear before or after the command, before an explicit
 `--`. Command options appear after the command. Unknown options, duplicate
