@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "obligations": [
+    {"id":"attachment.alias-binding","area":"attachment","evidence":[{"file":"internal/attachment/block_test.go","test":"TestDuplicatePhysicalIdentityIsRejected"}]},
+    {"id":"attachment.concurrent-update","area":"attachment","evidence":[{"file":"internal/attachment/block_test.go","test":"TestCooperatingLockRejectsConcurrentUpdate"}]},
+    {"id":"attachment.malformed-block","area":"attachment","evidence":[{"file":"internal/attachment/block_test.go","test":"TestMalformedOwnedBlockIsNeverRepaired"}]},
+    {"id":"attachment.roundtrip-preservation","area":"attachment","evidence":[{"file":"internal/attachment/block_test.go","test":"TestAttachDetachPreserveSurroundingBytes"}]},
+    {"id":"executor.base-immutability","area":"executor","evidence":[{"file":"internal/hookexec/executor_test.go","test":"TestPrepareRejectsBaseTampering"}]},
+    {"id":"executor.candidate-capture","area":"executor","evidence":[{"file":"internal/hookexec/executor_test.go","test":"TestPrepareDetectsCandidateChangeDuringPrivateCapture"}]},
+    {"id":"executor.closed-protocol-order","area":"executor","evidence":[{"file":"internal/hookexec/executor_test.go","test":"TestPrepareRunsCompleteSetInOrderWithClosedProtocolAndChainedCandidate"}]},
+    {"id":"executor.resource-bounds","area":"executor","evidence":[{"file":"internal/hookexec/executor_test.go","test":"TestPrepareRejectsNonzeroExitWithBoundedDiagnostics"},{"file":"internal/hookexec/executor_test.go","test":"TestPrepareBoundsHookWallTime"}]},
+    {"id":"executor.trust-before-execution","area":"executor","evidence":[{"file":"internal/hookexec/executor_test.go","test":"TestPrepareRejectsUntrustedSetBeforeExecution"},{"file":"internal/hooks/registry_test.go","test":"TestTrustBindsExactSetAndPublishesStablePrivateRegistry"}]},
+    {"id":"synchronizer.clone-private-verification","area":"synchronizer","evidence":[{"file":"internal/acquire/clone_test.go","test":"TestClonePublishesOnlyVerifiedManagedStore"},{"file":"internal/acquire/clone_test.go","test":"TestCloneDoesNotPublishInvalidAcceptedHistory"}]},
+    {"id":"synchronizer.pull-conflict-abort","area":"synchronizer","evidence":[{"file":"internal/pullflow/pull_test.go","test":"TestPullDivergentConflictLeavesExactActiveStateAndAbortRestores"}]},
+    {"id":"synchronizer.pull-fast-forward-audit","area":"synchronizer","evidence":[{"file":"internal/pullflow/pull_test.go","test":"TestPullFastForwardsOnlyAfterCompleteIncomingAudit"}]},
+    {"id":"synchronizer.pull-recovery","area":"synchronizer","evidence":[{"file":"internal/pullflow/pull_test.go","test":"TestPullFastForwardInterruptionRetainsAndRecoversExactTransition"},{"file":"internal/pullflow/pull_test.go","test":"TestPullRecoveryCancelsPreparedPreJournalTransition"}]},
+    {"id":"synchronizer.pull-replay-oldest-first","area":"synchronizer","evidence":[{"file":"internal/pullflow/pull_test.go","test":"TestPullReplaysNonConflictingLocalCommitsOldestFirst"}]},
+    {"id":"synchronizer.push-conditional","area":"synchronizer","evidence":[{"file":"internal/syncflow/push_test.go","test":"TestPushCreatesThenObservesAndAdvancesExactRemoteBranch"},{"file":"internal/syncflow/push_test.go","test":"TestPushClassifiesConditionalUpdateRaceWithoutRetry"}]},
+    {"id":"synchronizer.push-indeterminate-outcome","area":"synchronizer","evidence":[{"file":"internal/syncflow/push_test.go","test":"TestPushDistinguishesRemoteRejectionNetworkFailureAndIndeterminate"}]},
+    {"id":"synchronizer.push-network-boundary","area":"synchronizer","evidence":[{"file":"internal/syncflow/push_test.go","test":"TestPushRejectsInvalidAuditBeforeAnyNetworkCommand"},{"file":"internal/syncflow/push_test.go","test":"TestPushBlocksRepositoryURLRewritesBeforeNetwork"}]},
+    {"id":"writer.concurrent-input","area":"writer","evidence":[{"file":"internal/managedwrite/managedwrite_test.go","test":"TestCommitRejectsFinalInputRaces"}]},
+    {"id":"writer.dry-run-no-mutation","area":"writer","evidence":[{"file":"internal/managedwrite/managedwrite_test.go","test":"TestCommitDryRunHasNoPersistentEffectsAndNeedsNoGuardOrMessage"}]},
+    {"id":"writer.final-candidate-hook-once","area":"writer","evidence":[{"file":"internal/managedwrite/managedwrite_test.go","test":"TestCommitRunsPreparationExactlyOnceAndSuppressesNativeHooksAndGitEnvironment"}]},
+    {"id":"writer.init-atomic-publication","area":"writer","evidence":[{"file":"internal/initialize/initialize_test.go","test":"TestInitializeAbsentTargetPublishesOneVerifiedRootCommit"},{"file":"internal/initialize/initialize_test.go","test":"TestRecoverInitializationAtPublicationBoundaries"}]},
+    {"id":"writer.preserve-unrelated-drafts","area":"writer","evidence":[{"file":"internal/managedwrite/managedwrite_test.go","test":"TestCommitPreservesUnstagedAndUntrackedPathsOutsideCandidate"}]},
+    {"id":"writer.recovery-boundaries","area":"writer","evidence":[{"file":"internal/managedwrite/managedwrite_test.go","test":"TestEveryAcceptanceBoundaryHasCrashSafeOutcome"}]},
+    {"id":"writer.ref-cas-ambiguity","area":"writer","evidence":[{"file":"internal/managedwrite/managedwrite_test.go","test":"TestRecoverPendingOldRemainsBlocked"}]},
+    {"id":"writer.revert-inverse","area":"writer","evidence":[{"file":"internal/commands/acceptance_test.go","test":"TestRevertCommandCreatesInverseCommitWithDefaultMessage"},{"file":"internal/commands/acceptance_test.go","test":"TestRevertConflictReportsAllPathsAndChangesNothing"}]},
+    {"id":"writer.sha1-sha256","area":"writer","evidence":[{"file":"internal/managedwrite/managedwrite_test.go","test":"TestCommitRealAcrossObjectFormats"}]}
+  ]
+}

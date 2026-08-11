@@ -2,6 +2,9 @@
 
 Non-normative fixture format. `cases.json` is the machine-readable seed
 corpus for behavior that must not depend on host or library defaults.
+`procedures.json` is the closed coverage index for writer, executor,
+attachment, and synchronizer obligations; its evidence entries are verified
+against real test declarations.
 
 ## Fixture materialization
 

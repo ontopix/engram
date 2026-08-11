@@ -279,6 +279,196 @@
       }
     },
     {
+      "id": "changeset-causal-base-record-finding",
+      "description": "Changing a base record whose frontmatter is unavailable emits its causal E201 and makes the transition indeterminate.",
+      "kind": "changeset",
+      "base": {
+        "operations": [
+          {
+            "operation": "write_text",
+            "path": "causal.md",
+            "source": "testdata/conformance/files/invalid-record.md"
+          }
+        ]
+      },
+      "candidate": {
+        "operations": []
+      },
+      "expected": {
+        "status": "indeterminate",
+        "findings": [
+          {"code": "E201", "path": "causal.md"}
+        ]
+      }
+    },
+    {
+      "id": "changeset-causal-base-schema-finding",
+      "description": "Changing a schema whose base components are unavailable emits its causal E303 and makes E504 indeterminate.",
+      "kind": "changeset",
+      "base": {
+        "operations": [
+          {
+            "operation": "write_text",
+            "path": ".engram/schemas/evolving.md",
+            "source": "testdata/conformance/files/invalid-record.md"
+          }
+        ]
+      },
+      "candidate": {
+        "operations": [
+          {
+            "operation": "write_text",
+            "path": ".engram/schemas/evolving.md",
+            "source": "testdata/conformance/files/schema-version-candidate.md"
+          }
+        ]
+      },
+      "expected": {
+        "status": "indeterminate",
+        "findings": [
+          {"code": "E303", "path": ".engram/schemas/evolving.md"}
+        ]
+      }
+    },
+    {
+      "id": "changeset-causal-base-record-schema-finding",
+      "description": "Deleting a record whose selected base schema is unparsable emits the schema's causal E303 and makes its policy check indeterminate.",
+      "kind": "changeset",
+      "base": {
+        "operations": [
+          {
+            "operation": "write_text",
+            "path": ".engram/schemas/fixed.md",
+            "source": "testdata/conformance/files/invalid-record.md"
+          },
+          {
+            "operation": "write_text",
+            "path": "fixed.md",
+            "source": "testdata/conformance/files/immutable-record.md"
+          }
+        ]
+      },
+      "candidate": {
+        "operations": []
+      },
+      "expected": {
+        "status": "indeterminate",
+        "findings": [
+          {"code": "E303", "path": ".engram/schemas/fixed.md"}
+        ]
+      }
+    },
+    {
+      "id": "changeset-base-noncausal-findings-omitted",
+      "description": "Repairing a base description defect does not union unrelated E204 or E301 findings when policy inputs remain available.",
+      "kind": "changeset",
+      "base": {
+        "operations": [
+          {
+            "operation": "write_text",
+            "path": "repair.md",
+            "source": "testdata/conformance/files/bad-description.md"
+          }
+        ]
+      },
+      "candidate": {
+        "operations": [
+          {
+            "operation": "write_text",
+            "path": "repair.md",
+            "source": "testdata/conformance/files/removed-target.md"
+          }
+        ]
+      },
+      "expected": {
+        "status": "complete",
+        "findings": [],
+        "not_findings": ["E204", "E301"]
+      }
+    },
+    {
+      "id": "changeset-causal-base-preflight-finding",
+      "description": "A base boundary failure emits its causal E103 before changeset construction and makes the transition indeterminate.",
+      "kind": "changeset",
+      "base": {
+        "operations": [
+          {
+            "operation": "write_symlink",
+            "path": "escape",
+            "target": "README.md"
+          }
+        ]
+      },
+      "candidate": {
+        "operations": []
+      },
+      "expected": {
+        "status": "indeterminate",
+        "findings": [
+          {"code": "E103", "path": "escape"}
+        ]
+      }
+    },
+    {
+      "id": "changeset-causal-findings-deduplicate",
+      "description": "The same preflight identity in candidate and required-base evaluation is emitted once.",
+      "kind": "changeset",
+      "base": {
+        "operations": [
+          {
+            "operation": "write_symlink",
+            "path": "escape",
+            "target": "README.md"
+          }
+        ]
+      },
+      "candidate": {
+        "operations": [
+          {
+            "operation": "write_symlink",
+            "path": "escape",
+            "target": "README.md"
+          }
+        ]
+      },
+      "expected": {
+        "status": "indeterminate",
+        "findings": [
+          {"code": "E103", "path": "escape"}
+        ]
+      }
+    },
+    {
+      "id": "changeset-causal-findings-use-normative-order",
+      "description": "Candidate and causal base findings are merged in UTF-8 path order rather than evaluation order.",
+      "kind": "changeset",
+      "base": {
+        "operations": [
+          {
+            "operation": "write_text",
+            "path": "z-causal.md",
+            "source": "testdata/conformance/files/invalid-record.md"
+          }
+        ]
+      },
+      "candidate": {
+        "operations": [
+          {
+            "operation": "write_text",
+            "path": "a-candidate.md",
+            "source": "testdata/conformance/files/invalid-record.md"
+          }
+        ]
+      },
+      "expected": {
+        "status": "indeterminate",
+        "findings": [
+          {"code": "E201", "path": "a-candidate.md"},
+          {"code": "E201", "path": "z-causal.md"}
+        ]
+      }
+    },
+    {
       "id": "nfd-entry-name",
       "description": "A decomposed entry name produces E107 at the containing directory and is pruned.",
       "kind": "snapshot",
@@ -353,6 +543,694 @@
       "expected": {
         "status": "indeterminate",
         "findings": []
+      }
+    },
+    {
+      "id": "structure-directory-without-readme",
+      "description": "A traversed content directory without its map produces E101 at the required README path.",
+      "kind": "snapshot",
+      "snapshot": {
+        "operations": [
+          {
+            "operation": "write_base64",
+            "path": "orphan/asset.bin",
+            "content": ""
+          }
+        ]
+      },
+      "expected": {
+        "findings": [
+          {"code": "E101", "path": "orphan/README.md"}
+        ]
+      }
+    },
+    {
+      "id": "structure-nested-root",
+      "description": "A root marker below a traversed content directory produces E102 at that marker.",
+      "kind": "snapshot",
+      "snapshot": {
+        "operations": [
+          {
+            "operation": "write_text",
+            "path": "nested/README.md",
+            "source": "testdata/conformance/files/root-catalog-none.md"
+          },
+          {
+            "operation": "write_text",
+            "path": "nested/.engram/root.yaml",
+            "source": "examples/minimal/.engram/root.yaml"
+          }
+        ]
+      },
+      "expected": {
+        "findings": [
+          {"code": "E102", "path": "nested/.engram/root.yaml"}
+        ]
+      }
+    },
+    {
+      "id": "changeset-nested-root-is-repairable-static-input",
+      "description": "A nested root is a complete changeset result with E102 rather than a preflight-indeterminate transition.",
+      "kind": "changeset",
+      "base": {
+        "operations": []
+      },
+      "candidate": {
+        "operations": [
+          {
+            "operation": "write_text",
+            "path": "topics/.engram/root.yaml",
+            "source": "examples/minimal/.engram/root.yaml"
+          }
+        ]
+      },
+      "expected": {
+        "status": "complete",
+        "findings": [
+          {"code": "E102", "path": "topics/.engram/root.yaml"}
+        ]
+      }
+    },
+    {
+      "id": "structure-symbolic-link",
+      "description": "A symbolic link at a valid content boundary produces E103 without following its target.",
+      "kind": "snapshot",
+      "snapshot": {
+        "operations": [
+          {
+            "operation": "write_symlink",
+            "path": "link.md",
+            "target": "missing-target"
+          }
+        ]
+      },
+      "expected": {
+        "findings": [
+          {"code": "E103", "path": "link.md"}
+        ]
+      }
+    },
+    {
+      "id": "structure-wrong-kind",
+      "description": "A regular file at the root cache boundary produces E104.",
+      "kind": "snapshot",
+      "snapshot": {
+        "operations": [
+          {
+            "operation": "write_base64",
+            "path": ".engram/cache",
+            "content": ""
+          }
+        ]
+      },
+      "expected": {
+        "findings": [
+          {"code": "E104", "path": ".engram/cache"}
+        ]
+      }
+    },
+    {
+      "id": "structure-missing-root-manifest",
+      "description": "Removing the required root marker produces E105 at its required path.",
+      "kind": "snapshot",
+      "snapshot": {
+        "operations": [
+          {
+            "operation": "remove",
+            "path": ".engram/root.yaml"
+          }
+        ]
+      },
+      "expected": {
+        "findings": [
+          {"code": "E105", "path": ".engram/root.yaml"}
+        ]
+      }
+    },
+    {
+      "id": "structure-root-only-boundary",
+      "description": "A hooks boundary below the store root produces E109 before kind inspection.",
+      "kind": "snapshot",
+      "snapshot": {
+        "operations": [
+          {
+            "operation": "write_text",
+            "path": "nested/README.md",
+            "source": "testdata/conformance/files/root-catalog-none.md"
+          },
+          {
+            "operation": "write_base64",
+            "path": "nested/.engram/hooks",
+            "content": ""
+          }
+        ]
+      },
+      "expected": {
+        "findings": [
+          {"code": "E109", "path": "nested/.engram/hooks"}
+        ]
+      }
+    },
+    {
+      "id": "structure-nested-git",
+      "description": "A literal Git boundary below the snapshot root produces E110.",
+      "kind": "snapshot",
+      "snapshot": {
+        "operations": [
+          {
+            "operation": "write_text",
+            "path": "nested/README.md",
+            "source": "testdata/conformance/files/root-catalog-none.md"
+          },
+          {
+            "operation": "write_base64",
+            "path": "nested/.git",
+            "content": ""
+          }
+        ]
+      },
+      "expected": {
+        "findings": [
+          {"code": "E110", "path": "nested/.git"}
+        ]
+      }
+    },
+    {
+      "id": "record-frontmatter-missing",
+      "description": "A markdown record without frontmatter produces E201.",
+      "kind": "snapshot",
+      "snapshot": {
+        "operations": [
+          {
+            "operation": "write_text",
+            "path": "invalid-record.md",
+            "source": "testdata/conformance/files/invalid-record.md"
+          }
+        ]
+      },
+      "expected": {
+        "findings": [
+          {"code": "E201", "path": "invalid-record.md"}
+        ]
+      }
+    },
+    {
+      "id": "record-type-unresolved",
+      "description": "A valid type slug with no visible schema produces E203.",
+      "kind": "snapshot",
+      "snapshot": {
+        "operations": [
+          {
+            "operation": "write_text",
+            "path": "unknown-type.md",
+            "source": "testdata/conformance/files/unknown-type-record.md"
+          }
+        ]
+      },
+      "expected": {
+        "findings": [
+          {"code": "E203", "path": "unknown-type.md"}
+        ]
+      }
+    },
+    {
+      "id": "record-reserved-key",
+      "description": "A top-level record key with the reserved engram prefix produces E205.",
+      "kind": "snapshot",
+      "snapshot": {
+        "operations": [
+          {
+            "operation": "write_text",
+            "path": "reserved-key.md",
+            "source": "testdata/conformance/files/reserved-key-record.md"
+          }
+        ]
+      },
+      "expected": {
+        "findings": [
+          {"code": "E205", "path": "reserved-key.md"}
+        ]
+      }
+    },
+    {
+      "id": "map-description-invalid",
+      "description": "An empty README description produces E206.",
+      "kind": "snapshot",
+      "snapshot": {
+        "operations": [
+          {
+            "operation": "write_text",
+            "path": "README.md",
+            "source": "testdata/conformance/files/readme-invalid-description.md"
+          }
+        ]
+      },
+      "expected": {
+        "findings": [
+          {"code": "E206", "path": "README.md"}
+        ]
+      }
+    },
+    {
+      "id": "map-catalog-invalid",
+      "description": "An unrecognized README catalog mode produces E207.",
+      "kind": "snapshot",
+      "snapshot": {
+        "operations": [
+          {
+            "operation": "write_text",
+            "path": "README.md",
+            "source": "testdata/conformance/files/readme-invalid-catalog.md"
+          }
+        ]
+      },
+      "expected": {
+        "findings": [
+          {"code": "E207", "path": "README.md"}
+        ]
+      }
+    },
+    {
+      "id": "record-pinned-invalid",
+      "description": "A non-boolean universal pinned label produces E208 independently of schema validation.",
+      "kind": "snapshot",
+      "snapshot": {
+        "operations": [
+          {
+            "operation": "write_text",
+            "path": ".engram/schemas/loose.md",
+            "source": "testdata/conformance/files/loose-schema.md"
+          },
+          {
+            "operation": "write_text",
+            "path": "invalid-pinned.md",
+            "source": "testdata/conformance/files/invalid-pinned-record.md"
+          }
+        ]
+      },
+      "expected": {
+        "findings": [
+          {"code": "E208", "path": "invalid-pinned.md"}
+        ]
+      }
+    },
+    {
+      "id": "record-required-section",
+      "description": "A record body missing its schema-required level-two heading produces E302.",
+      "kind": "snapshot",
+      "snapshot": {
+        "operations": [
+          {
+            "operation": "write_text",
+            "path": ".engram/schemas/decision.md",
+            "source": "testdata/conformance/files/required-section-schema.md"
+          },
+          {
+            "operation": "write_text",
+            "path": "missing-section.md",
+            "source": "testdata/conformance/files/missing-section-record.md"
+          }
+        ]
+      },
+      "expected": {
+        "findings": [
+          {"code": "E302", "path": "missing-section.md"}
+        ]
+      }
+    },
+    {
+      "id": "schema-shadowing",
+      "description": "A valid nested note schema reusing an ancestor filename produces E304 at the nearer file.",
+      "kind": "snapshot",
+      "snapshot": {
+        "operations": [
+          {
+            "operation": "write_text",
+            "path": "area/README.md",
+            "source": "testdata/conformance/files/root-catalog-none.md"
+          },
+          {
+            "operation": "write_text",
+            "path": "area/.engram/schemas/note.md",
+            "source": "examples/minimal/.engram/schemas/note.md"
+          }
+        ]
+      },
+      "expected": {
+        "findings": [
+          {"code": "E304", "path": "area/.engram/schemas/note.md"}
+        ]
+      }
+    },
+    {
+      "id": "schema-shadowing-unparsable-content",
+      "description": "An unparsable nearer schema still shadows the ancestor candidate and emits E303 plus E304.",
+      "kind": "snapshot",
+      "snapshot": {
+        "operations": [
+          {
+            "operation": "write_text",
+            "path": "area/README.md",
+            "source": "testdata/conformance/files/root-catalog-none.md"
+          },
+          {
+            "operation": "write_text",
+            "path": "area/.engram/schemas/note.md",
+            "source": "testdata/conformance/files/invalid-record.md"
+          }
+        ]
+      },
+      "expected": {
+        "findings": [
+          {"code": "E303", "path": "area/.engram/schemas/note.md"},
+          {"code": "E304", "path": "area/.engram/schemas/note.md"}
+        ]
+      }
+    },
+    {
+      "id": "schema-shadowing-invalid-utf8",
+      "description": "A nearer schema with invalid text still shadows the ancestor candidate and emits E108 plus E304.",
+      "kind": "snapshot",
+      "snapshot": {
+        "operations": [
+          {
+            "operation": "write_text",
+            "path": "area/README.md",
+            "source": "testdata/conformance/files/root-catalog-none.md"
+          },
+          {
+            "operation": "write_base64",
+            "path": "area/.engram/schemas/note.md",
+            "content": "/w=="
+          }
+        ]
+      },
+      "expected": {
+        "findings": [
+          {"code": "E108", "path": "area/.engram/schemas/note.md"},
+          {"code": "E304", "path": "area/.engram/schemas/note.md"}
+        ]
+      }
+    },
+    {
+      "id": "schema-invalid-content-without-shadowing",
+      "description": "An unparsable uniquely named schema emits E303 without a false E304.",
+      "kind": "snapshot",
+      "snapshot": {
+        "operations": [
+          {
+            "operation": "write_text",
+            "path": "area/README.md",
+            "source": "testdata/conformance/files/root-catalog-none.md"
+          },
+          {
+            "operation": "write_text",
+            "path": "area/.engram/schemas/broken.md",
+            "source": "testdata/conformance/files/invalid-record.md"
+          }
+        ]
+      },
+      "expected": {
+        "findings": [
+          {"code": "E303", "path": "area/.engram/schemas/broken.md"}
+        ],
+        "not_findings": ["E304"]
+      }
+    },
+    {
+      "id": "schema-closed-universal",
+      "description": "A closed schema omitting a direct universal property declaration produces E305.",
+      "kind": "snapshot",
+      "snapshot": {
+        "operations": [
+          {
+            "operation": "write_text",
+            "path": ".engram/schemas/closed.md",
+            "source": "testdata/conformance/files/closed-schema.md"
+          }
+        ]
+      },
+      "expected": {
+        "findings": [
+          {"code": "E305", "path": ".engram/schemas/closed.md"}
+        ]
+      }
+    },
+    {
+      "id": "schema-conflicting-policy",
+      "description": "A schema enabling immutable and append-only together produces E306.",
+      "kind": "snapshot",
+      "snapshot": {
+        "operations": [
+          {
+            "operation": "write_text",
+            "path": ".engram/schemas/conflicted.md",
+            "source": "testdata/conformance/files/conflicting-policy-schema.md"
+          }
+        ]
+      },
+      "expected": {
+        "findings": [
+          {"code": "E306", "path": ".engram/schemas/conflicted.md"}
+        ]
+      }
+    },
+    {
+      "id": "hook-interpreter-invalid",
+      "description": "A valid hook filename whose first line is not an interpreter declaration produces E308 at the program.",
+      "kind": "snapshot",
+      "snapshot": {
+        "operations": [
+          {
+            "operation": "write_text",
+            "path": ".engram/hooks/prepare-changeset/10-invalid",
+            "source": "testdata/conformance/files/invalid-hook.txt"
+          }
+        ]
+      },
+      "expected": {
+        "findings": [
+          {"code": "E308", "path": ".engram/hooks/prepare-changeset/10-invalid"}
+        ]
+      }
+    },
+    {
+      "id": "typed-link-type-mismatch",
+      "description": "An existing typed-link target whose record type is not admitted produces E402 at the source.",
+      "kind": "snapshot",
+      "snapshot": {
+        "operations": [
+          {
+            "operation": "write_text",
+            "path": ".engram/schemas/typed-link.md",
+            "source": "testdata/conformance/files/typed-link-schema.md"
+          },
+          {
+            "operation": "write_text",
+            "path": "link-target.md",
+            "source": "testdata/conformance/files/link-target.md"
+          },
+          {
+            "operation": "write_text",
+            "path": "typed-link-source.md",
+            "source": "testdata/conformance/files/typed-link-source.md"
+          }
+        ]
+      },
+      "expected": {
+        "findings": [
+          {"code": "E402", "path": "typed-link-source.md"}
+        ]
+      }
+    },
+    {
+      "id": "local-link-missing",
+      "description": "A valid local Markdown destination that does not exist produces E404 at its source.",
+      "kind": "snapshot",
+      "snapshot": {
+        "operations": [
+          {
+            "operation": "write_text",
+            "path": "missing-link.md",
+            "source": "testdata/conformance/files/missing-markdown-link.md"
+          }
+        ]
+      },
+      "expected": {
+        "findings": [
+          {"code": "E404", "path": "missing-link.md"}
+        ]
+      }
+    },
+    {
+      "id": "removed-target-retained-link",
+      "description": "Removing a base record while retaining a required inbound wikilink produces E503 alongside candidate E401.",
+      "kind": "changeset",
+      "base": {
+        "operations": [
+          {
+            "operation": "write_text",
+            "path": "removed-target.md",
+            "source": "testdata/conformance/files/removed-target.md"
+          },
+          {
+            "operation": "write_text",
+            "path": "retained-link.md",
+            "source": "testdata/conformance/files/retained-link.md"
+          }
+        ]
+      },
+      "candidate": {
+        "operations": [
+          {
+            "operation": "write_text",
+            "path": "retained-link.md",
+            "source": "testdata/conformance/files/retained-link.md"
+          }
+        ]
+      },
+      "expected": {
+        "status": "complete",
+        "findings": [
+          {"code": "E503", "path": "removed-target.md"},
+          {"code": "E401", "path": "retained-link.md"}
+        ]
+      }
+    },
+    {
+      "id": "schema-version-not-increased",
+      "description": "Changing a schema assertion without a strict version increase produces E504.",
+      "kind": "changeset",
+      "base": {
+        "operations": [
+          {
+            "operation": "write_text",
+            "path": ".engram/schemas/evolving.md",
+            "source": "testdata/conformance/files/schema-version-base.md"
+          }
+        ]
+      },
+      "candidate": {
+        "operations": [
+          {
+            "operation": "write_text",
+            "path": ".engram/schemas/evolving.md",
+            "source": "testdata/conformance/files/schema-version-candidate.md"
+          }
+        ]
+      },
+      "expected": {
+        "status": "complete",
+        "findings": [
+          {"code": "E504", "path": ".engram/schemas/evolving.md"}
+        ]
+      }
+    },
+    {
+      "id": "managed-presentation-mismatch",
+      "description": "An accepted repository with core.autocrlf enabled produces managed-store E601 at the root.",
+      "kind": "managed",
+      "managed": {
+        "operations": [],
+        "scenario": "presentation-mismatch"
+      },
+      "expected": {
+        "status": "complete",
+        "findings": [
+          {"code": "E601", "path": "."}
+        ]
+      }
+    },
+    {
+      "id": "managed-merge-tip",
+      "description": "A well-formed accepted commit with two parents produces E602 before tree projection.",
+      "kind": "managed",
+      "managed": {
+        "operations": [],
+        "scenario": "merge-tip"
+      },
+      "expected": {
+        "status": "complete",
+        "findings": [
+          {"code": "E602", "path": "."}
+        ]
+      }
+    },
+    {
+      "id": "managed-pruned-entry",
+      "description": "A grammatically valid dot-prefixed raw tree entry pruned without a core finding produces E603.",
+      "kind": "managed",
+      "managed": {
+        "operations": [
+          {
+            "operation": "write_base64",
+            "path": ".private",
+            "content": "cHJpdmF0ZQo="
+          }
+        ],
+        "scenario": "pruned-entry"
+      },
+      "expected": {
+        "status": "complete",
+        "findings": [
+          {"code": "E603", "path": "."}
+        ]
+      }
+    },
+    {
+      "id": "duplicate-description-warning",
+      "description": "Two records with byte-identical parsed descriptions each produce W903.",
+      "kind": "snapshot",
+      "snapshot": {
+        "operations": [
+          {
+            "operation": "write_text",
+            "path": "duplicate-one.md",
+            "source": "testdata/conformance/files/duplicate-record.md"
+          },
+          {
+            "operation": "write_text",
+            "path": "duplicate-two.md",
+            "source": "testdata/conformance/files/duplicate-record.md"
+          }
+        ]
+      },
+      "expected": {
+        "findings": [
+          {"code": "W903", "path": "duplicate-one.md"},
+          {"code": "W903", "path": "duplicate-two.md"}
+        ]
+      }
+    },
+    {
+      "id": "vendor-annotation-warning",
+      "description": "A valid vendor annotation produces one W904 identity for its containing schema.",
+      "kind": "snapshot",
+      "snapshot": {
+        "operations": [
+          {
+            "operation": "write_text",
+            "path": ".engram/schemas/vendor.md",
+            "source": "testdata/conformance/files/vendor-schema.md"
+          }
+        ]
+      },
+      "expected": {
+        "findings": [
+          {"code": "W904", "path": ".engram/schemas/vendor.md"}
+        ]
+      }
+    },
+    {
+      "id": "retired-w902-not-emitted",
+      "description": "Portable checking never emits retired age-based orphan warning W902.",
+      "kind": "snapshot",
+      "snapshot": {
+        "operations": []
+      },
+      "expected": {
+        "findings": [],
+        "not_findings": ["W902"]
       }
     }
   ]

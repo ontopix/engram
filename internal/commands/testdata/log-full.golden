@@ -1,0 +1,8 @@
+commit <oid>
+Parents: <none>
+Author: Ada <ada@example.test>
+AuthorDate: <time>
+Committer: Ada <ada@example.test>
+CommitDate: <time>
+Message:
+    initial

@@ -2,6 +2,44 @@
 
 ## Unreleased
 
+### Reference implementation
+
+- Made human CLI discovery follow Git-style conventions: an empty invocation
+  shows root help, root commands are grouped by workflow with short
+  descriptions, group help describes its subcommands, and incomplete known
+  commands print contextual usage. Close command misspellings receive bounded,
+  deterministic suggestions while JSON protocol output remains unchanged.
+- Hardened initialization and clone recovery against concurrent lifecycle,
+  target, stage, and publication-plan replacement. Recovery now seals the
+  approved plan bytes, binds observations to descriptor-derived physical
+  identities, and revalidates the published root before rollback.
+- Made productive Git invocations opt into long-path support and materialized
+  retained filesystem identities before mutable boundaries, including draft,
+  attachment, staging, guard, journal, rendezvous, and pull observations. This
+  closes Windows-specific identity races and long-path failures.
+- Added deterministic regression coverage for disappearance, replacement, and
+  rollback races, including Windows amd64 and arm64 build coverage.
+
+## 1.0.0-rc.1 — 2026-08-09
+
+### Reference implementation
+
+- Completed implementation milestones M0–M6: deterministic portable
+  conformance, raw managed-Git reads, safe draft helpers, managed acceptance
+  and recovery, exact linear synchronization, advisory diagnostics, and the
+  complete documented command surface.
+- Added deterministic cross-platform release archives for macOS, Linux, and
+  Windows on amd64 and arm64, with checksums, machine-readable provenance,
+  canonical skills, operator documentation, compiled-dependency licenses, the
+  Go license, and Unicode generated-data provenance.
+- Added compatibility CI across Go 1.25 and 1.26 on macOS, Linux, and Windows,
+  plus race, offline, vet, fuzz-smoke, formatting, module, shell, and repository
+  gates. Tagged releases re-run that workflow before a least-privilege publish
+  job can create a GitHub release.
+- Declared the embedded default CLI version `1.0.0-rc.1`. The standard,
+  finding identities, and JSON v1 protocol remain release-candidate interfaces
+  until the final `v1.0.0` publication.
+
 ### Documentation architecture
 
 - Closed the implementation-facing ambiguities found in the final baseline

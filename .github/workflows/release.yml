@@ -1,0 +1,112 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    uses: ./.github/workflows/ci.yml
+
+  build:
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version: "1.25.12"
+          cache: true
+      - name: Acquire pinned modules
+        run: go mod download
+      - name: Verify pinned modules
+        run: go mod verify
+      - name: Verify release source
+        run: |
+          test "$(git rev-parse --verify HEAD^{commit})" = "${GITHUB_SHA}"
+          test -z "$(git status --porcelain=v1 --untracked-files=all --ignored=matching)"
+      - name: Build deterministic archives and provenance
+        shell: bash
+        run: |
+          source_epoch="$(git show -s --format=%ct "${GITHUB_SHA}")"
+          first_output="${RUNNER_TEMP}/engram-release-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          go run ./tools/release \
+            -version "${GITHUB_REF_NAME}" \
+            -revision "${GITHUB_SHA}" \
+            -source-date-epoch "${source_epoch}" \
+            -output "${first_output}"
+          go run ./tools/release \
+            -version "${GITHUB_REF_NAME}" \
+            -revision "${GITHUB_SHA}" \
+            -source-date-epoch "${source_epoch}" \
+            -output dist
+          diff --recursive --brief "${first_output}" dist
+          (cd dist && sha256sum --check SHA256SUMS)
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: engram-${{ github.ref_name }}
+          path: |
+            dist/SHA256SUMS
+            dist/provenance-v1.json
+            dist/engram-${{ github.ref_name }}-darwin-amd64.tar.gz
+            dist/engram-${{ github.ref_name }}-darwin-arm64.tar.gz
+            dist/engram-${{ github.ref_name }}-linux-amd64.tar.gz
+            dist/engram-${{ github.ref_name }}-linux-arm64.tar.gz
+            dist/engram-${{ github.ref_name }}-windows-amd64.zip
+            dist/engram-${{ github.ref_name }}-windows-arm64.zip
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        with:
+          name: engram-${{ github.ref_name }}
+          path: dist
+      - name: Verify downloaded release set
+        shell: bash
+        run: |
+          (cd dist && sha256sum --check SHA256SUMS)
+          test "$(jq -r '.version' dist/provenance-v1.json)" = "1"
+          test "$(jq -r '.cli' dist/provenance-v1.json)" = "${GITHUB_REF_NAME#v}"
+          test "$(jq -r '.revision' dist/provenance-v1.json)" = "${GITHUB_SHA}"
+      - name: Publish GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          remote_revision="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_REF_NAME}" --jq '.sha')"
+          test "${remote_revision}" = "${GITHUB_SHA}"
+          assets=(
+            "dist/engram-${GITHUB_REF_NAME}-darwin-amd64.tar.gz"
+            "dist/engram-${GITHUB_REF_NAME}-darwin-arm64.tar.gz"
+            "dist/engram-${GITHUB_REF_NAME}-linux-amd64.tar.gz"
+            "dist/engram-${GITHUB_REF_NAME}-linux-arm64.tar.gz"
+            "dist/engram-${GITHUB_REF_NAME}-windows-amd64.zip"
+            "dist/engram-${GITHUB_REF_NAME}-windows-arm64.zip"
+            "dist/provenance-v1.json"
+            "dist/SHA256SUMS"
+          )
+          release_flags=()
+          if [[ "${GITHUB_REF_NAME}" == *-* ]]; then
+            release_flags+=(--prerelease)
+          fi
+          gh release create "${GITHUB_REF_NAME}" \
+            --verify-tag \
+            --title "engram ${GITHUB_REF_NAME}" \
+            --notes-file docs/release-notes.md \
+            "${release_flags[@]}" \
+            "${assets[@]}"
