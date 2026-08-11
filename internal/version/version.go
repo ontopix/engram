@@ -14,8 +14,8 @@ var (
 )
 
 const (
-	coreRevision = "2026-08-09"
-	coreSHA256   = "3e0a13e73160ad064d028f1c2a64780c2a5d39fb176d64d2df131b685e412891"
+	coreRevision = "2026-08-11"
+	coreSHA256   = "ddfd1481033e44284d42a37f75158f72778d8b93eaae0eeffd9d92570c376d3f"
 	gitRevision  = "2026-08-09"
 	gitSHA256    = "08edb118db1b3bc7a796a516fc58c9e274902fd835b925b731c8b0f28fe5ffff"
 )

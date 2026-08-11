@@ -2,7 +2,7 @@
 
 **Version:** v1
 **Status:** Draft
-**Revision:** 2026-08-09
+**Revision:** 2026-08-11
 **Normative status:** Non-normative
 
 This annex describes optional bindings between engram and agent runtimes. An
@@ -13,10 +13,11 @@ Adapters add discovery, trusted skill packaging, lifecycle coordination, and
 feedback, but no store semantics.
 
 Discovery never establishes trust or authority. An adapter that packages the
-canonical skills obtains them independently of the store, verifies their
-release digest, and installs byte-identical artifacts. In particular, the
-loaded `using-engram` bootstrap must be trusted before it interprets store
-prose; without that decision, core P0 leaves the discovered store read-only.
+canonical skills obtains them independently of the store, verifies a digest
+from an independently trusted distribution channel (for example, a published
+release), and installs byte-identical artifacts. In particular, the loaded
+`using-engram` bootstrap must be trusted before it interprets store prose;
+without that decision, core P0 leaves the discovered store read-only.
 
 ## 1. Integration surfaces
 

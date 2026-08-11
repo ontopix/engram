@@ -1,4 +1,8 @@
-# engram v1 release notes
+# engram 1.0.0-rc.1 release notes
+
+These notes describe the source targeted for `1.0.0-rc.1`. A build is an
+official release only when it comes from the matching GitHub Release and its
+published checksums and provenance have been verified.
 
 The first reference implementation covers the complete v1 draft command
 surface and the M0–M6 delivery gates:
@@ -14,10 +18,10 @@ surface and the M0–M6 delivery gates:
 - advisory diagnostics, canonical skills, cross-platform CI, reproducible
   archives, checksums, licenses, provenance, and operator guidance.
 
-The standard and CLI contract remain drafts until the project publishes the
-final v1 tag. Finding identities and protocol v1 shapes are therefore release
-candidate interfaces, not a retroactive stability promise for older draft
-builds.
+The standard and CLI contract remain drafts until the project publishes stable
+`v1.0.0`. Finding identities and protocol v1 shapes are therefore
+release-candidate interfaces, not a retroactive stability promise for older
+draft builds.
 
 See [the operator guide](operator-guide.md) for installation, trust,
 synchronization, recovery, backup, and upgrade procedures.

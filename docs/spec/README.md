@@ -2,7 +2,7 @@
 
 **Version:** v1
 **Status:** Draft
-**Revision:** 2026-08-09
+**Revision:** 2026-08-11
 **Normative status:** Normative
 
 ## Table of contents
@@ -1157,8 +1157,8 @@ acceptance follows the Git annex.
 **check** is the deterministic validation function of the standard. Its
 findings have the normative identity `(code, path)` and are defined in
 [Appendix B](#appendix-b--check-catalog-normative). Code stability
-follows [§13](#13-versioning): draft codes may change before the first
-release; published codes are never reused with a different meaning. An
+follows [§13](#13-versioning): draft codes may change before `v1.0.0`;
+published stable codes are never reused with a different meaning. An
 implementation MAY attach a human-readable or structured `detail`, but
 that detail is non-normative: consumers MUST NOT parse it as a stable
 interface or use it to decide conformance. The ordered sequence of
@@ -1435,12 +1435,12 @@ Stores declare the major version they target in `root.yaml`
 ([§3](#3-the-root-manifest)). Normative annexes version independently;
 an annex's version MUST NOT be inferred from this document's.
 
-Until the first release, check codes are draft identifiers and MAY be
-changed, removed, or reassigned without compatibility guarantees. From
-the first release onward, the catalog is append-only: a published code
-keeps its meaning forever. A published code MAY be retired when its
-inputs prove non-portable; its former meaning remains documented and
-the code MUST NOT be emitted or reused.
+Until the first stable release (`v1.0.0`), check codes are draft identifiers
+and MAY be changed, removed, or reassigned without compatibility guarantees.
+From `v1.0.0` onward, the catalog is append-only: a published code keeps its
+meaning forever. A published code MAY be retired when its inputs prove
+non-portable; its former meaning remains documented and the code MUST NOT be
+emitted or reused.
 
 ---
 
@@ -1564,10 +1564,10 @@ description: "<one line for the catalog>"
 
 ## Appendix B — Check catalog (normative)
 
-Before the first release, codes are draft identifiers and may change
-under [§13](#13-versioning). Published codes are assigned once and never
-reused. `E` findings in the snapshot ranges (E1xx–E4xx) decide snapshot
-conformance; E5xx require a changeset; E6xx decide the additional
+Before the first stable release (`v1.0.0`), codes are draft identifiers and
+may change under [§13](#13-versioning). Published stable codes are assigned
+once and never reused. `E` findings in the snapshot ranges (E1xx–E4xx) decide
+snapshot conformance; E5xx require a changeset; E6xx decide the additional
 managed-store target; `W` findings are advisory.
 Finding identity, path attribution, deduplication, and ordering follow
 [§9.1](#91-check); diagnostic detail is not part of this catalog's

@@ -1,0 +1,57 @@
+name: Specification change
+description: Propose a change to the normative core or a normative annex before writing the patch.
+title: "[Spec]: "
+labels:
+  - specification
+body:
+  - type: dropdown
+    id: authority
+    attributes:
+      label: Normative authority
+      options:
+        - Core specification
+        - Managed Git annex
+        - New independently statused annex
+        - Unsure
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem statement
+      description: Identify the ambiguity, missing invariant, or interoperability failure.
+    validations:
+      required: true
+  - type: textarea
+    id: semantics
+    attributes:
+      label: Proposed semantics
+      description: State the observable requirement without depending on the reference CLI.
+    validations:
+      required: true
+  - type: textarea
+    id: compatibility
+    attributes:
+      label: Compatibility and migration
+      description: Explain effects on existing snapshots, stores, tools, agents, finding codes, schemas, and examples.
+    validations:
+      required: true
+  - type: textarea
+    id: determinism
+    attributes:
+      label: Determinism and security
+      description: Describe platform-independent evaluation and affected trust or authority boundaries.
+    validations:
+      required: true
+  - type: textarea
+    id: examples
+    attributes:
+      label: Example cases
+      description: Give at least one conforming and one rejecting or boundary case when applicable.
+  - type: checkboxes
+    id: process
+    attributes:
+      label: Contribution process
+      options:
+        - label: I read CONTRIBUTING.md and understand that an accepted normative change must update its revision, changelog, fixtures, schemas, and examples as applicable.
+          required: true

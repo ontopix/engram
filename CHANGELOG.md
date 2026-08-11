@@ -1,6 +1,30 @@
 # Changelog
 
-## Unreleased
+## Unreleased — target 1.0.0-rc.1
+
+### Standard
+
+- Clarified that draft check-code identities remain changeable through
+  prereleases and become append-only at the first stable release (`v1.0.0`),
+  matching the repository's stated release-candidate compatibility policy.
+- Generalized adapter skill verification to independently trusted distribution
+  digests rather than assuming that a public release already exists.
+
+### Public project
+
+- Reworked the README around distinct user, agent-integrator, and standard-
+  implementer paths, with a tested end-to-end quick start and visible project
+  status badges.
+- Added real Codex, Claude Code, and generic filesystem-agent integrations,
+  including bounded retrieval, JSON feedback, attachment, trusted-skill, and
+  managed-write examples.
+- Added a security policy, support guide, contribution workflow, structured
+  issue forms, a pull-request checklist, and Dependabot configuration.
+- Included the public project policies and agent-integration examples in
+  release archives so links from the packaged README remain self-contained.
+- Recast the completed implementation roadmap as a delivery record, removed
+  stale references to a future CLI, and distinguished release readiness and
+  deferred shell completions from published state.
 
 ### Reference implementation
 
@@ -20,9 +44,7 @@
 - Added deterministic regression coverage for disappearance, replacement, and
   rollback races, including Windows amd64 and arm64 build coverage.
 
-## 1.0.0-rc.1 — 2026-08-09
-
-### Reference implementation
+### Initial reference implementation
 
 - Completed implementation milestones M0–M6: deterministic portable
   conformance, raw managed-Git reads, safe draft helpers, managed acceptance
