@@ -1,32 +1,24 @@
 # Codex integration
 
 This example gives a Codex project a discoverable, independently owned engram
-store. `engram attach` writes only its versioned adoption block to the project's
-`AGENTS.md`; it does not grant access, trust hooks, or synchronize the store.
+store. `engram attach` records it in project `MEMORY.md`; `engram setup`
+installs verified project skills and points `AGENTS.md` at that registry.
 
-## Install the trusted skills and attach the store
+## Attach the store and set up Codex
 
-Run this from a trusted checkout of the engram repository. Set all three paths
-to existing absolute paths:
+Set both paths to existing absolute paths:
 
 ```sh
-source_root="/absolute/path/to/engram"
 store_root="/absolute/path/to/integration-memory"
 project_root="/absolute/path/to/your-project"
 
-mkdir -p "$project_root/.agents/skills"
-cp -R "$source_root/skills/." "$project_root/.agents/skills/"
-
-engram attach "$store_root" \
-  --project "$project_root" \
-  --entrypoint AGENTS.md
+engram attach "$store_root" --project "$project_root"
+engram setup --harness codex --project "$project_root"
 ```
 
-The copied `manifest-v1.json` closes the expected skill set. The source
-checkout or release that supplied it must already be trusted independently of
-the store. The generated adoption block contains the store's canonical
-absolute path, so it is intentionally generated locally rather than committed
-as a reusable fixture.
+Setup verifies the canonical bundle embedded in the trusted CLI before writing
+`.agents/skills/`. The generated `MEMORY.md` registry uses a project-relative
+store path when possible. Neither command grants store or network authority.
 
 ## Try a session
 
@@ -49,10 +41,8 @@ For a write, make the authorization explicit:
 ```sh
 engram --store "$store_root" check --accepted
 engram --store "$store_root" status
-engram detach "$store_root" \
-  --project "$project_root" \
-  --entrypoint AGENTS.md
+engram detach "$store_root" --project "$project_root"
 ```
 
-Detaching removes only the CLI-owned adoption block. It does not remove the
-skills, delete the store, or change accepted memory.
+Detaching leaves an empty registry and the project-scoped integration in place.
+It does not remove skills, delete the store, or change accepted memory.

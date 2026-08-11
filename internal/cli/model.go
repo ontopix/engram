@@ -10,6 +10,7 @@ const (
 	CommandClone           CommandName = "clone"
 	CommandAttach          CommandName = "attach"
 	CommandDetach          CommandName = "detach"
+	CommandSetup           CommandName = "setup"
 	CommandStatus          CommandName = "status"
 	CommandDiff            CommandName = "diff"
 	CommandLog             CommandName = "log"
@@ -129,7 +130,7 @@ func DefaultModel() *Model {
 			{Name: "hooks", Summary: "Inspect and manage preparation-hook trust"},
 		},
 		HelpCategories: []HelpCategorySpec{
-			{Title: "Create and obtain stores", Commands: []string{"init", "clone", "attach", "detach"}},
+			{Title: "Create, obtain, and connect stores", Commands: []string{"init", "clone", "attach", "detach", "setup"}},
 			{Title: "Inspect state", Commands: []string{"status", "diff", "log", "check"}},
 			{Title: "Work on the current draft", Commands: []string{"add", "fmt", "new", "mv", "schema"}},
 			{Title: "Accept and undo changes", Commands: []string{"commit", "revert"}},
@@ -148,8 +149,9 @@ func DefaultModel() *Model {
 		Commands: []CommandSpec{
 			{Name: CommandInit, Path: []string{"init"}, Usage: "engram init [PATH] [--schema TYPE]... [--dry-run]", Summary: "Create or initialize a managed store", Positionals: positionals(0, 1, "PATH"), Options: []OptionSpec{repeatedValue("schema", "TYPE", "--schema"), dryRun}, Store: StoreForbidden},
 			{Name: CommandClone, Path: []string{"clone"}, Usage: "engram clone URL [PATH]", Summary: "Clone a managed store into a new directory", Positionals: positionals(1, 2, "URL", "PATH"), Store: StoreForbidden},
-			{Name: CommandAttach, Path: []string{"attach"}, Usage: "engram attach STORE [--project PATH] [--entrypoint FILE]", Summary: "Attach a store to an agent project", Positionals: positionals(1, 1, "STORE"), Options: []OptionSpec{value("project", "PATH", "--project"), value("entrypoint", "FILE", "--entrypoint")}, Store: StoreForbidden},
-			{Name: CommandDetach, Path: []string{"detach"}, Usage: "engram detach STORE [--project PATH] [--entrypoint FILE]", Summary: "Detach a store from an agent project", Positionals: positionals(1, 1, "STORE"), Options: []OptionSpec{value("project", "PATH", "--project"), value("entrypoint", "FILE", "--entrypoint")}, Store: StoreForbidden},
+			{Name: CommandAttach, Path: []string{"attach"}, Usage: "engram attach STORE [--project PATH] [--memory-file FILE]", Summary: "Attach a store through a project memory manifest", Positionals: positionals(1, 1, "STORE"), Options: []OptionSpec{value("project", "PATH", "--project"), value("memory-file", "FILE", "--memory-file")}, Store: StoreForbidden},
+			{Name: CommandDetach, Path: []string{"detach"}, Usage: "engram detach STORE [--project PATH] [--memory-file FILE]", Summary: "Detach a store from a project memory manifest", Positionals: positionals(1, 1, "STORE"), Options: []OptionSpec{value("project", "PATH", "--project"), value("memory-file", "FILE", "--memory-file")}, Store: StoreForbidden},
+			{Name: CommandSetup, Path: []string{"setup"}, Usage: "engram setup --harness HARNESS [--project PATH] [--memory-file FILE] [--dry-run]", Summary: "Install an agent-harness integration", Positionals: positionals(0, 0), Options: []OptionSpec{enumValue("harness", "HARNESS", []string{"claude-code", "codex"}, "--harness"), value("project", "PATH", "--project"), value("memory-file", "FILE", "--memory-file"), dryRun}, Store: StoreForbidden, Validate: validateSetup},
 			{Name: CommandStatus, Path: []string{"status"}, Usage: "engram status", Summary: "Show working draft and initial candidate status", Positionals: positionals(0, 0), Store: StoreAllowed},
 			{Name: CommandDiff, Path: []string{"diff"}, Usage: "engram diff [REV-A [REV-B]] [--staged|--cached] [--stat|--name-only]", Summary: "Show changes between store states", Positionals: positionals(0, 2, "REV-A", "REV-B"), Options: []OptionSpec{flag("staged", "--staged", "--cached"), flag("stat", "--stat"), flag("name-only", "--name-only")}, Store: StoreAllowed, Validate: validateDiff},
 			{Name: CommandLog, Path: []string{"log"}, Usage: "engram log [-n COUNT] [--oneline]", Summary: "Show accepted store history", Positionals: positionals(0, 0), Options: []OptionSpec{value("count", "COUNT", "-n"), flag("oneline", "--oneline")}, Store: StoreAllowed, Validate: validateLog},

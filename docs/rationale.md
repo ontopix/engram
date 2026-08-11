@@ -74,7 +74,10 @@ boundary.
 
 Giving a reusable memory its own repository also separates ownership
 from the projects that consume it. Several projects may attach the same
-store without placing its commits in their code histories.
+store without placing its commits in their code histories. A project-level
+`MEMORY.md` keeps that many-to-many registry independent of runtime-specific
+entrypoints, while those entrypoints only point to the registry and load skills
+from an independently trusted installation.
 
 ## Deliberate boundaries
 

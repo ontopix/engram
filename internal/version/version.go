@@ -15,9 +15,9 @@ var (
 
 const (
 	coreRevision = "2026-08-11"
-	coreSHA256   = "ddfd1481033e44284d42a37f75158f72778d8b93eaae0eeffd9d92570c376d3f"
-	gitRevision  = "2026-08-09"
-	gitSHA256    = "08edb118db1b3bc7a796a516fc58c9e274902fd835b925b731c8b0f28fe5ffff"
+	coreSHA256   = "ae7fb609b67c2ddfad661af6713175a8bbe47a9f40c9b0ca77cc432f3b5676a3"
+	gitRevision  = "2026-08-11"
+	gitSHA256    = "c1c4bdae9ae6c2e3fb76218735bf164681d7e0a29b94d6e42793ab0b9f83df0f"
 )
 
 type Specification struct {

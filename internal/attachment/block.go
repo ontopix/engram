@@ -1,4 +1,4 @@
-// Package attachment owns the versioned project adoption block used by the
+// Package attachment owns the versioned project memory manifest used by the
 // attach and detach workflows. It deliberately knows nothing about Git or
 // managed-store validation; callers must audit a store before Attach.
 package attachment
@@ -23,29 +23,40 @@ import (
 )
 
 const (
-	OpenMarker  = "<!-- engram:adoption:v1 -->"
-	CloseMarker = "<!-- /engram:adoption:v1 -->"
+	OpenMarker  = "<!-- engram:attachments:v1 -->"
+	CloseMarker = "<!-- /engram:attachments:v1 -->"
 
-	introduction = "Engram stores (spec v1; canonical absolute paths):"
-	guidance     = "Before touching a store, read its root README and follow the engram Agent Protocol."
+	introduction = `# Project memory
+
+This project uses Engram stores for durable agent memory.
+
+Attachments only identify store locations. They do not authorize writes,
+hook execution, network access, or synchronization. Before using a store,
+read its root README and apply the independently installed ` + "`using-engram`" + ` skill.`
 )
 
-// ErrMalformedBlock identifies entrypoint bytes which look owned by engram
+// ErrMalformedBlock identifies memory-manifest bytes which look owned by engram
 // but cannot be replaced without guessing.
-var ErrMalformedBlock = errors.New("malformed or duplicate engram adoption block")
+var ErrMalformedBlock = errors.New("malformed or duplicate engram attachment block")
 
 // ErrBusy identifies another cooperating attachment update in progress.
-var ErrBusy = errors.New("entrypoint is busy")
+var ErrBusy = errors.New("memory manifest is busy")
+
+type attachedStore struct {
+	Path   string `json:"path"`
+	README string `json:"readme"`
+}
 
 type document struct {
-	Stores []string `json:"stores"`
+	Version int             `json:"version"`
+	Stores  []attachedStore `json:"stores"`
 }
 
 // Result is the published local attachment change.
 type Result struct {
 	Project    string `json:"project"`
 	Store      string `json:"store"`
-	Entrypoint string `json:"entrypoint"`
+	MemoryFile string `json:"memory_file"`
 	Changed    bool   `json:"changed"`
 }
 
@@ -58,7 +69,7 @@ type Effect struct {
 }
 
 // EffectError reports a failed operation which nevertheless published the
-// entrypoint or left its cooperating lock in place.
+// memory manifest or left its cooperating lock in place.
 type EffectError struct {
 	Effect Effect
 	Err    error
@@ -102,7 +113,7 @@ func NewUpdater() *Updater { return &Updater{} }
 type parsedBlock struct {
 	start  int
 	end    int
-	stores []string
+	stores []attachedStore
 }
 
 type publication struct {
@@ -142,15 +153,15 @@ func ResolveProject(ctx context.Context, explicit string) (string, error) {
 	return realDirectory(working)
 }
 
-// ResolveEntrypoint resolves explicit relative to project and proves the
+// ResolveMemoryFile resolves explicit relative to project and proves the
 // resulting lexical path remains below the project root.
-func ResolveEntrypoint(project, explicit string) (string, error) {
+func ResolveMemoryFile(project, explicit string) (string, error) {
 	project, err := realDirectory(project)
 	if err != nil {
 		return "", err
 	}
 	if explicit == "" {
-		explicit = "AGENTS.md"
+		explicit = "MEMORY.md"
 	}
 	candidate := explicit
 	if !filepath.IsAbs(candidate) {
@@ -174,10 +185,10 @@ func ResolveEntrypoint(project, explicit string) (string, error) {
 	}
 	relative, err := filepath.Rel(project, candidate)
 	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("entrypoint must stay below project root")
+		return "", fmt.Errorf("memory file must stay below project root")
 	}
-	if info, statErr := os.Lstat(candidate); statErr == nil && info.Mode()&os.ModeSymlink != 0 {
-		return "", fmt.Errorf("entrypoint is a symbolic link")
+	if info, statErr := os.Lstat(candidate); statErr == nil && (info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular()) {
+		return "", fmt.Errorf("memory file is not a real regular file")
 	} else if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
 		return "", statErr
 	}
@@ -190,25 +201,25 @@ func CanonicalStore(store string) (string, error) {
 }
 
 // Attach adds store to the owned block and atomically publishes the result.
-func Attach(project, entrypoint, store string) (Result, error) {
-	return NewUpdater().Attach(project, entrypoint, store)
+func Attach(project, memoryFile, store string) (Result, error) {
+	return NewUpdater().Attach(project, memoryFile, store)
 }
 
 // Detach removes store from the owned block and atomically publishes the
 // result. A missing block or entry is an unchanged success.
-func Detach(project, entrypoint, store string) (Result, error) {
-	return NewUpdater().Detach(project, entrypoint, store)
+func Detach(project, memoryFile, store string) (Result, error) {
+	return NewUpdater().Detach(project, memoryFile, store)
 }
 
-func (u *Updater) Attach(project, entrypoint, store string) (Result, error) {
-	return u.update(project, entrypoint, store, true)
+func (u *Updater) Attach(project, memoryFile, store string) (Result, error) {
+	return u.update(project, memoryFile, store, true)
 }
 
-func (u *Updater) Detach(project, entrypoint, store string) (Result, error) {
-	return u.update(project, entrypoint, store, false)
+func (u *Updater) Detach(project, memoryFile, store string) (Result, error) {
+	return u.update(project, memoryFile, store, false)
 }
 
-func (u *Updater) update(project, entrypoint, store string, attach bool) (result Result, resultErr error) {
+func (u *Updater) update(project, memoryFile, store string, attach bool) (result Result, resultErr error) {
 	if u == nil {
 		return Result{}, fmt.Errorf("attachment updater is nil")
 	}
@@ -217,7 +228,7 @@ func (u *Updater) update(project, entrypoint, store string, attach bool) (result
 	if err != nil {
 		return Result{}, err
 	}
-	entrypoint, err = ResolveEntrypoint(project, entrypoint)
+	memoryFile, err = ResolveMemoryFile(project, memoryFile)
 	if err != nil {
 		return Result{}, err
 	}
@@ -229,9 +240,9 @@ func (u *Updater) update(project, entrypoint, store string, attach bool) (result
 	if err != nil {
 		return Result{}, err
 	}
-	result = Result{Project: project, Store: store, Entrypoint: entrypoint}
+	result = Result{Project: project, Store: store, MemoryFile: memoryFile}
 
-	lock, err := acquireLockWith(entrypoint+".engram.lock", u.establishLockIdentity)
+	lock, err := acquireLockWith(memoryFile+".engram.lock", u.establishLockIdentity)
 	if err != nil {
 		return Result{}, err
 	}
@@ -247,7 +258,7 @@ func (u *Updater) update(project, entrypoint, store string, attach bool) (result
 		}
 	}()
 
-	original, originalInfo, err := readOptional(entrypoint)
+	original, originalInfo, err := readOptional(memoryFile)
 	if err != nil {
 		return Result{}, err
 	}
@@ -255,18 +266,18 @@ func (u *Updater) update(project, entrypoint, store string, attach bool) (result
 	if err != nil {
 		return Result{}, err
 	}
-	stores := []string(nil)
+	stores := []attachedStore(nil)
 	if present {
 		stores = append(stores, block.stores...)
 	}
-	if err := validatePhysicalDuplicates(stores); err != nil {
+	if err := validatePhysicalDuplicates(project, stores); err != nil {
 		return Result{}, err
 	}
 
-	matching := matchingStores(stores, store)
+	matching := matchingStores(project, stores, store)
 	if attach {
 		if len(matching) == 0 {
-			stores = append(stores, store)
+			stores = append(stores, describeStore(project, store))
 		}
 	} else if len(matching) != 0 {
 		kept := stores[:0]
@@ -277,7 +288,7 @@ func (u *Updater) update(project, entrypoint, store string, attach bool) (result
 		}
 		stores = kept
 	}
-	sort.Strings(stores)
+	sort.Slice(stores, func(left, right int) bool { return stores[left].Path < stores[right].Path })
 
 	updated, err := replace(original, block, present, stores)
 	if err != nil {
@@ -286,7 +297,7 @@ func (u *Updater) update(project, entrypoint, store string, attach bool) (result
 	if bytes.Equal(original, updated) {
 		return result, nil
 	}
-	published, err = u.publish(entrypoint, original, originalInfo, updated)
+	published, err = u.publish(memoryFile, original, originalInfo, updated)
 	if err != nil {
 		return Result{}, err
 	}
@@ -346,39 +357,83 @@ func parse(source []byte) (parsedBlock, bool, error) {
 	}
 	end := closes[0] + len(closeLine)
 	blockBytes := source[opens[0]:end]
-	prefix := OpenMarker + "\n" + introduction + "\n```json\n"
-	suffix := "\n```\n" + guidance + "\n" + CloseMarker + "\n"
+	prefix := OpenMarker + "\n" + introduction + "\n\n```json\n"
+	suffix := "\n```\n" + CloseMarker + "\n"
 	if !bytes.HasPrefix(blockBytes, []byte(prefix)) || !bytes.HasSuffix(blockBytes, []byte(suffix)) {
 		return parsedBlock{}, false, ErrMalformedBlock
 	}
 	payload := blockBytes[len(prefix) : len(blockBytes)-len(suffix)]
+	if err := rejectDuplicateJSONFields(payload); err != nil {
+		return parsedBlock{}, false, ErrMalformedBlock
+	}
 	decoder := json.NewDecoder(bytes.NewReader(payload))
 	decoder.DisallowUnknownFields()
 	var decoded document
-	if err := decoder.Decode(&decoded); err != nil || decoder.Decode(&struct{}{}) != io.EOF || decoded.Stores == nil {
+	if err := decoder.Decode(&decoded); err != nil || decoder.Decode(&struct{}{}) != io.EOF || decoded.Version != 1 || decoded.Stores == nil {
 		return parsedBlock{}, false, ErrMalformedBlock
 	}
 	seen := make(map[string]struct{}, len(decoded.Stores))
 	for _, store := range decoded.Stores {
-		if store == "" || !utf8.ValidString(store) || !filepath.IsAbs(store) || filepath.Clean(store) != store {
+		if !validStoredPath(store.Path) || store.README != storeREADME(store.Path) {
 			return parsedBlock{}, false, ErrMalformedBlock
 		}
-		if _, exists := seen[store]; exists {
+		if _, exists := seen[store.Path]; exists {
 			return parsedBlock{}, false, ErrMalformedBlock
 		}
-		seen[store] = struct{}{}
+		seen[store.Path] = struct{}{}
 	}
 	return parsedBlock{start: opens[0], end: end, stores: decoded.Stores}, true, nil
 }
 
-func replace(original []byte, block parsedBlock, present bool, stores []string) ([]byte, error) {
-	if len(stores) == 0 {
-		if !present {
-			return append([]byte(nil), original...), nil
+func rejectDuplicateJSONFields(data []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	var walk func() error
+	walk = func() error {
+		token, err := decoder.Token()
+		if err != nil {
+			return err
 		}
-		result := append([]byte(nil), original[:block.start]...)
-		result = append(result, original[block.end:]...)
-		return result, nil
+		delimiter, ok := token.(json.Delim)
+		if !ok {
+			return nil
+		}
+		switch delimiter {
+		case '{':
+			seen := make(map[string]struct{})
+			for decoder.More() {
+				fieldToken, fieldErr := decoder.Token()
+				field, fieldOK := fieldToken.(string)
+				if fieldErr != nil || !fieldOK {
+					return ErrMalformedBlock
+				}
+				if _, duplicate := seen[field]; duplicate {
+					return ErrMalformedBlock
+				}
+				seen[field] = struct{}{}
+				if err := walk(); err != nil {
+					return err
+				}
+			}
+			_, err = decoder.Token()
+			return err
+		case '[':
+			for decoder.More() {
+				if err := walk(); err != nil {
+					return err
+				}
+			}
+			_, err = decoder.Token()
+			return err
+		default:
+			return ErrMalformedBlock
+		}
+	}
+	return walk()
+}
+
+func replace(original []byte, block parsedBlock, present bool, stores []attachedStore) ([]byte, error) {
+	if len(stores) == 0 && !present {
+		return append([]byte(nil), original...), nil
 	}
 	encoded, err := encode(stores)
 	if err != nil {
@@ -401,18 +456,19 @@ func replace(original []byte, block parsedBlock, present bool, stores []string) 
 	return append(result, encoded...), nil
 }
 
-func encode(stores []string) ([]byte, error) {
+func encode(stores []attachedStore) ([]byte, error) {
 	var payload bytes.Buffer
 	encoder := json.NewEncoder(&payload)
 	encoder.SetEscapeHTML(false)
-	if err := encoder.Encode(document{Stores: stores}); err != nil {
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(document{Version: 1, Stores: stores}); err != nil {
 		return nil, err
 	}
 	payloadBytes := bytes.TrimSuffix(payload.Bytes(), []byte("\n"))
 	var result bytes.Buffer
-	fmt.Fprintf(&result, "%s\n%s\n```json\n", OpenMarker, introduction)
+	fmt.Fprintf(&result, "%s\n%s\n\n```json\n", OpenMarker, introduction)
 	result.Write(payloadBytes)
-	fmt.Fprintf(&result, "\n```\n%s\n%s\n", guidance, CloseMarker)
+	fmt.Fprintf(&result, "\n```\n%s\n", CloseMarker)
 	return result.Bytes(), nil
 }
 
@@ -432,15 +488,16 @@ func wholeLineOffsets(source, line []byte) []int {
 	return result
 }
 
-func matchingStores(stores []string, wanted string) map[int]bool {
+func matchingStores(project string, stores []attachedStore, wanted string) map[int]bool {
 	result := make(map[int]bool)
 	wantedInfo, wantedErr := os.Stat(wanted)
 	for index, existing := range stores {
-		if existing == wanted {
+		existingPath := resolveStoredPath(project, existing.Path)
+		if existingPath == wanted {
 			result[index] = true
 			continue
 		}
-		existingInfo, err := os.Stat(existing)
+		existingInfo, err := os.Stat(existingPath)
 		if wantedErr == nil && err == nil && os.SameFile(wantedInfo, existingInfo) {
 			result[index] = true
 		}
@@ -448,20 +505,57 @@ func matchingStores(stores []string, wanted string) map[int]bool {
 	return result
 }
 
-func validatePhysicalDuplicates(stores []string) error {
+func validatePhysicalDuplicates(project string, stores []attachedStore) error {
 	for left := range stores {
-		leftInfo, leftErr := os.Stat(stores[left])
+		leftInfo, leftErr := os.Stat(resolveStoredPath(project, stores[left].Path))
 		if leftErr != nil {
 			continue
 		}
 		for right := left + 1; right < len(stores); right++ {
-			rightInfo, rightErr := os.Stat(stores[right])
+			rightInfo, rightErr := os.Stat(resolveStoredPath(project, stores[right].Path))
 			if rightErr == nil && os.SameFile(leftInfo, rightInfo) {
 				return ErrMalformedBlock
 			}
 		}
 	}
 	return nil
+}
+
+func describeStore(project, store string) attachedStore {
+	stored := filepath.ToSlash(store)
+	if relative, err := filepath.Rel(project, store); err == nil {
+		stored = filepath.ToSlash(relative)
+	}
+	return attachedStore{Path: stored, README: storeREADME(stored)}
+}
+
+func resolveStoredPath(project, stored string) string {
+	candidate := filepath.FromSlash(stored)
+	if !filepath.IsAbs(candidate) {
+		candidate = filepath.Join(project, candidate)
+	}
+	absolute, err := filepath.Abs(candidate)
+	if err != nil {
+		return filepath.Clean(candidate)
+	}
+	if canonical, resolveErr := filepath.EvalSymlinks(absolute); resolveErr == nil {
+		return filepath.Clean(canonical)
+	}
+	return filepath.Clean(absolute)
+}
+
+func validStoredPath(value string) bool {
+	if value == "" || !utf8.ValidString(value) || strings.ContainsAny(value, "\\\x00\r\n") {
+		return false
+	}
+	return filepath.ToSlash(filepath.Clean(filepath.FromSlash(value))) == value
+}
+
+func storeREADME(store string) string {
+	if store == "." {
+		return "README.md"
+	}
+	return strings.TrimSuffix(store, "/") + "/README.md"
 }
 
 func realDirectory(name string) (string, error) {
@@ -492,10 +586,10 @@ func readOptional(name string) ([]byte, os.FileInfo, error) {
 		return nil, nil, err
 	}
 	if err := fileidentity.Pin(info); err != nil {
-		return nil, nil, fmt.Errorf("capture entrypoint identity: %w", err)
+		return nil, nil, fmt.Errorf("capture memory manifest identity: %w", err)
 	}
 	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-		return nil, nil, fmt.Errorf("entrypoint is not a real regular file")
+		return nil, nil, fmt.Errorf("memory manifest is not a real regular file")
 	}
 	data, err := os.ReadFile(name)
 	return data, info, err
@@ -507,10 +601,10 @@ func (u *Updater) publish(name string, original []byte, originalInfo os.FileInfo
 		return publication{}, err
 	}
 	if !bytes.Equal(current, original) || originalInfo == nil != (currentInfo == nil) || originalInfo != nil && !os.SameFile(originalInfo, currentInfo) {
-		return publication{}, fmt.Errorf("%w: entrypoint changed concurrently", ErrBusy)
+		return publication{}, fmt.Errorf("%w: memory manifest changed concurrently", ErrBusy)
 	}
 	directory := filepath.Dir(name)
-	temporary, err := os.CreateTemp(directory, ".engram-entrypoint-*")
+	temporary, err := os.CreateTemp(directory, ".engram-memory-*")
 	if err != nil {
 		return publication{}, err
 	}

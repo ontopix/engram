@@ -1,31 +1,23 @@
 # Claude Code integration
 
-This example exposes an independent managed store through a project's
-`CLAUDE.md` and installs the canonical skills in Claude Code's project-scoped
-skill directory. The attachment is discovery metadata only.
+This example exposes an independent managed store through project `MEMORY.md`
+and installs a project-scoped Claude Code integration.
 
-## Install the trusted skills and attach the store
+## Attach the store and set up Claude Code
 
-Run this from a trusted checkout of the engram repository. Set all three paths
-to existing absolute paths:
+Set both paths to existing absolute paths:
 
 ```sh
-source_root="/absolute/path/to/engram"
 store_root="/absolute/path/to/integration-memory"
 project_root="/absolute/path/to/your-project"
 
-mkdir -p "$project_root/.claude/skills"
-cp -R "$source_root/skills/." "$project_root/.claude/skills/"
-
-engram attach "$store_root" \
-  --project "$project_root" \
-  --entrypoint CLAUDE.md
+engram attach "$store_root" --project "$project_root"
+engram setup --harness claude-code --project "$project_root"
 ```
 
-Install the skills only from a source or release trusted independently of the
-store. `engram attach` audits the managed store, preserves existing
-`CLAUDE.md` content, and creates or replaces one delimited adoption block with
-the store's canonical local path.
+Setup verifies the canonical bundle embedded in the trusted CLI before writing
+`.claude/skills/`, then preserves existing `CLAUDE.md` bytes around its owned
+pointer to `MEMORY.md`.
 
 ## Try a session
 
@@ -48,10 +40,8 @@ An explicitly authorized write can be requested like this:
 ```sh
 engram --store "$store_root" check --accepted
 engram --store "$store_root" status
-engram detach "$store_root" \
-  --project "$project_root" \
-  --entrypoint CLAUDE.md
+engram detach "$store_root" --project "$project_root"
 ```
 
-Detaching leaves both the store and the project-scoped skill installation in
-place.
+Detaching leaves an empty registry and the project-scoped skill installation
+in place.

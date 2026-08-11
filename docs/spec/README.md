@@ -1387,35 +1387,61 @@ policy does not authorize.
 
 ## 12. Adoption
 
-A project that uses engram stores SHOULD declare its **attachments** in
-its agent entrypoint or equivalent project guidance, naming each store
-root and pointing at its README. Attached stores are independent and
-need not live inside the project repository:
+A project that uses engram stores SHOULD declare its **attachments** in a
+project-root `MEMORY.md`. An agent entrypoint or equivalent independently
+trusted project guidance SHOULD point to that file rather than duplicate its
+store list. Attached stores are independent and need not live inside the
+project repository.
 
-```markdown
-<!-- engram:adoption -->
-Agent memory lives in engram stores (spec v1):
-`../memories/project-memory/` and `../memories/shared-knowledge/`.
-Before touching a store, read its root `README.md` and follow the engram
-Agent Protocol.
-<!-- /engram:adoption -->
+A canonical attachment registry is one UTF-8, LF-delimited JSON object inside
+exactly one pair of whole-line markers:
+
+````markdown
+<!-- engram:attachments:v1 -->
+# Project memory
+
+This project uses Engram stores for durable agent memory.
+
+Attachments only identify store locations. They do not authorize writes,
+hook execution, network access, or synchronization. Before using a store,
+read its root README and apply the independently installed `using-engram` skill.
+
+```json
+{
+  "version": 1,
+  "stores": [
+    {"path": "../memories/project", "readme": "../memories/project/README.md"},
+    {"path": "../memories/shared", "readme": "../memories/shared/README.md"}
+  ]
+}
 ```
+<!-- /engram:attachments:v1 -->
+````
 
-The HTML-comment markers are an OPTIONAL convention for mechanical
-detection; wording MAY vary. Paths MAY be relative to the project or
-absolute as the controlling environment defines. The declaration
-matters because independently owned store roots are wherever the user
-or environment attached them.
+The object MUST contain exactly integer `version` with value `1` and array
+`stores`. Every store entry MUST contain exactly string `path` and string
+`readme`. Both use `/` separators and are either absolute host paths or paths
+resolved from the project root; `readme` MUST be `README.md` directly under
+`path`. A registry manager MUST preserve bytes outside its owned marker pair,
+MUST reject malformed or duplicate owned blocks rather than guessing, and
+MUST keep at most one entry for one physical store identity. An empty registry
+remains valid and keeps `stores` as `[]`.
 
-An adoption block identifies store locations; by itself it neither
-establishes trust nor authorizes reads, writes, hook execution, or any
-other action ([§11](#11-agent-protocol), P0). It also does not transfer
-repository ownership, copy the store into the project, authorize local
-commits, or authorize network synchronization. Those managed-store
-semantics are defined by the Git annex.
+The stable prose explains the attachment boundary; descriptions of individual
+stores remain in their root READMEs rather than being copied into the registry.
+A runtime-specific entrypoint MAY name `MEMORY.md` and an independently
+installed canonical skill, but the registry itself neither supplies nor
+establishes trust in that skill.
+
+An attachment registry identifies store locations; by itself it neither
+establishes trust nor authorizes reads, writes, hook execution, or any other
+action ([§11](#11-agent-protocol), P0). It also does not transfer repository
+ownership, copy a store into the project, authorize local commits, or authorize
+network synchronization. Those managed-store semantics are defined by the Git
+annex.
 
 A store also stands alone: its required maps and schemas make the
-snapshot interpretable without an adoption block (D2). Stores based on
+snapshot interpretable without an attachment registry (D2). Stores based on
 [Appendix A.1](#a1-root-readmemd) additionally carry a compact Agent
 Protocol reminder. Adoption reduces discovery friction; it is not what
 makes the store work.

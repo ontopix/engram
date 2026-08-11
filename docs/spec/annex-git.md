@@ -2,7 +2,7 @@
 
 **Version:** v1
 **Status:** Draft
-**Revision:** 2026-08-09
+**Revision:** 2026-08-11
 **Normative status:** Normative
 
 This annex binds the core standard's portable snapshots and changesets to Git-managed writable
@@ -216,9 +216,9 @@ preparation layer.
 
 ## 6. Attachments and repository topology
 
-Core §12 attachments discover independent stores; they do not change which Git
-repository owns a managed store. One store MAY be attached to many projects,
-and one project MAY attach many stores.
+Core §12 `MEMORY.md` attachment registries discover independent stores; they do
+not change which Git repository owns a managed store. One store MAY be attached
+to many projects, and one project MAY attach many stores.
 
 Keeping a reusable store outside consumer repositories is RECOMMENDED. If it
 is nested below another repository worktree, the outer repository SHOULD

@@ -7,8 +7,8 @@ small conforming snapshot used by the examples.
 
 | Runtime | Example | What it demonstrates |
 |---|---|---|
-| Codex | [`codex/`](codex/README.md) | `AGENTS.md` attachment plus independently trusted canonical skills |
-| Claude Code | [`claude-code/`](claude-code/README.md) | `CLAUDE.md` attachment plus native project skills |
+| Codex | [`codex/`](codex/README.md) | `MEMORY.md`, an `AGENTS.md` pointer, and verified project skills |
+| Claude Code | [`claude-code/`](claude-code/README.md) | `MEMORY.md`, a `CLAUDE.md` pointer, and verified project skills |
 | Generic filesystem agent | [`generic-json/`](generic-json/README.md) | Read-only orientation, bounded search, JSON diagnostics, and managed acceptance |
 
 All three keep the same boundaries:

@@ -6,8 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"slices"
-	"sort"
 	"strings"
 	"testing"
 
@@ -25,24 +23,24 @@ func TestAttachDetachPreserveSurroundingBytes(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	entrypoint := filepath.Join(project, "AGENTS.md")
-	if err := os.WriteFile(entrypoint, []byte("before\n\nafter\n"), 0o640); err != nil {
+	memoryFile := filepath.Join(project, "MEMORY.md")
+	if err := os.WriteFile(memoryFile, []byte("before\n\nafter\n"), 0o640); err != nil {
 		t.Fatal(err)
 	}
 
-	attached, err := Attach(project, entrypoint, second)
+	attached, err := Attach(project, memoryFile, second)
 	if err != nil || !attached.Changed {
 		t.Fatalf("first attach = %#v, %v", attached, err)
 	}
-	attached, err = Attach(project, entrypoint, first)
+	attached, err = Attach(project, memoryFile, first)
 	if err != nil || !attached.Changed {
 		t.Fatalf("second attach = %#v, %v", attached, err)
 	}
-	unchanged, err := Attach(project, entrypoint, first)
+	unchanged, err := Attach(project, memoryFile, first)
 	if err != nil || unchanged.Changed {
 		t.Fatalf("idempotent attach = %#v, %v", unchanged, err)
 	}
-	data, err := os.ReadFile(entrypoint)
+	data, err := os.ReadFile(memoryFile)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,39 +51,35 @@ func TestAttachDetachPreserveSurroundingBytes(t *testing.T) {
 	if err != nil || !present {
 		t.Fatalf("parse attached block: present=%v error=%v\n%s", present, err, data)
 	}
-	canonicalFirst, err := CanonicalStore(first)
-	if err != nil {
-		t.Fatal(err)
-	}
-	canonicalSecond, err := CanonicalStore(second)
-	if err != nil {
-		t.Fatal(err)
-	}
-	wantStores := []string{canonicalFirst, canonicalSecond}
-	sort.Strings(wantStores)
-	if !slices.Equal(block.stores, wantStores) {
+	wantStores := []string{"../first", "../second"}
+	if len(block.stores) != 2 || block.stores[0].Path != wantStores[0] || block.stores[1].Path != wantStores[1] {
 		t.Fatalf("stores = %#v, want sorted %#v", block.stores, wantStores)
 	}
 	if strings.Count(string(data), OpenMarker) != 1 || strings.Count(string(data), CloseMarker) != 1 {
 		t.Fatalf("owned markers = %q", data)
 	}
 
-	detached, err := Detach(project, entrypoint, first)
+	detached, err := Detach(project, memoryFile, first)
 	if err != nil || !detached.Changed {
 		t.Fatalf("first detach = %#v, %v", detached, err)
 	}
-	detached, err = Detach(project, entrypoint, second)
+	detached, err = Detach(project, memoryFile, second)
 	if err != nil || !detached.Changed {
 		t.Fatalf("last detach = %#v, %v", detached, err)
 	}
-	final, err := os.ReadFile(entrypoint)
+	final, err := os.ReadFile(memoryFile)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(final) != "before\n\nafter\n\n" {
-		t.Fatalf("detach changed surrounding bytes: %q", final)
+	empty, err := encode([]attachedStore{})
+	if err != nil {
+		t.Fatal(err)
 	}
-	info, err := os.Stat(entrypoint)
+	wantFinal := "before\n\nafter\n\n" + string(empty)
+	if string(final) != wantFinal {
+		t.Fatalf("detach changed surrounding bytes: %q, want %q", final, wantFinal)
+	}
+	info, err := os.Stat(memoryFile)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +116,7 @@ func TestReadOptionalPinsOriginalIdentity(t *testing.T) {
 	}
 }
 
-func TestAttachCreatesDefaultEntrypoint(t *testing.T) {
+func TestAttachCreatesDefaultMemoryManifest(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	project := filepath.Join(root, "project")
@@ -140,10 +134,10 @@ func TestAttachCreatesDefaultEntrypoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !result.Changed || result.Entrypoint != filepath.Join(canonicalProject, "AGENTS.md") {
+	if !result.Changed || result.MemoryFile != filepath.Join(canonicalProject, "MEMORY.md") {
 		t.Fatalf("result = %#v", result)
 	}
-	data, err := os.ReadFile(result.Entrypoint)
+	data, err := os.ReadFile(result.MemoryFile)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,12 +145,12 @@ func TestAttachCreatesDefaultEntrypoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want, err := encode([]string{canonicalStore})
+	want, err := encode([]attachedStore{describeStore(canonicalProject, canonicalStore)})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(data) != string(want) {
-		t.Fatalf("entrypoint = %q, want %q", data, want)
+		t.Fatalf("memory manifest = %q, want %q", data, want)
 	}
 }
 
@@ -187,6 +181,17 @@ func TestMalformedOwnedBlockIsNeverRepaired(t *testing.T) {
 	}
 }
 
+func TestDuplicateManifestJSONFieldIsRejected(t *testing.T) {
+	block, err := encode([]attachedStore{{Path: "../memory", README: "../memory/README.md"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	malformed := bytes.Replace(block, []byte(`"version": 1,`), []byte(`"version": 1, "version": 1,`), 1)
+	if _, _, err := parse(malformed); !errors.Is(err, ErrMalformedBlock) {
+		t.Fatalf("error=%v, want malformed block", err)
+	}
+}
+
 func TestDuplicatePhysicalIdentityIsRejected(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symbolic-link setup requires platform privileges")
@@ -204,7 +209,7 @@ func TestDuplicatePhysicalIdentityIsRejected(t *testing.T) {
 	if err := os.Symlink(store, alias); err != nil {
 		t.Fatal(err)
 	}
-	block, err := encode([]string{store, alias})
+	block, err := encode([]attachedStore{describeStore(project, store), describeStore(project, alias)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -217,10 +222,10 @@ func TestDuplicatePhysicalIdentityIsRejected(t *testing.T) {
 	}
 }
 
-func TestEntrypointMustStayBelowProject(t *testing.T) {
+func TestMemoryFileMustStayBelowProject(t *testing.T) {
 	t.Parallel()
 	project := t.TempDir()
-	if _, err := ResolveEntrypoint(project, filepath.Join("..", "AGENTS.md")); err == nil {
+	if _, err := ResolveMemoryFile(project, filepath.Join("..", "MEMORY.md")); err == nil {
 		t.Fatal("path escape accepted")
 	}
 }
@@ -261,7 +266,7 @@ func TestDetachCanRemoveAStaleMissingPath(t *testing.T) {
 	if err := os.Remove(store); err != nil {
 		t.Fatal(err)
 	}
-	detached, err := Detach(project, attached.Entrypoint, store)
+	detached, err := Detach(project, attached.MemoryFile, store)
 	if err != nil || !detached.Changed {
 		t.Fatalf("detach = %#v, %v", detached, err)
 	}
@@ -501,7 +506,7 @@ func TestUpdaterDetachCannotSucceedWithResidualLock(t *testing.T) {
 	}
 	updater := NewUpdater()
 	updater.beforeRemove = func(string) error { return errors.New("injected lock removal failure") }
-	result, err := updater.Detach(project, attached.Entrypoint, store)
+	result, err := updater.Detach(project, attached.MemoryFile, store)
 	if err == nil || result != (Result{}) {
 		t.Fatalf("result=%#v error=%v", result, err)
 	}
@@ -509,10 +514,10 @@ func TestUpdaterDetachCannotSucceedWithResidualLock(t *testing.T) {
 	if !ok || !effect.Durable || !effect.RecoveryRequired {
 		t.Fatalf("effect=%#v present=%v error=%v", effect, ok, err)
 	}
-	if _, err := os.Lstat(attached.Entrypoint + ".engram.lock"); err != nil {
+	if _, err := os.Lstat(attached.MemoryFile + ".engram.lock"); err != nil {
 		t.Fatalf("residual lock missing: %v", err)
 	}
-	if content, readErr := os.ReadFile(attached.Entrypoint); readErr != nil || bytes.Contains(content, []byte(OpenMarker)) {
+	if content, readErr := os.ReadFile(attached.MemoryFile); readErr != nil || !bytes.Contains(content, []byte(`"stores": []`)) {
 		t.Fatalf("detachment was not published: %q %v", content, readErr)
 	}
 }

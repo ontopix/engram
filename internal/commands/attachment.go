@@ -13,7 +13,7 @@ import (
 type attachResult struct {
 	Project    string                     `json:"project"`
 	Store      string                     `json:"store"`
-	Entrypoint string                     `json:"entrypoint"`
+	MemoryFile string                     `json:"memory_file"`
 	Changed    bool                       `json:"changed"`
 	Validation any                        `json:"validation"`
 	Audits     []managedread.HistoryAudit `json:"audits"`
@@ -73,13 +73,13 @@ func runAttach(ctx context.Context, invocation *cli.Invocation, updater attachme
 	if err != nil {
 		return attachmentFailure(err, "select attachment project")
 	}
-	entrypointOption, _ := invocation.Options.One("entrypoint")
-	entrypoint, err := attachment.ResolveEntrypoint(project, entrypointOption)
+	memoryFileOption, _ := invocation.Options.One("memory-file")
+	memoryFile, err := attachment.ResolveMemoryFile(project, memoryFileOption)
 	if err != nil {
-		return attachmentFailure(err, "select attachment entrypoint")
+		return attachmentFailure(err, "select project memory manifest")
 	}
 	value := attachResult{
-		Project: project, Store: storePath, Entrypoint: entrypoint,
+		Project: project, Store: storePath, MemoryFile: memoryFile,
 		Validation: audit.Validation, Audits: audit.Audits,
 	}
 	if audit.Validation.Status == "indeterminate" {
@@ -88,7 +88,7 @@ func runAttach(ctx context.Context, invocation *cli.Invocation, updater attachme
 	if audit.Validation.HasErrors() {
 		return cli.Result{Outcome: cli.OutcomeIssues, Value: value}
 	}
-	published, err := updater.Attach(project, entrypoint, storePath)
+	published, err := updater.Attach(project, memoryFile, storePath)
 	if err != nil {
 		return attachmentFailure(err, "publish attachment")
 	}
@@ -108,12 +108,12 @@ func runDetach(ctx context.Context, invocation *cli.Invocation, updater attachme
 	if err != nil {
 		return attachmentFailure(err, "select attachment project")
 	}
-	entrypointOption, _ := invocation.Options.One("entrypoint")
-	entrypoint, err := attachment.ResolveEntrypoint(project, entrypointOption)
+	memoryFileOption, _ := invocation.Options.One("memory-file")
+	memoryFile, err := attachment.ResolveMemoryFile(project, memoryFileOption)
 	if err != nil {
-		return attachmentFailure(err, "select attachment entrypoint")
+		return attachmentFailure(err, "select project memory manifest")
 	}
-	published, err := updater.Detach(project, entrypoint, invocation.Arguments[0])
+	published, err := updater.Detach(project, memoryFile, invocation.Arguments[0])
 	if err != nil {
 		return attachmentFailure(err, "publish detachment")
 	}

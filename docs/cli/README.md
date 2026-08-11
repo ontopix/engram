@@ -23,6 +23,7 @@ engram
 ├── clone
 ├── attach
 ├── detach
+├── setup
 ├── status
 ├── diff
 ├── log
@@ -54,6 +55,7 @@ Authority is intentionally centralized:
 |---|---|
 | `init`, `clone` | Core snapshot/transition rules; Git annex §§2–4, §7, Appendix B |
 | `attach`, `detach` | Core §12; Git annex §6 |
+| `setup` | Core §11–12; skills and adapters annexes |
 | `status`, `diff`, `log` | Git annex §§3 and 5 |
 | `check` | Core §9; Git annex §§3 and 8 for managed forms |
 | `add`, `fmt`, `new`, `mv`, `schema` | Core §§5–8; Git annex §5 for working drafts and staging |
@@ -97,7 +99,7 @@ description:
 
 | Help category | Commands |
 |---|---|
-| Create and obtain stores | `init`, `clone`, `attach`, `detach` |
+| Create, obtain, and connect stores | `init`, `clone`, `attach`, `detach`, `setup` |
 | Inspect state | `status`, `diff`, `log`, `check` |
 | Work on the current draft | `add`, `fmt`, `new`, `mv`, `schema` |
 | Accept and undo changes | `commit`, `revert` |
@@ -136,7 +138,7 @@ owner of an independent store.
 `status`, `diff`, `log`, `add`, discovery-based `check`, `fmt`, `new`, `mv`,
 `schema list/show/copy`, `commit`, `revert`, `hooks`, `pull`, `push`, and
 `doctor` without a positional path. It is not accepted by `init`, `clone`,
-`attach`, `detach`, `schema inventory`, `version`, explicit-path or
+`attach`, `detach`, `setup`, `schema inventory`, `version`, explicit-path or
 snapshot-pair `check`, or positional-path `doctor`.
 
 Unless a command says otherwise, command paths are relative to the selected
@@ -388,8 +390,9 @@ flags do not change JSON shape.
 |---|---|
 | `init` | `dry_run` boolean, `root` host path, `accepted` Git state, nullable `files` logical changes, `launcher` (`planned`, `installed`, `unchanged`), `validation` changeset result |
 | `clone` | `root` host path, `remote` string, `accepted` Git state, `published` and `reused` booleans, `verified_commits` integer, `launcher`, managed-store `validation`, root-to-tip `audits` |
-| `attach` | `project`, `store`, `entrypoint` host paths; `changed`; managed-store `validation`; root-to-tip `audits` |
-| `detach` | `project`, `store`, `entrypoint` host paths; `changed` |
+| `attach` | `project`, `store`, `memory_file` host paths; `changed`; managed-store `validation`; root-to-tip `audits` |
+| `detach` | `project`, `store`, `memory_file` host paths; `changed` |
+| `setup` | `project`, `memory_file`, `entrypoint`, and `skills_dir` host paths; `harness`; `dry_run`; `changed`; ordered `files` with project-relative `path` and `action` (`created`, `updated`) |
 | `status` | `mode` (`normal`, `pull-replay`), `accepted`, `candidate_base`, `staged`, `unstaged`, nullable `replay` |
 | `diff` | `from`, `to` state selectors, logical `changes`, and `stat` with `added`, `modified`, `deleted` counts |
 | `log` | newest-first `commits` |
@@ -516,37 +519,52 @@ atomic publication/recovery guarantees as Appendix B.
 ### 4.3 `attach`
 
 ```text
-engram attach STORE [--project PATH] [--entrypoint FILE]
+engram attach STORE [--project PATH] [--memory-file FILE]
 ```
 
 Records that a project uses an independent local managed store. `STORE` is a
 path, not a URL; use `clone` separately for acquisition. The project defaults
 to the current Git root, or the current directory outside Git.
-`--entrypoint` defaults to the project's `AGENTS.md` and must stay below the
+`--memory-file` defaults to the project's `MEMORY.md` and must stay below the
 project root.
 
 Attach completely audits the store before writing. It owns one versioned,
-delimited block in the entrypoint containing canonical absolute store paths.
-It creates or replaces only that block, preserves all surrounding bytes, and
-deduplicates physical store identities. A malformed or duplicate owned block
-is an integration error. Concurrent cooperating attach/detach operations do
-not lose one another; successful publication is one atomic file replacement.
+delimited block in the memory file. Store paths are relative to the project
+when the host can represent them that way and otherwise absolute; JSON uses
+`/` separators. Attach creates or replaces only that block, preserves all
+surrounding bytes, and deduplicates physical store identities. A malformed or
+duplicate owned block is an integration error. Concurrent cooperating
+attach/detach operations do not lose one another; successful publication is
+one atomic file replacement.
 
 The owned block has these markers and semantic content:
 
 ~~~markdown
-<!-- engram:adoption:v1 -->
-Engram stores (spec v1; canonical absolute paths):
+<!-- engram:attachments:v1 -->
+# Project memory
+
+This project uses Engram stores for durable agent memory.
+
+Attachments only identify store locations. They do not authorize writes,
+hook execution, network access, or synchronization. Before using a store,
+read its root README and apply the independently installed `using-engram` skill.
+
 ```json
-{"stores":["/Users/ada/memories/shared"]}
+{
+  "version": 1,
+  "stores": [
+    {
+      "path": "../memories/shared",
+      "readme": "../memories/shared/README.md"
+    }
+  ]
+}
 ```
-Before touching a store, read its root README and follow the engram Agent Protocol.
-<!-- /engram:adoption:v1 -->
+<!-- /engram:attachments:v1 -->
 ~~~
 
-The guidance in the block tells an agent to read the store's root README and
-follow the engram Agent Protocol. It does not assume that every conforming root
-README reproduces that protocol verbatim.
+Descriptions of individual stores remain in their root READMEs. The manifest
+may name `using-engram`, but it is not the trusted source of that skill.
 
 Attachment grants no authority and does not copy, move, commit, trust,
 synchronize, or delete memory. Repository ownership follows
@@ -555,18 +573,50 @@ synchronize, or delete memory. Repository ownership follows
 ### 4.4 `detach`
 
 ```text
-engram detach STORE [--project PATH] [--entrypoint FILE]
+engram detach STORE [--project PATH] [--memory-file FILE]
 ```
 
 Removes the matching path or physical identity from the CLI-owned attachment
-block. If other stores remain it rewrites the block; if the last is removed it
-removes the complete block and no surrounding bytes. A missing entry is an
-unchanged success. Conflicting duplicate physical identities are an
-integration error.
+block. The block remains with an empty `stores` array after the last removal so
+runtime entrypoints retain a valid target. A missing entry is an unchanged
+success. Conflicting duplicate physical identities are an integration error.
 
-Detach uses the same project, entrypoint, locking, preservation, and atomic
+Detach uses the same project, memory-file, locking, preservation, and atomic
 replacement rules as `attach`. It never deletes the store, changes history,
-revokes other permissions, or edits another project's attachment.
+revokes other permissions, removes installed skills, or edits another
+project's attachment.
+
+### 4.5 `setup`
+
+```text
+engram setup --harness HARNESS [--project PATH] [--memory-file FILE] [--dry-run]
+```
+
+Installs a project-scoped agent integration for `claude-code` or `codex`. The
+project follows the same explicit/current-Git-root/current-directory selection
+as `attach`. Claude Code uses `CLAUDE.md` and `.claude/skills/`; Codex uses
+`AGENTS.md` and `.agents/skills/`. `--memory-file` follows `attach` and defaults
+to project `MEMORY.md`; setup writes that selected project-relative path into
+the runtime entrypoint.
+
+Setup verifies the complete canonical skill manifest embedded in the running
+binary, materializes every listed `SKILL.md`, records their trusted installed
+digests, and owns one delimited entrypoint block pointing to project
+`MEMORY.md`. It preserves unrelated entrypoint bytes and unrelated skills. On
+later runs it updates only a skill whose current digest matches the previously
+installed manifest; a locally modified skill, malformed owned manifest, path
+alias, or malformed entrypoint block is an integration error rather than an
+overwrite.
+
+The command is idempotent and performs no network access, store mutation, hook
+execution, trust grant, or synchronization. `--dry-run` reports the exact
+planned files without creating directories or writing bytes.
+
+When the selected entrypoint contains the exact CLI-owned legacy
+`engram:adoption:v1` block, setup imports its store list into `MEMORY.md` before
+replacing that block with the harness pointer. A malformed legacy block is an
+integration error; similar user-authored prose is preserved and never guessed
+as migration input.
 
 ## 5. Inspecting state
 

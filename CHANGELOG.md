@@ -4,6 +4,10 @@
 
 ### Standard
 
+- Standardized project-level `MEMORY.md` attachment registries so one
+  runtime-neutral manifest can discover several independent stores while
+  retaining the Agent Protocol's trust and authority boundary. Runtime
+  entrypoints now point to that registry instead of duplicating store paths.
 - Clarified that draft check-code identities remain changeable through
   prereleases and become append-only at the first stable release (`v1.0.0`),
   matching the repository's stated release-candidate compatibility policy.
@@ -28,6 +32,12 @@
 
 ### Reference implementation
 
+- Changed `attach` and `detach` to manage the versioned attachment block in
+  project `MEMORY.md`, retaining an empty registry after the last detach, and
+  added idempotent `setup --harness codex|claude-code` to install the embedded,
+  digest-verified canonical skills plus a bounded runtime-entrypoint pointer.
+  Setup migrates the exact previously CLI-owned adoption block without treating
+  similar project prose as owned state.
 - Made human CLI discovery follow Git-style conventions: an empty invocation
   shows root help, root commands are grouped by workflow with short
   descriptions, group help describes its subcommands, and incomplete known

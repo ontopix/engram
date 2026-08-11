@@ -91,6 +91,34 @@ the destination visible. It does not copy ambient author identity into the
 store; configure the local identity before the first managed commit. Clone
 grants no preparation-hook trust and no push authority.
 
+## Connect a store to an agent project
+
+From the agent project, attach one or more independent stores. The project
+defaults to the current Git root, or the current directory outside Git:
+
+```sh
+engram attach ../memory
+engram attach ../shared-memory
+```
+
+Each command audits the store and creates or updates project `MEMORY.md`.
+Attachments only discover locations; they grant no read, write, hook, network,
+or synchronization authority.
+
+Install the project-scoped integration for the harness in use:
+
+```sh
+engram setup --harness codex
+# or
+engram setup --harness claude-code
+```
+
+Setup verifies the canonical skills embedded in the running binary, writes
+them below `.agents/skills/` or `.claude/skills/`, and adds a bounded pointer
+to `MEMORY.md` in `AGENTS.md` or `CLAUDE.md`. Run with `--dry-run` to inspect
+the planned files. Repeating setup is idempotent; locally modified installed
+skills are reported as conflicts rather than overwritten.
+
 ## Normal write cycle
 
 The normal cycle is explicit. In a store that already contains a `topics/`

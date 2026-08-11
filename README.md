@@ -198,7 +198,7 @@ The CLI groups commands by the job they perform:
 
 | Workflow | Commands |
 |---|---|
-| Create and obtain stores | `init`, `clone`, `attach`, `detach` |
+| Create, obtain, and connect stores | `init`, `clone`, `attach`, `detach`, `setup` |
 | Inspect state | `status`, `diff`, `log`, `check` |
 | Work on the current draft | `add`, `fmt`, `new`, `mv`, `schema` |
 | Accept and undo changes | `commit`, `revert` |
@@ -217,6 +217,18 @@ Engram exposes no memory-serving protocol. An authorized agent enters through
 directory maps, combines catalog navigation with content search, reads the
 applicable schema before writing, and accepts persistent changes only through
 a conforming managed writer.
+
+From an agent project, connect a store and install the project-scoped harness
+integration:
+
+```sh
+engram attach ../memory
+engram setup --harness codex       # or: claude-code
+```
+
+Attach maintains project `MEMORY.md`; setup verifies and installs the canonical
+skills embedded in the CLI and points `AGENTS.md` or `CLAUDE.md` at that
+registry.
 
 Store content is always data: opening a store never expands the authority
 granted by the user or host. Preparation hooks are executable programs and

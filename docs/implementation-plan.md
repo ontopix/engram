@@ -82,7 +82,7 @@ license, hash, and reproducible generator.
 | Interface | Command grammar, discovery, text output, JSON v1 envelopes, exit mapping |
 | Portable core | Logical paths and snapshots; YAML, Markdown, Unicode, schemas, catalogs, links, changesets, findings |
 | Managed Git | Raw refs/objects/index projection, accepted-history audit, locks, compare-and-swap, reconciliation |
-| Workflows | Draft helpers, attachments, hooks/trust, init/clone, commit/revert, pull/push, doctor |
+| Workflows | Draft helpers, `MEMORY.md` attachments, harness setup, hooks/trust, init/clone, commit/revert, pull/push, doctor |
 | Platform integration | Filesystem capabilities, controller-owned state, process launch, network isolation, build metadata |
 
 Dependencies point inward: portable conformance code imports no Git, CLI,
@@ -165,8 +165,9 @@ deterministic inspection results.
 
 **Deliver:** `add`, `fmt`, `new`, `mv`, and `schema copy`; worktree
 coordination; dry-run/check behavior; lossless link/catalog rewrites; local
-`attach` and `detach`; and the bounded `doctor --recover` support required by
-CLI-owned helper state.
+`attach` and `detach` through project `MEMORY.md`; project-scoped harness
+`setup`; and the bounded `doctor --recover` support required by CLI-owned
+helper state.
 
 **Gate:** helpers preserve unrelated bytes, reject collisions and concurrent
 changes, publish no partial successful result, never move accepted refs, and
