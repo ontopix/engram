@@ -1,7 +1,7 @@
 # engram reference CLI — implementation plan
 
-**Status:** Implemented; `v1.0.0-rc.1` release candidate
-**Revision:** 2026-08-09
+**Status:** Implemented; release-ready `v1.0.0-rc.1` baseline
+**Revision:** 2026-08-11
 **Normative status:** Non-normative
 
 This plan records how the v1 specification was implemented as the reference
@@ -46,9 +46,10 @@ Coverage is tracked in machine-readable fixtures and test manifests under
 
 ### Non-goals
 
-Version v1 will not add schema profiles, MCP, a daemon, a database, a public
-transaction handle, a top-level changeset family, an `engram git` family, a
-second hook phase, or a second acceptance engine behind raw `git commit`.
+Version v1 deliberately omits schema profiles, MCP, a daemon, a database, a
+public transaction handle, a top-level changeset family, an `engram git`
+family, a second hook phase, or a second acceptance engine behind raw
+`git commit`.
 Ordinary file reading, writing, and searching remain filesystem operations.
 
 ## 2. Technical baseline
@@ -81,7 +82,7 @@ license, hash, and reproducible generator.
 | Interface | Command grammar, discovery, text output, JSON v1 envelopes, exit mapping |
 | Portable core | Logical paths and snapshots; YAML, Markdown, Unicode, schemas, catalogs, links, changesets, findings |
 | Managed Git | Raw refs/objects/index projection, accepted-history audit, locks, compare-and-swap, reconciliation |
-| Workflows | Draft helpers, attachments, hooks/trust, init/clone, commit/revert, pull/push, doctor |
+| Workflows | Draft helpers, `MEMORY.md` attachments, harness setup, hooks/trust, init/clone, commit/revert, pull/push, doctor |
 | Platform integration | Filesystem capabilities, controller-owned state, process launch, network isolation, build metadata |
 
 Dependencies point inward: portable conformance code imports no Git, CLI,
@@ -99,19 +100,19 @@ each layer directly and the compiled binary as a black box.
 | M3 — draft, staging, and attachment helpers | Complete |
 | M4 — hooks, trust, and managed acceptance | Complete |
 | M5 — linear synchronization | Complete |
-| M6 — operations, packaging, and v1 release | Complete; release workflow re-runs all gates before publication |
+| M6 — operations, packaging, and release readiness | Complete; release workflow re-runs all gates before publication |
 
 The final `v1.0.0` tag remains a publication decision. Until then, finding
 identities, the JSON v1 protocol, and other observable interfaces retain
 release-candidate rather than stable status.
 
-## 3. Delivery roadmap
+## 3. Delivery record
 
-Milestones were dependency gates, not date promises. The Now/Next/Later labels
-below preserve the implementation sequence: conformance first, then local
-authoring and acceptance, then synchronization and release hardening.
+Milestones were dependency gates, not date promises. The completed phases below
+record the implementation sequence: conformance first, then local authoring and
+acceptance, then synchronization and release hardening.
 
-### Now — conformance kernel and managed reads
+### Phase 1 — conformance kernel and managed reads
 
 #### M0 — Contract harness and dependency proofs
 
@@ -156,7 +157,7 @@ linked worktrees, merge/malformed boundaries, unavailable objects without
 fetching, raw-tree pruning, index eligibility, modes, replacements/grafts, and
 deterministic inspection results.
 
-### Next — local authoring and acceptance
+### Phase 2 — local authoring and acceptance
 
 #### M3 — Draft, staging, and attachment helpers
 
@@ -164,8 +165,9 @@ deterministic inspection results.
 
 **Deliver:** `add`, `fmt`, `new`, `mv`, and `schema copy`; worktree
 coordination; dry-run/check behavior; lossless link/catalog rewrites; local
-`attach` and `detach`; and the bounded `doctor --recover` support required by
-CLI-owned helper state.
+`attach` and `detach` through project `MEMORY.md`; project-scoped harness
+`setup`; and the bounded `doctor --recover` support required by CLI-owned
+helper state.
 
 **Gate:** helpers preserve unrelated bytes, reject collisions and concurrent
 changes, publish no partial successful result, never move accepted refs, and
@@ -189,7 +191,7 @@ hooks execute once from the trusted base set, and raw/native Git hooks or
 inherited Git environment cannot redirect the managed operation. Init and
 clone publish only complete verified stores and are safe to retry or recover.
 
-### Later — synchronization and release
+### Phase 3 — synchronization and release readiness
 
 #### M5 — Linear synchronization
 
@@ -206,14 +208,15 @@ interruption/recovery, missing history, network denial, remote conditional
 updates, and unknown publication outcome. No path performs merge, force, or
 implicit retry.
 
-#### M6 — Operations, packaging, and v1 release
+#### M6 — Operations, packaging, and release readiness
 
 **Depends on:** all prior milestone gates.
 
 **Deliver:** remaining advisory `doctor` checks; final `version`; canonical
-skills packaged through skills-only adapters; optional generated shell
-completions; cross-platform archives, checksums, release notes, and operator
-documentation.
+skills packaged through skills-only adapters; cross-platform archives,
+checksums, release notes, and operator documentation. Generated shell
+completions remain a possible post-v1 convenience and were not part of the
+completed command surface.
 
 **Gate:** all commands and global-option combinations have golden text/JSON
 and exit tests; unit, race, vet, fuzz-smoke, shell, and repository checks pass;

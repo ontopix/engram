@@ -680,7 +680,11 @@ func releaseAssets(ctx context.Context, root string, tracked map[string]struct{}
 	if err != nil {
 		return nil, err
 	}
-	names := []string{"LICENSE", "README.md", "THIRD_PARTY_NOTICES.md", "licenses/go/LICENSE.txt", "licenses/go/PATENTS.txt", "skills/manifest-v1.json"}
+	names := []string{
+		"CHANGELOG.md", "CONTRIBUTING.md", "LICENSE", "README.md", "SECURITY.md",
+		"SUPPORT.md", "THIRD_PARTY_NOTICES.md", "licenses/go/LICENSE.txt",
+		"licenses/go/PATENTS.txt", "skills/manifest-v1.json",
+	}
 	for _, tree := range []struct {
 		root       string
 		extensions map[string]bool
@@ -688,6 +692,7 @@ func releaseAssets(ctx context.Context, root string, tracked map[string]struct{}
 		{root: "docs", extensions: map[string]bool{".md": true}},
 		{root: "schemas", extensions: map[string]bool{".md": true}},
 		{root: "examples/minimal", extensions: map[string]bool{".md": true, ".yaml": true}},
+		{root: "examples/integrations", extensions: map[string]bool{".md": true, ".sh": true}},
 	} {
 		treeNames := releaseTreeNames(tracked, tree.root, tree.extensions)
 		names = append(names, treeNames...)

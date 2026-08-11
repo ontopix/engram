@@ -43,6 +43,7 @@ func registerReferenceBase(app *cli.App) {
 	RegisterPortable(app)
 	RegisterManagedReads(app)
 	RegisterAttachments(app)
+	RegisterSetup(app)
 	RegisterStaging(app)
 	RegisterDraft(app)
 	RegisterAcquisition(app)

@@ -357,6 +357,13 @@ func validateNew(invocation *Invocation) *ProtocolError {
 	return nil
 }
 
+func validateSetup(invocation *Invocation) *ProtocolError {
+	if !invocation.Options.Has("harness") {
+		return usageError("setup requires --harness HARNESS")
+	}
+	return nil
+}
+
 func validateCommit(invocation *Invocation) *ProtocolError {
 	message, hasMessage := invocation.Options.One("message")
 	if !hasMessage && !invocation.Options.Has("dry-run") {

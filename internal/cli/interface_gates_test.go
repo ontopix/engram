@@ -24,8 +24,9 @@ type commandGolden struct {
 var protocolCommandGoldens = []commandGolden{
 	{CommandInit, []string{"init"}, "engram init [PATH] [--schema TYPE]... [--dry-run]", []string{"init", "--dry-run"}, StoreForbidden},
 	{CommandClone, []string{"clone"}, "engram clone URL [PATH]", []string{"clone", "https://example.test/memory.git", "memory"}, StoreForbidden},
-	{CommandAttach, []string{"attach"}, "engram attach STORE [--project PATH] [--entrypoint FILE]", []string{"attach", "memory"}, StoreForbidden},
-	{CommandDetach, []string{"detach"}, "engram detach STORE [--project PATH] [--entrypoint FILE]", []string{"detach", "memory"}, StoreForbidden},
+	{CommandAttach, []string{"attach"}, "engram attach STORE [--project PATH] [--memory-file FILE]", []string{"attach", "memory"}, StoreForbidden},
+	{CommandDetach, []string{"detach"}, "engram detach STORE [--project PATH] [--memory-file FILE]", []string{"detach", "memory"}, StoreForbidden},
+	{CommandSetup, []string{"setup"}, "engram setup --harness HARNESS [--project PATH] [--memory-file FILE] [--dry-run]", []string{"setup", "--harness", "codex", "--dry-run"}, StoreForbidden},
 	{CommandStatus, []string{"status"}, "engram status", []string{"status"}, StoreAllowed},
 	{CommandDiff, []string{"diff"}, "engram diff [REV-A [REV-B]] [--staged|--cached] [--stat|--name-only]", []string{"diff", "--name-only"}, StoreAllowed},
 	{CommandLog, []string{"log"}, "engram log [-n COUNT] [--oneline]", []string{"log", "-n", "1"}, StoreAllowed},
@@ -117,11 +118,12 @@ func TestInterfaceGateRootAndGroupHelpExact(t *testing.T) {
 const rootHelpGolden = "Usage:\n" +
 	"  engram [GLOBAL-OPTIONS] COMMAND [ARGS]\n\n" +
 	"These are the engram commands grouped by workflow:\n\n" +
-	"Create and obtain stores:\n" +
+	"Create, obtain, and connect stores:\n" +
 	"  init     Create or initialize a managed store\n" +
 	"  clone    Clone a managed store into a new directory\n" +
-	"  attach   Attach a store to an agent project\n" +
-	"  detach   Detach a store from an agent project\n\n" +
+	"  attach   Attach a store through a project memory manifest\n" +
+	"  detach   Detach a store from a project memory manifest\n" +
+	"  setup    Install an agent-harness integration\n\n" +
 	"Inspect state:\n" +
 	"  status   Show working draft and initial candidate status\n" +
 	"  diff     Show changes between store states\n" +

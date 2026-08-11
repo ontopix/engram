@@ -2,7 +2,7 @@
 
 **Version:** v1
 **Status:** Draft
-**Revision:** 2026-08-09
+**Revision:** 2026-08-11
 **Normative status:** Normative
 
 ## Table of contents
@@ -1157,8 +1157,8 @@ acceptance follows the Git annex.
 **check** is the deterministic validation function of the standard. Its
 findings have the normative identity `(code, path)` and are defined in
 [Appendix B](#appendix-b--check-catalog-normative). Code stability
-follows [§13](#13-versioning): draft codes may change before the first
-release; published codes are never reused with a different meaning. An
+follows [§13](#13-versioning): draft codes may change before `v1.0.0`;
+published stable codes are never reused with a different meaning. An
 implementation MAY attach a human-readable or structured `detail`, but
 that detail is non-normative: consumers MUST NOT parse it as a stable
 interface or use it to decide conformance. The ordered sequence of
@@ -1387,35 +1387,61 @@ policy does not authorize.
 
 ## 12. Adoption
 
-A project that uses engram stores SHOULD declare its **attachments** in
-its agent entrypoint or equivalent project guidance, naming each store
-root and pointing at its README. Attached stores are independent and
-need not live inside the project repository:
+A project that uses engram stores SHOULD declare its **attachments** in a
+project-root `MEMORY.md`. An agent entrypoint or equivalent independently
+trusted project guidance SHOULD point to that file rather than duplicate its
+store list. Attached stores are independent and need not live inside the
+project repository.
 
-```markdown
-<!-- engram:adoption -->
-Agent memory lives in engram stores (spec v1):
-`../memories/project-memory/` and `../memories/shared-knowledge/`.
-Before touching a store, read its root `README.md` and follow the engram
-Agent Protocol.
-<!-- /engram:adoption -->
+A canonical attachment registry is one UTF-8, LF-delimited JSON object inside
+exactly one pair of whole-line markers:
+
+````markdown
+<!-- engram:attachments:v1 -->
+# Project memory
+
+This project uses Engram stores for durable agent memory.
+
+Attachments only identify store locations. They do not authorize writes,
+hook execution, network access, or synchronization. Before using a store,
+read its root README and apply the independently installed `using-engram` skill.
+
+```json
+{
+  "version": 1,
+  "stores": [
+    {"path": "../memories/project", "readme": "../memories/project/README.md"},
+    {"path": "../memories/shared", "readme": "../memories/shared/README.md"}
+  ]
+}
 ```
+<!-- /engram:attachments:v1 -->
+````
 
-The HTML-comment markers are an OPTIONAL convention for mechanical
-detection; wording MAY vary. Paths MAY be relative to the project or
-absolute as the controlling environment defines. The declaration
-matters because independently owned store roots are wherever the user
-or environment attached them.
+The object MUST contain exactly integer `version` with value `1` and array
+`stores`. Every store entry MUST contain exactly string `path` and string
+`readme`. Both use `/` separators and are either absolute host paths or paths
+resolved from the project root; `readme` MUST be `README.md` directly under
+`path`. A registry manager MUST preserve bytes outside its owned marker pair,
+MUST reject malformed or duplicate owned blocks rather than guessing, and
+MUST keep at most one entry for one physical store identity. An empty registry
+remains valid and keeps `stores` as `[]`.
 
-An adoption block identifies store locations; by itself it neither
-establishes trust nor authorizes reads, writes, hook execution, or any
-other action ([§11](#11-agent-protocol), P0). It also does not transfer
-repository ownership, copy the store into the project, authorize local
-commits, or authorize network synchronization. Those managed-store
-semantics are defined by the Git annex.
+The stable prose explains the attachment boundary; descriptions of individual
+stores remain in their root READMEs rather than being copied into the registry.
+A runtime-specific entrypoint MAY name `MEMORY.md` and an independently
+installed canonical skill, but the registry itself neither supplies nor
+establishes trust in that skill.
+
+An attachment registry identifies store locations; by itself it neither
+establishes trust nor authorizes reads, writes, hook execution, or any other
+action ([§11](#11-agent-protocol), P0). It also does not transfer repository
+ownership, copy a store into the project, authorize local commits, or authorize
+network synchronization. Those managed-store semantics are defined by the Git
+annex.
 
 A store also stands alone: its required maps and schemas make the
-snapshot interpretable without an adoption block (D2). Stores based on
+snapshot interpretable without an attachment registry (D2). Stores based on
 [Appendix A.1](#a1-root-readmemd) additionally carry a compact Agent
 Protocol reminder. Adoption reduces discovery friction; it is not what
 makes the store work.
@@ -1435,12 +1461,12 @@ Stores declare the major version they target in `root.yaml`
 ([§3](#3-the-root-manifest)). Normative annexes version independently;
 an annex's version MUST NOT be inferred from this document's.
 
-Until the first release, check codes are draft identifiers and MAY be
-changed, removed, or reassigned without compatibility guarantees. From
-the first release onward, the catalog is append-only: a published code
-keeps its meaning forever. A published code MAY be retired when its
-inputs prove non-portable; its former meaning remains documented and
-the code MUST NOT be emitted or reused.
+Until the first stable release (`v1.0.0`), check codes are draft identifiers
+and MAY be changed, removed, or reassigned without compatibility guarantees.
+From `v1.0.0` onward, the catalog is append-only: a published code keeps its
+meaning forever. A published code MAY be retired when its inputs prove
+non-portable; its former meaning remains documented and the code MUST NOT be
+emitted or reused.
 
 ---
 
@@ -1564,10 +1590,10 @@ description: "<one line for the catalog>"
 
 ## Appendix B — Check catalog (normative)
 
-Before the first release, codes are draft identifiers and may change
-under [§13](#13-versioning). Published codes are assigned once and never
-reused. `E` findings in the snapshot ranges (E1xx–E4xx) decide snapshot
-conformance; E5xx require a changeset; E6xx decide the additional
+Before the first stable release (`v1.0.0`), codes are draft identifiers and
+may change under [§13](#13-versioning). Published stable codes are assigned
+once and never reused. `E` findings in the snapshot ranges (E1xx–E4xx) decide
+snapshot conformance; E5xx require a changeset; E6xx decide the additional
 managed-store target; `W` findings are advisory.
 Finding identity, path attribution, deduplication, and ordering follow
 [§9.1](#91-check); diagnostic detail is not part of this catalog's

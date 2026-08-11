@@ -17,8 +17,8 @@ import (
 // reusing an audit after its rule-set identity changes. A repository test binds
 // both values to the authoritative checked-in documents.
 const (
-	acceptedAuditCoreSHA256 = "3e0a13e73160ad064d028f1c2a64780c2a5d39fb176d64d2df131b685e412891"
-	acceptedAuditGitSHA256  = "08edb118db1b3bc7a796a516fc58c9e274902fd835b925b731c8b0f28fe5ffff"
+	acceptedAuditCoreSHA256 = "ae7fb609b67c2ddfad661af6713175a8bbe47a9f40c9b0ca77cc432f3b5676a3"
+	acceptedAuditGitSHA256  = "c1c4bdae9ae6c2e3fb76218735bf164681d7e0a29b94d6e42793ab0b9f83df0f"
 
 	acceptedAuditRuleSetIdentity = "core/v1@sha256:" + acceptedAuditCoreSHA256 +
 		";annex-git/v1@sha256:" + acceptedAuditGitSHA256

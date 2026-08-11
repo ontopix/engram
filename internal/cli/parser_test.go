@@ -14,8 +14,9 @@ func TestParseCompleteCommandSurface(t *testing.T) {
 	}{
 		{"init", []string{"init", "memory", "--schema", "person", "--schema", "project", "--dry-run"}, CommandInit},
 		{"clone", []string{"clone", "https://example.test/memory.git", "memory"}, CommandClone},
-		{"attach", []string{"attach", "/memory", "--project", "/project", "--entrypoint", "AGENTS.md"}, CommandAttach},
+		{"attach", []string{"attach", "/memory", "--project", "/project", "--memory-file", "MEMORY.md"}, CommandAttach},
 		{"detach", []string{"detach", "/memory"}, CommandDetach},
+		{"setup", []string{"setup", "--harness", "codex", "--memory-file", "MEMORY.md", "--dry-run"}, CommandSetup},
 		{"status", []string{"status"}, CommandStatus},
 		{"diff", []string{"diff", "--cached", "--stat"}, CommandDiff},
 		{"log", []string{"log", "-n", "10", "--oneline"}, CommandLog},
@@ -105,6 +106,7 @@ func TestParseRejectsInvalidGrammar(t *testing.T) {
 		{"check half pair", []string{"check", "--base", "base"}, "provided together"},
 		{"new description", []string{"new", "note", "new.md"}, "requires --description"},
 		{"new body title", []string{"new", "note", "new.md", "--description", "A note.", "--body", "body.md", "--title", "Title"}, "mutually exclusive"},
+		{"setup harness", []string{"setup"}, "requires --harness"},
 		{"commit message", []string{"commit"}, "requires -m"},
 		{"commit newline", []string{"commit", "-m", "bad\n"}, "MESSAGE must"},
 		{"hooks state", []string{"hooks", "list", "--state", "candidate"}, "invalid STATE"},
@@ -211,8 +213,8 @@ func TestModelHasUniqueCanonicalCommandsAndAliases(t *testing.T) {
 			}
 		}
 	}
-	if len(commands) != 25 {
-		t.Fatalf("command count = %d, want 25", len(commands))
+	if len(commands) != 26 {
+		t.Fatalf("command count = %d, want 26", len(commands))
 	}
 }
 

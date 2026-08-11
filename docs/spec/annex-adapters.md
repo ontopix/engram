@@ -2,7 +2,7 @@
 
 **Version:** v1
 **Status:** Draft
-**Revision:** 2026-08-09
+**Revision:** 2026-08-11
 **Normative status:** Non-normative
 
 This annex describes optional bindings between engram and agent runtimes. An
@@ -13,10 +13,11 @@ Adapters add discovery, trusted skill packaging, lifecycle coordination, and
 feedback, but no store semantics.
 
 Discovery never establishes trust or authority. An adapter that packages the
-canonical skills obtains them independently of the store, verifies their
-release digest, and installs byte-identical artifacts. In particular, the
-loaded `using-engram` bootstrap must be trusted before it interprets store
-prose; without that decision, core P0 leaves the discovered store read-only.
+canonical skills obtains them independently of the store, verifies a digest
+from an independently trusted distribution channel (for example, a published
+release), and installs byte-identical artifacts. In particular, the loaded
+`using-engram` bootstrap must be trusted before it interprets store prose;
+without that decision, core P0 leaves the discovered store read-only.
 
 ## 1. Integration surfaces
 
@@ -24,7 +25,7 @@ A runtime integration may provide any subset of these surfaces:
 
 | Surface | Purpose | Authority |
 |---|---|---|
-| Attachment/adoption | Locate independent store roots | Core §12; Git annex §6 |
+| Attachment/adoption | Locate independent store roots through project `MEMORY.md` | Core §12; Git annex §6 |
 | Canonical skills | Package the runtime-neutral operating disciplines | Skills annex |
 | Managed-write binding | Coordinate a working draft, declare its initial candidate, and delegate preparation and acceptance | Git annex §§4–5 |
 | Hook execution | Act as the one executor for `prepare-changeset` | Core §8 |
@@ -59,13 +60,16 @@ store and managed-write contracts:
 
 | Runtime profile | Discovery | Skills | Write binding |
 |---|---|---|---|
-| Claude Code | Attachment list exposed once, for example at session start | Native Agent Skills through a plugin or project-scoped `.claude/skills/<slug>/SKILL.md` | Ordinary file tools assemble the working draft; the adapter stages its owned paths and delegates one managed commit |
-| Codex / AGENTS.md-first | Adoption block in `AGENTS.md` names roots and READMEs | Skills-only plugin or digest-checked `.agents/skills/<slug>/SKILL.md` vendoring | A lifecycle-aware harness records its owned edits, stages them, and delegates one managed commit |
+| Claude Code | A bounded `CLAUDE.md` block points to project `MEMORY.md` | Native Agent Skills through a plugin or project-scoped `.claude/skills/<slug>/SKILL.md` | Ordinary file tools assemble the working draft; the adapter stages its owned paths and delegates one managed commit |
+| Codex / AGENTS.md-first | A bounded `AGENTS.md` block points to project `MEMORY.md` | Skills-only plugin or digest-checked `.agents/skills/<slug>/SKILL.md` vendoring | A lifecycle-aware harness records its owned edits, stages them, and delegates one managed commit |
 | Generic filesystem runtime | Host-supplied attachment or direct discovery of `.engram/root.yaml` | Plain Markdown skills when supported; otherwise the core Agent Protocol, optionally copied into the root README | Filesystem editing is sufficient only when a conforming managed writer owns acceptance |
 
-An adapter exposes a store list through one runtime-native mechanism; duplicate
-injection adds no authority. A store may serve several unrelated projects, but
-they still refer to the independently owned store checkout.
+An adapter exposes the project attachment registry through one runtime-native
+entrypoint; it does not duplicate the store list there. The independently
+trusted adapter may mention and install `using-engram`, which routes to the
+other canonical skills, but the registry cannot bootstrap trust in that copy.
+A store may serve several unrelated projects, but they still refer to the
+independently owned store checkout.
 
 ## 4. Operational guidance
 

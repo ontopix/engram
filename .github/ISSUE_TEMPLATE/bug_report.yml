@@ -1,0 +1,72 @@
+name: Bug report
+description: Report reproducible incorrect behavior in the reference CLI or repository artifacts.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for the report. Do not include vulnerabilities, credentials, or private memory. Report security issues through the private process in SECURITY.md.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Portable validation
+        - Managed Git store
+        - Draft or acceptance workflow
+        - Synchronization or recovery
+        - CLI interface or JSON output
+        - Packaging or release
+        - Documentation or examples
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Engram version or commit
+      description: Paste `engram version --format json` or a full commit ID.
+      placeholder: 1.0.0-rc.1 or 0123456789abcdef...
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Operating system, architecture, Git version, Go version if built from source, and filesystem details that may matter.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Use synthetic data and list exact commands or fixture bytes.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Sanitized diagnostics
+      description: Optional `engram doctor --format json` output or logs with secrets and private content removed.
+      render: json
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety check
+      options:
+        - label: I removed credentials, private store content, and vulnerability details from this report.
+          required: true

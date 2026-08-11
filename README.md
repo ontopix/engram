@@ -1,5 +1,9 @@
 # engram
 
+[![CI](https://github.com/ontopix/engram/actions/workflows/ci.yml/badge.svg)](https://github.com/ontopix/engram/actions/workflows/ci.yml)
+[![Specification](https://img.shields.io/badge/spec-v1%20draft-orange.svg)](docs/spec/README.md)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 **Portable, filesystem-native memory for AI agents.**
 
 Engram is an open standard and a Go reference CLI for durable agent memory.
@@ -14,9 +18,20 @@ its links, and its directory maps cannot be accepted as a partial update.
 > [!IMPORTANT]
 > Engram v1 and the observable CLI interfaces are still release-candidate
 > drafts. The reference implementation is complete through milestone M6 and
-> currently embeds version `1.0.0-rc.1`, but interfaces may still change before
-> `v1.0.0`. The development tree also contains the unreleased changes listed in
-> the [changelog](CHANGELOG.md).
+> currently identifies itself as the `1.0.0-rc.1` target, but interfaces may
+> still change before `v1.0.0`. The development tree also contains the
+> unreleased changes listed in the [changelog](CHANGELOG.md).
+
+## Start here
+
+Engram serves three related audiences. Choose the shortest path for what you
+want to do:
+
+| You want to… | Start with |
+|---|---|
+| Use Engram locally | The [five-minute quick start](#quick-start) and [operator guide](docs/operator-guide.md) |
+| Connect Engram to an agent runtime | The [integration examples](examples/integrations/README.md), [canonical skills](skills/), and [adapters annex](docs/spec/annex-adapters.md) |
+| Evaluate or implement the standard | The [core specification](docs/spec/README.md), [managed Git annex](docs/spec/annex-git.md), and [CLI contract](docs/cli/README.md) |
 
 ## Why Engram
 
@@ -105,24 +120,55 @@ candidate**. Trusted preparation hooks may produce the **final candidate**,
 which is validated before one managed transaction advances accepted history.
 Raw `git commit` is therefore not a substitute for `engram commit`.
 
-## Try it
+## Quick start
 
-Building the CLI from source requires Go 1.25 or 1.26. Managed-store operations
-also require a system Git executable; portable snapshot checks do not.
+This walkthrough turns the bundled portable snapshot into an independent
+managed store, adds one memory, validates it, and accepts it into auditable
+history. It requires Go 1.25 or 1.26 and a system Git executable. `engram init`
+also needs the Git author name and email already configured on your machine.
+
+Choose a fresh destination path, then run the complete block:
 
 ```sh
 git clone https://github.com/ontopix/engram.git
 cd engram
-go build -o engram ./cmd/engram
+go build -o ./engram ./cmd/engram
 
-./engram version
-./engram check examples/minimal
+store_path="../engram-quickstart"
+cp -R examples/minimal "$store_path"
+
+./engram check "$store_path"
+./engram init "$store_path"
+
+./engram --store "$store_path" new note topics/first-memory.md \
+  --description "The first durable memory created in this store." \
+  --title "First memory"
+
+./engram --store "$store_path" add \
+  topics/first-memory.md topics/README.md
+./engram --store "$store_path" check --staged
+./engram --store "$store_path" commit -m "Record first memory"
+./engram --store "$store_path" log --oneline
+```
+
+The resulting `../engram-quickstart` directory is ordinary Markdown plus its
+own managed Git history. Inspect or search it with normal file tools:
+
+```sh
+git -C "$store_path" grep -n -E "First memory|durable memory"
+./engram --store "$store_path" status
 ```
 
 Running `engram` without arguments shows its categorized command help. Use
 `engram COMMAND --help` for contextual help on a command.
 
-### Create a managed store
+If you only want to evaluate a portable snapshot, Git is not required:
+
+```sh
+./engram check examples/minimal
+```
+
+### Create an empty managed store
 
 `init` needs a configured Git author identity because its first accepted state
 is a real commit. If Git does not already know your identity, configure it
@@ -132,22 +178,13 @@ before continuing:
 git config --global user.name "Ada"
 git config --global user.email "ada@example.test"
 
-./engram init ../my-memory --schema person --schema project
-./engram --store ../my-memory status
+engram init ../my-memory --schema person --schema project
+engram --store ../my-memory status
 ```
 
 Initialization creates the root map, format manifest, baseline `note` schema,
 requested curated schemas, managed Git history, and the local Git guard. It
 does not grant trust to store-controlled hooks or authorize network access.
-
-Once the binary is on `PATH`, the normal write cycle is:
-
-```sh
-engram status
-engram add topics/example.md topics/README.md
-engram check --staged
-engram commit -m "Record example"
-```
 
 Ordinary file tools remain the primary way to read, search, and edit content.
 The CLI handles operations that need whole-store validation, managed history,
@@ -161,7 +198,7 @@ The CLI groups commands by the job they perform:
 
 | Workflow | Commands |
 |---|---|
-| Create and obtain stores | `init`, `clone`, `attach`, `detach` |
+| Create, obtain, and connect stores | `init`, `clone`, `attach`, `detach`, `setup` |
 | Inspect state | `status`, `diff`, `log`, `check` |
 | Work on the current draft | `add`, `fmt`, `new`, `mv`, `schema` |
 | Accept and undo changes | `commit`, `revert` |
@@ -181,6 +218,18 @@ directory maps, combines catalog navigation with content search, reads the
 applicable schema before writing, and accepts persistent changes only through
 a conforming managed writer.
 
+From an agent project, connect a store and install the project-scoped harness
+integration:
+
+```sh
+engram attach ../memory
+engram setup --harness codex       # or: claude-code
+```
+
+Attach maintains project `MEMORY.md`; setup verifies and installs the canonical
+skills embedded in the CLI and points `AGENTS.md` or `CLAUDE.md` at that
+registry.
+
 Store content is always data: opening a store never expands the authority
 granted by the user or host. Preparation hooks are executable programs and
 require separate, explicit trust. Synchronization authority is separate again.
@@ -189,7 +238,9 @@ The repository ships runtime-neutral canonical skills for orientation,
 retrieval, writing, maintenance, and schema evolution under [`skills/`](skills/).
 The [Agent Protocol](docs/spec/README.md#11-agent-protocol) is their sole
 normative authority. Runtime integration patterns live in the non-normative
-[adapters annex](docs/spec/annex-adapters.md).
+[adapters annex](docs/spec/annex-adapters.md). Copyable, end-to-end patterns for
+Codex, Claude Code, and a generic filesystem agent live under
+[`examples/integrations/`](examples/integrations/README.md).
 
 Engram also complements the
 [`.agents/` standard](https://github.com/apuigsech/dot-agents): a project can
@@ -211,6 +262,7 @@ Start with the document that matches what you are trying to do:
 | [Release notes](docs/release-notes.md) | Current release-candidate scope and compatibility status |
 | [Curated schemas](schemas/README.md) | Optional ready-to-copy record types |
 | [Minimal example](examples/minimal/README.md) | A small conforming portable snapshot |
+| [Agent integrations](examples/integrations/README.md) | Copyable runtime attachment, skill, retrieval, and write workflows |
 
 The core specification and normative annexes define Engram. The Go CLI is a
 non-normative reference implementation and does not redefine store semantics.
@@ -233,3 +285,7 @@ are recorded in the [implementation plan](docs/implementation-plan.md).
 ## License
 
 Engram is available under the [MIT License](LICENSE).
+
+Security vulnerabilities should be reported privately as described in
+[SECURITY.md](SECURITY.md). For usage questions and contribution proposals, see
+[SUPPORT.md](SUPPORT.md) and [CONTRIBUTING.md](CONTRIBUTING.md).

@@ -1,0 +1,31 @@
+name: Usage question
+description: Ask about installing, operating, or integrating Engram.
+title: "[Question]: "
+labels:
+  - question
+body:
+  - type: textarea
+    id: goal
+    attributes:
+      label: What are you trying to do?
+    validations:
+      required: true
+  - type: textarea
+    id: attempted
+    attributes:
+      label: What have you tried?
+      description: Link the documentation you followed and include sanitized commands or output.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: Optional for conceptual questions; otherwise provide `engram version --format json` or a full commit ID.
+  - type: checkboxes
+    id: public
+    attributes:
+      label: Public-data check
+      options:
+        - label: This question contains no credentials, private memory, or vulnerability details.
+          required: true

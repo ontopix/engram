@@ -20,7 +20,7 @@ func TestAttachAndDetachJSON(t *testing.T) {
 	attached := runAttachmentJSON(t, "attach", store, "--project", project, "--format", "json")
 	assertEnvelope(t, attached, "attach", cli.OutcomeOK, 0)
 	result := decodeObject(t, attached.Result)
-	assertExactKeys(t, result, "project", "store", "entrypoint", "changed", "validation", "audits")
+	assertExactKeys(t, result, "project", "store", "memory_file", "changed", "validation", "audits")
 	canonicalStore, err := attachment.CanonicalStore(store)
 	if err != nil {
 		t.Fatal(err)
@@ -32,13 +32,20 @@ func TestAttachAndDetachJSON(t *testing.T) {
 	if validation["target"] != "managed-store" || validation["status"] != "complete" {
 		t.Fatalf("validation = %#v", validation)
 	}
-	entrypoint := result["entrypoint"].(string)
-	data, err := os.ReadFile(entrypoint)
+	memoryFile := result["memory_file"].(string)
+	data, err := os.ReadFile(memoryFile)
 	if err != nil {
 		t.Fatal(err)
 	}
 	stores := decodeAttachmentStores(t, data)
-	if len(stores) != 1 || stores[0] != canonicalStore {
+	attachedPath := ""
+	if len(stores) == 1 {
+		attachedPath = filepath.Clean(filepath.Join(project, filepath.FromSlash(stores[0].Path)))
+		if canonical, resolveErr := filepath.EvalSymlinks(attachedPath); resolveErr == nil {
+			attachedPath = canonical
+		}
+	}
+	if len(stores) != 1 || attachedPath != canonicalStore || stores[0].README != filepath.ToSlash(filepath.Join(stores[0].Path, "README.md")) {
 		t.Fatalf("attached stores = %#v, want [%q]", stores, canonicalStore)
 	}
 
@@ -51,23 +58,28 @@ func TestAttachAndDetachJSON(t *testing.T) {
 	detached := runAttachmentJSON(t, "detach", store, "--project", project, "--format", "json")
 	assertEnvelope(t, detached, "detach", cli.OutcomeOK, 0)
 	detachResult := decodeObject(t, detached.Result)
-	assertExactKeys(t, detachResult, "project", "store", "entrypoint", "changed")
+	assertExactKeys(t, detachResult, "project", "store", "memory_file", "changed")
 	if detachResult["changed"] != true {
 		t.Fatalf("detach result = %#v", detachResult)
 	}
 }
 
-func decodeAttachmentStores(t *testing.T, data []byte) []string {
+type decodedAttachmentStore struct {
+	Path   string `json:"path"`
+	README string `json:"readme"`
+}
+
+func decodeAttachmentStores(t *testing.T, data []byte) []decodedAttachmentStore {
 	t.Helper()
 	open := []byte(attachment.OpenMarker + "\n")
 	close := []byte(attachment.CloseMarker)
 	if bytes.Count(data, open) != 1 || bytes.Count(data, close) != 1 {
-		t.Fatalf("entrypoint has invalid owned markers: %q", data)
+		t.Fatalf("memory manifest has invalid owned markers: %q", data)
 	}
 	blockStart := bytes.Index(data, open) + len(open)
 	blockEnd := bytes.Index(data[blockStart:], close)
 	if blockEnd < 0 {
-		t.Fatalf("entrypoint has no complete owned block: %q", data)
+		t.Fatalf("memory manifest has no complete owned block: %q", data)
 	}
 	block := data[blockStart : blockStart+blockEnd]
 	const fenceOpen = "```json\n"
@@ -86,22 +98,23 @@ func decodeAttachmentStores(t *testing.T, data []byte) []string {
 	if err := json.Unmarshal(block[payloadStart:payloadStart+payloadEnd], &document); err != nil {
 		t.Fatalf("decode owned block JSON: %v", err)
 	}
-	storesJSON, ok := document["stores"]
-	if !ok || len(document) != 1 {
-		t.Fatalf("owned block JSON keys = %#v, want only stores", document)
+	storesJSON, storesOK := document["stores"]
+	versionJSON, versionOK := document["version"]
+	if !storesOK || !versionOK || len(document) != 2 || string(versionJSON) != "1" {
+		t.Fatalf("owned block JSON keys = %#v, want version and stores", document)
 	}
-	var stores []string
+	var stores []decodedAttachmentStore
 	if err := json.Unmarshal(storesJSON, &stores); err != nil || stores == nil {
 		t.Fatalf("decode owned block stores: %v", err)
 	}
 	return stores
 }
 
-func TestDecodeAttachmentStoresDecodesEscapedWindowsPath(t *testing.T) {
-	const want = `C:\Users\Ada\engram`
-	data := []byte(attachment.OpenMarker + "\n```json\n{\"stores\":[\"C:\\\\Users\\\\Ada\\\\engram\"]}\n```\n" + attachment.CloseMarker + "\n")
+func TestDecodeAttachmentStoresDecodesPortablePath(t *testing.T) {
+	const want = "../memory"
+	data := []byte(attachment.OpenMarker + "\n```json\n{\"version\":1,\"stores\":[{\"path\":\"../memory\",\"readme\":\"../memory/README.md\"}]}\n```\n" + attachment.CloseMarker + "\n")
 	stores := decodeAttachmentStores(t, data)
-	if len(stores) != 1 || stores[0] != want {
+	if len(stores) != 1 || stores[0].Path != want {
 		t.Fatalf("stores = %#v, want [%q]", stores, want)
 	}
 }
@@ -120,17 +133,17 @@ func TestAttachDoesNotPublishInvalidHistory(t *testing.T) {
 	project := t.TempDir()
 	envelope := runAttachmentJSON(t, "attach", store, "--project", project, "--format", "json")
 	assertEnvelope(t, envelope, "attach", cli.OutcomeIssues, 1)
-	if _, err := os.Stat(filepath.Join(project, "AGENTS.md")); !os.IsNotExist(err) {
-		t.Fatalf("invalid store published entrypoint: %v", err)
+	if _, err := os.Stat(filepath.Join(project, "MEMORY.md")); !os.IsNotExist(err) {
+		t.Fatalf("invalid store published memory manifest: %v", err)
 	}
 }
 
 func TestAttachMalformedBlockIsIntegrationError(t *testing.T) {
 	store := managedFixture(t)
 	project := t.TempDir()
-	entrypoint := filepath.Join(project, "AGENTS.md")
+	memoryFile := filepath.Join(project, "MEMORY.md")
 	malformed := attachment.OpenMarker + "\nbroken\n" + attachment.CloseMarker + "\n"
-	if err := os.WriteFile(entrypoint, []byte(malformed), 0o644); err != nil {
+	if err := os.WriteFile(memoryFile, []byte(malformed), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	envelope := runAttachmentJSON(t, "attach", store, "--project", project, "--format", "json")
@@ -141,7 +154,7 @@ func TestAttachMalformedBlockIsIntegrationError(t *testing.T) {
 	if result := decodeObject(t, envelope.Result); len(result) != 0 {
 		t.Fatalf("pre-publication error result = %#v, want {}", result)
 	}
-	data, err := os.ReadFile(entrypoint)
+	data, err := os.ReadFile(memoryFile)
 	if err != nil || string(data) != malformed {
 		t.Fatalf("malformed bytes changed: %v %q", err, data)
 	}
@@ -263,8 +276,8 @@ func TestDetachMissingStorePathUsesLexicalIdentity(t *testing.T) {
 	if changed := decodeObject(t, detached.Result)["changed"]; changed != true {
 		t.Fatalf("changed = %#v", changed)
 	}
-	entrypoint := filepath.Join(project, "AGENTS.md")
-	data, err := os.ReadFile(entrypoint)
+	memoryFile := filepath.Join(project, "MEMORY.md")
+	data, err := os.ReadFile(memoryFile)
 	if err != nil {
 		t.Fatal(err)
 	}

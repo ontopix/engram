@@ -3,8 +3,8 @@
 **Purpose:** this repository hosts the engram standard: the normative
 core spec and its independently statused annexes (`docs/spec/`), the
 reference CLI contract (`docs/cli/`), the curated schema inventory
-(`schemas/`), the example snapshots (`examples/`), and — later — the
-`engram` reference CLI (Go).
+(`schemas/`), the example snapshots (`examples/`), and the `engram` Go
+reference CLI.
 
 **Boundaries:** the spec is the authority; the CLI is a non-normative
 reference implementation. Never add references to a specific CLI
@@ -29,8 +29,7 @@ reference command surface lives in `docs/cli/README.md`.
 - `docs/rationale.md` — non-normative reasoning and evidence
 - `schemas/*.md` — non-normative curated schemas; `note.md` mirrors the
   normative core skeleton
-- `skills/*/SKILL.md` — canonical runtime-neutral skill artifacts once
-  materialized by implementation milestone M0
+- `skills/*/SKILL.md` — canonical runtime-neutral skill artifacts
 - `examples/minimal/` — small conforming snapshot; must stay conforming
 
 ## Constraints
@@ -48,14 +47,14 @@ reference command surface lives in `docs/cli/README.md`.
   apart: a change to the schema-file format lands in the same commit as
   the updated curated schemas and examples. `schemas/note.md` remains
   byte-identical to core Appendix A.3.
-- Future CLI: Go, direct package dependencies limited to the stdlib,
+- Reference CLI: Go, direct package dependencies limited to the stdlib,
   `go.yaml.in/yaml/v3`,
   `github.com/santhosh-tekuri/jsonschema/v6`, and
   `github.com/yuin/goldmark`; versions and transitive modules are pinned
   by `go.mod`/`go.sum`. Git integration invokes the system Git executable
   rather than embedding another Git implementation.
-- `examples/` must always conform to the spec at HEAD. Until the CLI
-  exists this is enforced by review; afterwards by `engram check` in CI.
+- `examples/` must always conform to the spec at HEAD, enforced by
+  `engram check` in CI and by review of integration-only examples.
 - Commits in this repo are unsigned (`commit.gpgsign false`, local
   config): the owner's global git signs via 1Password, whose agent does
   not respond from unattended agent sessions. Do not flip it back;

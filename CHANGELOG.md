@@ -1,9 +1,43 @@
 # Changelog
 
-## Unreleased
+## Unreleased — target 1.0.0-rc.1
+
+### Standard
+
+- Standardized project-level `MEMORY.md` attachment registries so one
+  runtime-neutral manifest can discover several independent stores while
+  retaining the Agent Protocol's trust and authority boundary. Runtime
+  entrypoints now point to that registry instead of duplicating store paths.
+- Clarified that draft check-code identities remain changeable through
+  prereleases and become append-only at the first stable release (`v1.0.0`),
+  matching the repository's stated release-candidate compatibility policy.
+- Generalized adapter skill verification to independently trusted distribution
+  digests rather than assuming that a public release already exists.
+
+### Public project
+
+- Reworked the README around distinct user, agent-integrator, and standard-
+  implementer paths, with a tested end-to-end quick start and visible project
+  status badges.
+- Added real Codex, Claude Code, and generic filesystem-agent integrations,
+  including bounded retrieval, JSON feedback, attachment, trusted-skill, and
+  managed-write examples.
+- Added a security policy, support guide, contribution workflow, structured
+  issue forms, a pull-request checklist, and Dependabot configuration.
+- Included the public project policies and agent-integration examples in
+  release archives so links from the packaged README remain self-contained.
+- Recast the completed implementation roadmap as a delivery record, removed
+  stale references to a future CLI, and distinguished release readiness and
+  deferred shell completions from published state.
 
 ### Reference implementation
 
+- Changed `attach` and `detach` to manage the versioned attachment block in
+  project `MEMORY.md`, retaining an empty registry after the last detach, and
+  added idempotent `setup --harness codex|claude-code` to install the embedded,
+  digest-verified canonical skills plus a bounded runtime-entrypoint pointer.
+  Setup migrates the exact previously CLI-owned adoption block without treating
+  similar project prose as owned state.
 - Made human CLI discovery follow Git-style conventions: an empty invocation
   shows root help, root commands are grouped by workflow with short
   descriptions, group help describes its subcommands, and incomplete known
@@ -20,9 +54,7 @@
 - Added deterministic regression coverage for disappearance, replacement, and
   rollback races, including Windows amd64 and arm64 build coverage.
 
-## 1.0.0-rc.1 — 2026-08-09
-
-### Reference implementation
+### Initial reference implementation
 
 - Completed implementation milestones M0–M6: deterministic portable
   conformance, raw managed-Git reads, safe draft helpers, managed acceptance
