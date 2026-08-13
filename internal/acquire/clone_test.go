@@ -47,6 +47,22 @@ func TestClonePublishesOnlyVerifiedManagedStore(t *testing.T) {
 	assertNoAcquisitionState(t, canonicalDestination)
 }
 
+func TestReuseVerifiesExplicitCloneWithoutNetwork(t *testing.T) {
+	location := bareFixture(t, false)
+	destination := filepath.Join(t.TempDir(), "memory")
+	cloned, err := Clone(context.Background(), location, Options{Destination: destination, DestinationProvided: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reused, err := Reuse(context.Background(), location, destination)
+	if err != nil || !reused.Reused || reused.Published || reused.Root != cloned.Root || reused.Validation.HasErrors() {
+		t.Fatalf("reuse = %#v, %v", reused, err)
+	}
+	if _, err := Reuse(context.Background(), "file:///definitely-not-the-origin", destination); KindOf(err) != ErrorConflict {
+		t.Fatalf("mismatched reuse error = %v", err)
+	}
+}
+
 func TestCloneDoesNotPublishInvalidAcceptedHistory(t *testing.T) {
 	location := bareFixture(t, true)
 	destination := filepath.Join(t.TempDir(), "invalid")

@@ -206,10 +206,11 @@ The CLI groups commands by the job they perform:
 | Synchronize repositories | `pull`, `push` |
 | Diagnose and inspect runtime | `doctor`, `version` |
 
-`clone`, `pull`, and `push` are the only built-in commands that initiate
-repository network access. Human-readable output and the machine-readable
-JSON v1 envelope are both defined by the non-normative
-[CLI contract](docs/cli/README.md).
+`clone`, declarative `setup`, `pull`, and `push` are the only built-in commands
+that initiate repository network access. Setup does so only to acquire a
+configured store which is not already materialized locally. Human-readable
+output and the machine-readable JSON v1 envelope are both defined by the
+non-normative [CLI contract](docs/cli/README.md).
 
 ## Using Engram with agents
 
@@ -218,8 +219,32 @@ directory maps, combines catalog navigation with content search, reads the
 applicable schema before writing, and accepts persistent changes only through
 a conforming managed writer.
 
-From an agent project, connect a store and install the project-scoped harness
-integration:
+An agent project can declare its harness and independently owned memory
+repositories in a tracked `engram.yaml`:
+
+```yaml
+version: 1
+harness: codex
+attachments:
+  - name: project
+    url: git@github.com:example/project-memory.git
+  - name: shared
+    url: git@github.com:example/shared-memory.git
+```
+
+One command then acquires missing stores below ignored `.memory/`, reconciles
+project `MEMORY.md`, and installs the project-scoped harness integration:
+
+```sh
+engram setup
+```
+
+`--harness claude-code` overrides the configured harness for one invocation.
+Existing exact clones are verified and reused without fetching; explicit
+`engram pull` and `engram push` retain synchronization authority. Removing a
+declaration detaches its store but never deletes the local clone.
+
+The imperative flow remains available when no `engram.yaml` exists:
 
 ```sh
 engram attach ../memory

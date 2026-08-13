@@ -4,6 +4,10 @@
 
 ### Standard
 
+- Added the non-normative project setup manifest `engram.yaml`, separating
+  versioned repository and harness intent from the materialized local paths in
+  `MEMORY.md`. Declarative stores use the ignored `.memory/` namespace while
+  external imperative attachments remain independent.
 - Standardized project-level `MEMORY.md` attachment registries so one
   runtime-neutral manifest can discover several independent stores while
   retaining the Agent Protocol's trust and authority boundary. Runtime
@@ -32,6 +36,12 @@
 
 ### Reference implementation
 
+- Extended `setup` to read strict project-root `engram.yaml`, acquire missing
+  verified stores below `.memory/<name>`, maintain the root ignore rule,
+  reconcile only declarative attachments, and install the selected harness in
+  one idempotent flow. Existing clones are verified without fetching, CLI
+  `--harness` overrides the manifest without editing it, and removed entries
+  are detached without deleting their repositories.
 - Changed `attach` and `detach` to manage the versioned attachment block in
   project `MEMORY.md`, retaining an empty registry after the last detach, and
   added idempotent `setup --harness codex|claude-code` to install the embedded,

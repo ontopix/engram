@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"testing"
 
@@ -151,6 +152,113 @@ func TestAttachCreatesDefaultMemoryManifest(t *testing.T) {
 	}
 	if string(data) != string(want) {
 		t.Fatalf("memory manifest = %q, want %q", data, want)
+	}
+}
+
+func TestReconcileManagedReplacesOnlyManagedNamespace(t *testing.T) {
+	root := t.TempDir()
+	project := filepath.Join(root, "project")
+	managed := filepath.Join(project, ".memory")
+	external := filepath.Join(root, "external")
+	oldStore := filepath.Join(managed, "old")
+	newStore := filepath.Join(managed, "new")
+	for _, directory := range []string{project, managed, external, oldStore, newStore} {
+		if err := os.Mkdir(directory, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := Attach(project, "", external); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Attach(project, "", oldStore); err != nil {
+		t.Fatal(err)
+	}
+
+	planned, err := PlanManaged(project, "", managed, []string{newStore})
+	if err != nil || !planned.Changed {
+		t.Fatalf("plan = %#v, %v", planned, err)
+	}
+	result, err := ReconcileManaged(project, "", managed, []string{newStore})
+	if err != nil || !result.Changed {
+		t.Fatalf("reconcile = %#v, %v", result, err)
+	}
+	data, err := os.ReadFile(filepath.Join(project, "MEMORY.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, present, err := parse(data)
+	if err != nil || !present || len(block.stores) != 2 {
+		t.Fatalf("block = %#v, present=%v, error=%v", block, present, err)
+	}
+	want := []string{"../external", ".memory/new"}
+	got := []string{block.stores[0].Path, block.stores[1].Path}
+	sort.Strings(want)
+	if got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("stores = %v, want %v", got, want)
+	}
+	unchanged, err := ReconcileManaged(project, "", managed, []string{newStore})
+	if err != nil || unchanged.Changed {
+		t.Fatalf("idempotent reconcile = %#v, %v", unchanged, err)
+	}
+	if _, err := os.Stat(oldStore); err != nil {
+		t.Fatalf("removed attachment deleted store: %v", err)
+	}
+}
+
+func TestPlanManagedCreatesEmptyRegistryWithoutManagedDirectory(t *testing.T) {
+	project := t.TempDir()
+	managed := filepath.Join(project, ".memory")
+	planned, err := PlanManaged(project, "", managed, nil)
+	if err != nil || !planned.Changed {
+		t.Fatalf("plan = %#v, %v", planned, err)
+	}
+	if _, err := os.Stat(filepath.Join(project, "MEMORY.md")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("plan wrote memory manifest: %v", err)
+	}
+	result, err := ReconcileManaged(project, "", managed, nil)
+	if err != nil || !result.Changed {
+		t.Fatalf("reconcile = %#v, %v", result, err)
+	}
+	data, err := os.ReadFile(filepath.Join(project, "MEMORY.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, present, err := parse(data)
+	if err != nil || !present || block.stores == nil || len(block.stores) != 0 {
+		t.Fatalf("empty block = %#v, present=%v, error=%v", block, present, err)
+	}
+}
+
+func TestReconcileManagedOwnsLexicalPathsBelowManagedNamespace(t *testing.T) {
+	root := t.TempDir()
+	project := filepath.Join(root, "project")
+	managed := filepath.Join(project, ".memory")
+	external := filepath.Join(root, "external")
+	for _, directory := range []string{project, managed, external} {
+		if err := os.Mkdir(directory, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	alias := filepath.Join(managed, "alias")
+	if err := os.Symlink(external, alias); err != nil {
+		t.Fatal(err)
+	}
+	original, err := encode([]attachedStore{describeStore(project, alias)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, "MEMORY.md"), original, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := ReconcileManaged(project, "", managed, nil)
+	if err != nil || !result.Changed {
+		t.Fatalf("reconcile = %#v, %v", result, err)
+	}
+	data, err := os.ReadFile(filepath.Join(project, "MEMORY.md"))
+	block, present, parseErr := parse(data)
+	if err != nil || parseErr != nil || !present || len(block.stores) != 0 {
+		t.Fatalf("registry = %q, block=%#v, error=%v/%v", data, block, err, parseErr)
 	}
 }
 

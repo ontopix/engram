@@ -1,7 +1,7 @@
 # engram reference CLI — implementation plan
 
 **Status:** Implemented; release-ready `v1.0.0-rc.1` baseline
-**Revision:** 2026-08-11
+**Revision:** 2026-08-13
 **Normative status:** Non-normative
 
 This plan records how the v1 specification was implemented as the reference
@@ -166,13 +166,17 @@ deterministic inspection results.
 **Deliver:** `add`, `fmt`, `new`, `mv`, and `schema copy`; worktree
 coordination; dry-run/check behavior; lossless link/catalog rewrites; local
 `attach` and `detach` through project `MEMORY.md`; project-scoped harness
-`setup`; and the bounded `doctor --recover` support required by CLI-owned
-helper state.
+`setup`; declarative project `engram.yaml`, ignored `.memory/` acquisition and
+attachment reconciliation; and the bounded `doctor --recover` support required
+by CLI-owned helper state.
 
 **Gate:** helpers preserve unrelated bytes, reject collisions and concurrent
 changes, publish no partial successful result, never move accepted refs, and
 match JSON/text goldens. Attachment tests cover missing, valid, malformed,
-duplicate, aliased, and concurrently updated owned blocks.
+duplicate, aliased, and concurrently updated owned blocks. Declarative setup
+tests cover strict parsing, dry-run network silence, verified acquisition,
+exact reuse without fetch, harness overrides, external attachment preservation,
+and non-destructive removal.
 
 #### M4 — Hooks, trust, and managed acceptance
 

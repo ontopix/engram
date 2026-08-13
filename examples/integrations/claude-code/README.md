@@ -3,7 +3,21 @@
 This example exposes an independent managed store through project `MEMORY.md`
 and installs a project-scoped Claude Code integration.
 
-## Attach the store and set up Claude Code
+For one-command onboarding, commit this project-root manifest with the actual
+store URL:
+
+```yaml
+version: 1
+harness: claude-code
+attachments:
+  - name: project
+    url: git@github.com:example/project-memory.git
+```
+
+Run `engram setup` from that project. It acquires a missing verified clone below
+`.memory/project`, reconciles `MEMORY.md`, and installs the integration.
+
+## Imperative local attachment
 
 Set both paths to existing absolute paths:
 
