@@ -45,14 +45,14 @@ var (
 )
 
 type Config struct {
-	Version     int                `yaml:"version"`
-	Harness     string             `yaml:"harness,omitempty"`
-	Attachments []ConfigAttachment `yaml:"attachments,omitempty"`
+	Version     int                `yaml:"version" json:"version"`
+	Harness     string             `yaml:"harness,omitempty" json:"harness,omitempty"`
+	Attachments []ConfigAttachment `yaml:"attachments" json:"attachments"`
 }
 
 type ConfigAttachment struct {
-	Name string `yaml:"name"`
-	URL  string `yaml:"url"`
+	Name string `yaml:"name" json:"name"`
+	URL  string `yaml:"url" json:"url"`
 }
 
 type Options struct {
@@ -279,40 +279,15 @@ func withDefaults(options Options) Options {
 // LoadConfig reads the project-root engram.yaml without following a symlink.
 // Absence is not an error and preserves the imperative setup workflow.
 func LoadConfig(project string) (*Config, string, error) {
-	name := filepath.Join(project, ConfigFileName)
-	info, err := os.Lstat(name)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, name, nil
-	}
+	document, err := readConfigDocument(project)
 	if err != nil {
-		return nil, name, fmt.Errorf("%w: inspect %s: %v", ErrConfig, ConfigFileName, err)
+		return nil, document.path, err
 	}
-	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-		return nil, name, fmt.Errorf("%w: %s is not a real regular file", ErrConfig, ConfigFileName)
+	if !document.exists {
+		return nil, document.path, nil
 	}
-	if err := fileidentity.Pin(info); err != nil {
-		return nil, name, fmt.Errorf("%w: capture %s identity: %v", ErrConfig, ConfigFileName, err)
-	}
-	if info.Size() > maxConfigBytes {
-		return nil, name, fmt.Errorf("%w: %s exceeds %d bytes", ErrConfig, ConfigFileName, maxConfigBytes)
-	}
-	data, err := os.ReadFile(name)
-	if err != nil {
-		return nil, name, fmt.Errorf("%w: read %s: %v", ErrConfig, ConfigFileName, err)
-	}
-	if len(data) > maxConfigBytes {
-		return nil, name, fmt.Errorf("%w: %s exceeds %d bytes", ErrConfig, ConfigFileName, maxConfigBytes)
-	}
-	current, err := os.Lstat(name)
-	if err != nil || current.Mode()&os.ModeSymlink != 0 || !current.Mode().IsRegular() || !os.SameFile(info, current) ||
-		current.Mode() != info.Mode() || current.Size() != info.Size() || current.ModTime() != info.ModTime() {
-		return nil, name, fmt.Errorf("%w: %s changed while being read", ErrConfig, ConfigFileName)
-	}
-	config, err := decodeConfig(data)
-	if err != nil {
-		return nil, name, fmt.Errorf("%w: %v", ErrConfig, err)
-	}
-	return &config, name, nil
+	config := document.config
+	return &config, document.path, nil
 }
 
 func decodeConfig(data []byte) (Config, error) {

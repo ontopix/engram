@@ -151,6 +151,18 @@ func TestExecutableRealCommandSurface(t *testing.T) {
 	run("setup", "ok", 0,
 		[]string{"setup", "--harness", "codex", "--project", project, "--format", "json"},
 		"attachments", "changed", "config_file", "dry_run", "entrypoint", "files", "harness", "memory_dir", "memory_file", "project", "skills_dir")
+	run("config.attachment.add", "ok", 0,
+		[]string{"config", "attachment", "add", "project-memory", "git@github.com:ontopix/memory.git", "--project", project, "--format", "json"},
+		"changed", "config", "config_file", "project")
+	run("config.harness", "ok", 0,
+		[]string{"config", "harness", "codex", "--project", project, "--format", "json"},
+		"changed", "config", "config_file", "project")
+	run("config.show", "ok", 0,
+		[]string{"config", "show", "--project", project, "--format", "json"},
+		"changed", "config", "config_file", "project")
+	run("config.attachment.remove", "ok", 0,
+		[]string{"config", "attachment", "remove", "project-memory", "--project", project, "--format", "json"},
+		"changed", "config", "config_file", "project")
 
 	run("hooks.list", "ok", 0,
 		[]string{"--store", store, "hooks", "list", "--format", "json"},

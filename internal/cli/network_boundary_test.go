@@ -91,9 +91,6 @@ func TestInterfaceGateRepositoryNetworkBoundary(t *testing.T) {
 			"internal/pullflow/network.go": true,
 			"internal/syncflow/push.go":    true,
 		},
-		modulePath + "/internal/projectsetup": {
-			"internal/commands/setup.go": true,
-		},
 	}
 	seenImports := make(map[string][]string)
 	for relative, parsed := range files {
@@ -121,7 +118,6 @@ func TestInterfaceGateRepositoryNetworkBoundary(t *testing.T) {
 		modulePath + "/internal/pullflow":     {"internal/commands/pull.go", "internal/doctor/recovery.go"},
 		modulePath + "/internal/syncflow":     {"internal/commands/sync.go"},
 		modulePath + "/internal/remoteselect": {"internal/pullflow/network.go", "internal/syncflow/push.go"},
-		modulePath + "/internal/projectsetup": {"internal/commands/setup.go"},
 	}
 	for path, required := range wantImports {
 		for _, importer := range required {

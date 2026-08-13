@@ -24,6 +24,12 @@ engram
 ├── attach
 ├── detach
 ├── setup
+├── config
+│   ├── attachment
+│   │   ├── add
+│   │   └── remove
+│   ├── harness
+│   └── show
 ├── status
 ├── diff
 ├── log
@@ -56,6 +62,7 @@ Authority is intentionally centralized:
 | `init`, `clone` | Core snapshot/transition rules; Git annex §§2–4, §7, Appendix B |
 | `attach`, `detach` | Core §12; Git annex §6 |
 | `setup` | Core §11–12; Git annex §§3 and 6 for acquired attachments; skills and adapters annexes |
+| `config` | This CLI contract and the non-normative adapters annex |
 | `status`, `diff`, `log` | Git annex §§3 and 5 |
 | `check` | Core §9; Git annex §§3 and 8 for managed forms |
 | `add`, `fmt`, `new`, `mv`, `schema` | Core §§5–8; Git annex §5 for working drafts and staging |
@@ -99,7 +106,7 @@ description:
 
 | Help category | Commands |
 |---|---|
-| Create, obtain, and connect stores | `init`, `clone`, `attach`, `detach`, `setup` |
+| Create, obtain, and connect stores | `init`, `clone`, `attach`, `detach`, `setup`, `config` |
 | Inspect state | `status`, `diff`, `log`, `check` |
 | Work on the current draft | `add`, `fmt`, `new`, `mv`, `schema` |
 | Accept and undo changes | `commit`, `revert` |
@@ -138,7 +145,7 @@ owner of an independent store.
 `status`, `diff`, `log`, `add`, discovery-based `check`, `fmt`, `new`, `mv`,
 `schema list/show/copy`, `commit`, `revert`, `hooks`, `pull`, `push`, and
 `doctor` without a positional path. It is not accepted by `init`, `clone`,
-`attach`, `detach`, `setup`, `schema inventory`, `version`, explicit-path or
+`attach`, `detach`, `setup`, `config`, `schema inventory`, `version`, explicit-path or
 snapshot-pair `check`, or positional-path `doctor`.
 
 Unless a command says otherwise, command paths are relative to the selected
@@ -401,6 +408,7 @@ flags do not change JSON shape.
 | `attach` | `project`, `store`, `memory_file` host paths; `changed`; managed-store `validation`; root-to-tip `audits` |
 | `detach` | `project`, `store`, `memory_file` host paths; `changed` |
 | `setup` | `project`, nullable `config_file`, nullable `memory_dir`, `memory_file`, `entrypoint`, and `skills_dir` host paths; `harness`; `dry_run`; `changed`; ordered configured `attachments` with `name`, exact `url`, `store`, `action` (`clone`, `cloned`, `reuse`, `reused`, `rejected`), nullable managed-store `validation`, and root-to-tip `audits`; ordered `files` with project-relative `path` and `action` (`created`, `updated`) |
+| `config.attachment.add`, `config.attachment.remove`, `config.harness`, `config.show` | `project` and `config_file` host paths; `changed`; `config` with integer `version`, optional `harness`, and ordered `attachments` containing exact `name` and `url` |
 | `status` | `mode` (`normal`, `pull-replay`), `accepted`, `candidate_base`, `staged`, `unstaged`, nullable `replay` |
 | `diff` | `from`, `to` state selectors, logical `changes`, and `stat` with `added`, `modified`, `deleted` counts |
 | `log` | newest-first `commits` |
@@ -675,6 +683,42 @@ When the selected entrypoint contains the exact CLI-owned legacy
 replacing that block with the harness pointer. A malformed legacy block is an
 integration error; similar user-authored prose is preserved and never guessed
 as migration input.
+
+### 4.6 `config`
+
+```text
+engram config attachment add NAME URL [--project PATH]
+engram config attachment remove NAME [--project PATH]
+engram config harness HARNESS [--project PATH]
+engram config show [--project PATH]
+```
+
+Edits or inspects the tracked project-root `engram.yaml` consumed by `setup`.
+The project follows the same explicit/current-Git-root/current-directory
+selection as `attach`. These commands are local and network-silent: they do
+not clone or delete stores, reconcile `MEMORY.md`, edit `.gitignore`, install
+skills, or run `setup` implicitly.
+
+`attachment add` validates `NAME` and `URL` by the manifest rules in §4.5,
+creates a version 1 manifest when absent, and keeps attachment entries ordered
+by name. Adding the same name and exact URL is an unchanged success. Reusing a
+name for another URL, or a URL for another name, is a conflict. `attachment
+remove` removes the entry with that name; a missing name is an unchanged
+success and its materialized `.memory/<name>` checkout is never deleted.
+
+`harness` accepts `codex` or `claude-code` and records that default; it does not
+offer an implicit unset form. `show` prints the effective manifest as YAML in
+human mode and uses the common closed result in JSON mode. When the file is
+absent, `show` reports `version: 1` and an empty attachment list without
+creating it.
+
+Edits preserve unrelated top-level fields permitted by the active manifest
+version, comments, and the existing file permissions. They are idempotent,
+serialized by a project-local lock, revalidate the complete strict manifest,
+and publish one atomic replacement. Invalid command arguments are usage
+errors; a malformed existing manifest is an integration error; a cooperating
+editor or changed captured input is a concurrency error; and a name/URL reuse
+conflict uses the `conflict` class.
 
 ## 5. Inspecting state
 

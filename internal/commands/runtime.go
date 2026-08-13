@@ -44,6 +44,7 @@ func registerReferenceBase(app *cli.App) {
 	RegisterManagedReads(app)
 	RegisterAttachments(app)
 	RegisterSetup(app)
+	RegisterConfig(app)
 	RegisterStaging(app)
 	RegisterDraft(app)
 	RegisterAcquisition(app)

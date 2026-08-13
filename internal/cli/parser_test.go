@@ -17,6 +17,10 @@ func TestParseCompleteCommandSurface(t *testing.T) {
 		{"attach", []string{"attach", "/memory", "--project", "/project", "--memory-file", "MEMORY.md"}, CommandAttach},
 		{"detach", []string{"detach", "/memory"}, CommandDetach},
 		{"setup", []string{"setup", "--harness", "codex", "--memory-file", "MEMORY.md", "--dry-run"}, CommandSetup},
+		{"config attachment add", []string{"config", "attachment", "add", "project-memory", "git@github.com:ontopix/memory.git"}, CommandConfigAttachmentAdd},
+		{"config attachment remove", []string{"config", "attachment", "remove", "project-memory"}, CommandConfigAttachmentRemove},
+		{"config harness", []string{"config", "harness", "codex"}, CommandConfigHarness},
+		{"config show", []string{"config", "show"}, CommandConfigShow},
 		{"status", []string{"status"}, CommandStatus},
 		{"diff", []string{"diff", "--cached", "--stat"}, CommandDiff},
 		{"log", []string{"log", "-n", "10", "--oneline"}, CommandLog},
@@ -212,8 +216,8 @@ func TestModelHasUniqueCanonicalCommandsAndAliases(t *testing.T) {
 			}
 		}
 	}
-	if len(commands) != 26 {
-		t.Fatalf("command count = %d, want 26", len(commands))
+	if len(commands) != 30 {
+		t.Fatalf("command count = %d, want 30", len(commands))
 	}
 }
 

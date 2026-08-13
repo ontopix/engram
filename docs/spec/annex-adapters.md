@@ -58,6 +58,13 @@ stores below project `.memory/<name>`, exclude the complete `.memory/` tree
 from the consumer repository, and reconcile those paths into `MEMORY.md`.
 Attachments outside that reserved namespace remain independently managed.
 
+A manifest editor should be a separate, explicit, network-silent operation.
+It should preserve unrelated document presentation where practical, validate
+the complete result before atomic publication, and leave materialization and
+runtime reconciliation to a subsequent explicit setup invocation. This keeps
+versioned intent reviewable without turning a small configuration edit into an
+implicit credential, network, deletion, or harness-installation request.
+
 A setup invocation may grant bounded network and credential authority to
 acquire a missing declared repository. Merely opening the project, loading the
 manifest, or exposing `MEMORY.md` to an agent grants no such authority. A

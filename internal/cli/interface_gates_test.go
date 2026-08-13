@@ -27,6 +27,10 @@ var protocolCommandGoldens = []commandGolden{
 	{CommandAttach, []string{"attach"}, "engram attach STORE [--project PATH] [--memory-file FILE]", []string{"attach", "memory"}, StoreForbidden},
 	{CommandDetach, []string{"detach"}, "engram detach STORE [--project PATH] [--memory-file FILE]", []string{"detach", "memory"}, StoreForbidden},
 	{CommandSetup, []string{"setup"}, "engram setup [--harness HARNESS] [--project PATH] [--memory-file FILE] [--dry-run]", []string{"setup", "--dry-run"}, StoreForbidden},
+	{CommandConfigAttachmentAdd, []string{"config", "attachment", "add"}, "engram config attachment add NAME URL [--project PATH]", []string{"config", "attachment", "add", "project-memory", "git@github.com:ontopix/memory.git"}, StoreForbidden},
+	{CommandConfigAttachmentRemove, []string{"config", "attachment", "remove"}, "engram config attachment remove NAME [--project PATH]", []string{"config", "attachment", "remove", "project-memory"}, StoreForbidden},
+	{CommandConfigHarness, []string{"config", "harness"}, "engram config harness HARNESS [--project PATH]", []string{"config", "harness", "codex"}, StoreForbidden},
+	{CommandConfigShow, []string{"config", "show"}, "engram config show [--project PATH]", []string{"config", "show"}, StoreForbidden},
 	{CommandStatus, []string{"status"}, "engram status", []string{"status"}, StoreAllowed},
 	{CommandDiff, []string{"diff"}, "engram diff [REV-A [REV-B]] [--staged|--cached] [--stat|--name-only]", []string{"diff", "--name-only"}, StoreAllowed},
 	{CommandLog, []string{"log"}, "engram log [-n COUNT] [--oneline]", []string{"log", "-n", "1"}, StoreAllowed},
@@ -106,6 +110,9 @@ func TestInterfaceGateRootAndGroupHelpExact(t *testing.T) {
 		{"schema after", []string{"schema", "--help"}, schemaHelpGolden},
 		{"hooks before", []string{"--help", "hooks"}, hooksHelpGolden},
 		{"hooks after", []string{"hooks", "--help"}, hooksHelpGolden},
+		{"config before", []string{"--help", "config"}, configHelpGolden},
+		{"config after", []string{"config", "--help"}, configHelpGolden},
+		{"config attachment", []string{"config", "attachment", "--help"}, configAttachmentHelpGolden},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -123,7 +130,8 @@ const rootHelpGolden = "Usage:\n" +
 	"  clone    Clone a managed store into a new directory\n" +
 	"  attach   Attach a store through a project memory manifest\n" +
 	"  detach   Detach a store from a project memory manifest\n" +
-	"  setup    Converge project memories and agent-harness integration\n\n" +
+	"  setup    Converge project memories and agent-harness integration\n" +
+	"  config   Inspect and edit declarative project setup\n\n" +
 	"Inspect state:\n" +
 	"  status   Show working draft and initial candidate status\n" +
 	"  diff     Show changes between store states\n" +
@@ -169,6 +177,19 @@ const hooksHelpGolden = "Usage:\n  engram hooks COMMAND [ARGS]\n\n" +
 	"  trust   Trust one complete selected hook set\n" +
 	"  revoke  Revoke hook trust grants\n\n" +
 	"Run 'engram hooks COMMAND --help' for more information on a command.\n"
+
+const configHelpGolden = "Usage:\n  engram config COMMAND [ARGS]\n\n" +
+	"Commands:\n" +
+	"  attachment  Manage declared memory repositories\n" +
+	"  harness     Set the default project harness\n" +
+	"  show        Show declarative project setup\n\n" +
+	"Run 'engram config COMMAND --help' for more information on a command.\n"
+
+const configAttachmentHelpGolden = "Usage:\n  engram config attachment COMMAND [ARGS]\n\n" +
+	"Commands:\n" +
+	"  add     Declare a project memory repository\n" +
+	"  remove  Remove a declared memory repository\n\n" +
+	"Run 'engram config attachment COMMAND --help' for more information on a command.\n"
 
 func TestInterfaceGateGlobalOptionsBeforeAndAfterEveryCommand(t *testing.T) {
 	model := DefaultModel()
@@ -347,6 +368,7 @@ func TestInterfaceGateRepresentativeErrorsHaveExactBytes(t *testing.T) {
 		{"unknown command text suggestion", []string{"statsu"}, "", "engram: unknown command \"statsu\"\n\nDid you mean 'status'?\n"},
 		{"unknown command text without suggestion", []string{"wat"}, "", "engram: unknown command \"wat\"\n"},
 		{"unknown group subcommand text", []string{"schema", "shwo"}, "", "engram: unknown schema subcommand \"shwo\"\n\nDid you mean 'show'?\n\n" + schemaHelpGolden},
+		{"unknown nested subcommand text", []string{"config", "attachment", "ad"}, "", "engram: unknown config attachment subcommand \"ad\"\n\nDid you mean 'add'?\n\n" + configAttachmentHelpGolden},
 		{"unknown command JSON", []string{"--format", "json", "wat"}, "{\"version\":1,\"command\":null,\"outcome\":\"error\",\"exit_status\":2,\"result\":{},\"error\":{\"kind\":\"usage\",\"message\":\"unknown command \\\"wat\\\"\"}}\n", ""},
 		{"known command JSON", []string{"status", "extra", "--format", "json"}, "{\"version\":1,\"command\":\"status\",\"outcome\":\"error\",\"exit_status\":2,\"result\":{},\"error\":{\"kind\":\"usage\",\"message\":\"too many arguments for status\"}}\n", ""},
 		{"JSON help", []string{"status", "--help", "--format", "json"}, "{\"version\":1,\"command\":\"status\",\"outcome\":\"error\",\"exit_status\":2,\"result\":{},\"error\":{\"kind\":\"usage\",\"message\":\"JSON help is not part of protocol v1\"}}\n", ""},

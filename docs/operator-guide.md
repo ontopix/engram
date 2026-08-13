@@ -96,13 +96,23 @@ grants no preparation-hook trust and no push authority.
 For reproducible onboarding, commit a project-root `engram.yaml` which names
 the default harness and each independent memory repository:
 
+```sh
+engram config attachment add project-memory git@github.com:example/project-memory.git
+engram config attachment add shared-memory git@github.com:example/shared-memory.git
+engram config harness codex
+engram config show
+```
+
+The config commands are local manifest editors. They do not clone, attach,
+delete, or install anything. The resulting file is equivalent to:
+
 ```yaml
 version: 1
 harness: codex
 attachments:
-  - name: project
+  - name: project-memory
     url: git@github.com:example/project-memory.git
-  - name: shared
+  - name: shared-memory
     url: git@github.com:example/shared-memory.git
 ```
 
@@ -123,6 +133,10 @@ Repeating setup verifies and reuses an exact existing clone without fetching.
 Use `engram pull` explicitly inside a selected store when synchronization is
 authorized. Removing a declaration removes only its `MEMORY.md` attachment;
 the ignored repository remains available for inspection or later reuse.
+
+Use `engram config attachment remove NAME` to remove a declaration. This
+changes only `engram.yaml`; run `engram setup` afterward to reconcile
+`MEMORY.md`. It still never deletes `.memory/NAME`.
 
 The one attachment URL becomes `origin` for clone, pull, and push. Use an SSH
 location such as `git@github.com:owner/memory.git` when the same checkout must
