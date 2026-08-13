@@ -4,6 +4,10 @@
 
 ### Standard
 
+- Added the normative routine-declarations annex: each optional routine is a
+  Markdown file in a local `.engram/routines/` directory with a closed UTC
+  five-field cron profile and instructions in its body. Declarations are
+  runtime-neutral intent, never authority, hooks, or runtime state.
 - Added deterministic hierarchical `prepare-changeset` hooks: hooks may live
   under any logical directory, activate from the frozen initial changeset's
   affected subtrees, execute by ordering band then full logical path, and bind

@@ -10,6 +10,12 @@ This plan records how the v1 specification was implemented as the reference
 [observable CLI contract](cli/README.md) remain authoritative when this plan
 disagrees with them.
 
+The routine-declarations annex was added after this baseline and is
+intentionally specification-only for now. A follow-up implementation must add
+its E309 validation, Git projection, fixtures, and any separately chosen
+runtime binding before the reference CLI can claim support for
+`.engram/routines/`.
+
 ## 1. Direction
 
 The reference implementation uses Go for parsing, validation, managed Git

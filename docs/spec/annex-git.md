@@ -61,11 +61,13 @@ Every accepted commit's recursive raw-tree projection MUST exactly equal its cor
 explicit directories and regular-file paths and bytes. A raw-tree entry whose Appendix A grammar is
 valid but which the core prunes without emitting its own `E` finding—including root `.git`, cache,
 unknown tool state, or dot-prefixed content—produces E603. An entry pruned by E103, E104, E107,
-E109, E110, E303, or E308 produces that core finding and MUST NOT additionally produce E603.
+E109, E110, E303, E308, or E309 produces that core finding and MUST NOT additionally produce E603.
 Hook trees at every logical content directory remain in the projection and are
 validated and diffed as ordinary normed configuration; they are not pruned
-as unknown state. Untracked, ignored, index-only, and unstaged worktree content
-is not accepted state. Appendix A defines projection.
+as unknown state. Routine-declaration trees at every logical content directory
+likewise remain in the projection and are validated and diffed as ordinary
+normed configuration. Untracked, ignored, index-only, and unstaged worktree
+content is not accepted state. Appendix A defines projection.
 
 ### 2.3 Writable presentation
 
@@ -384,7 +386,7 @@ Raw entry grammar is evaluated before core boundary precedence. For a valid
 entry, every core rule decidable from accumulated path, name, and projected
 mode is applied before resolving its target. If the rule prunes the entry or
 decides the finding without content or descendants, the target is not required
-or resolved. This covers E103, E104, E106, E107, E109, E110, closed E303/E308
+or resolved. This covers E103, E104, E106, E107, E109, E110, closed E303/E308/E309
 boundaries, and E603 for every grammatically valid raw entry that the core
 prunes without its own `E` finding, including root `.git`, cache,
 dot-prefixed, or unknown tool-state entries.

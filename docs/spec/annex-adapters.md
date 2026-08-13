@@ -29,6 +29,7 @@ A runtime integration may provide any subset of these surfaces:
 | Canonical skills | Package the runtime-neutral operating disciplines | Skills annex |
 | Managed-write binding | Coordinate a working draft, declare its initial candidate, and delegate preparation and acceptance | Git annex §§4–5 |
 | Hook execution | Act as the one executor for `prepare-changeset` | Core §8 |
+| Routine binding | Bind an accepted routine declaration to a host scheduler | Routine declarations annex §5; Git annex §§4–5 |
 | Validation feedback | Return deterministic findings during editing and acceptance | Core §9 |
 
 Each surface is optional. Installing skills or attachments does not make the
@@ -122,6 +123,12 @@ independently owned store checkout.
 - Runtime automation after acceptance—such as rebuilding an external index or
   publishing a mirror—is outside `prepare-changeset`. Pre-acceptance code must
   not publish a candidate that may still be rejected.
+- A scheduled-routine binding is activated outside the store against exact
+  accepted declaration bytes. It keeps its scheduler, runtime, credentials,
+  locks, cursors, and receipts outside the store, and it starts any persistent
+  change from accepted state in an isolated worktree or clone. The resulting
+  proposal follows the ordinary managed-write path; the binding never treats a
+  routine declaration as authority to write or publish.
 - Deployments that partition stores by writability enforce that policy with
   host permissions or mounts. Engram defines no ACL system.
 - Unattended integrations surface validation, hook, and recovery failures on a

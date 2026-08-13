@@ -35,7 +35,9 @@ This specification defines the **engram snapshot**: a directory tree of
 markdown records that represents one portable state of persistent
 memory for AI agents and for the humans who work with them. The
 normative [Git-managed stores annex](annex-git.md) defines the writable,
-versioned form of that memory.
+versioned form of that memory. The normative
+[routine declarations annex](annex-routines.md) defines optional,
+runtime-neutral scheduled-routine declarations.
 
 A snapshot is plain files. It requires no database, embedding pipeline,
 repository metadata, or specific runtime to read and validate.
@@ -79,7 +81,7 @@ This specification defines four independent conformance targets:
 
 | Target | Criterion |
 |---|---|
-| **Snapshot** | No `E` finding from the static E1xx–E4xx rules for one logical state, including any hook-program files it contains |
+| **Snapshot** | No `E` finding from the static E1xx–E4xx rules for one logical state, including any hook-program files and routine declarations it contains |
 | **Managed store** | A conforming accepted snapshot plus the repository and accepted-lineage rules of the normative [Git annex](annex-git.md) |
 | **Tool** | The applicable consumer or executor obligations in this specification |
 | **Agent** | The Agent Protocol ([§11](#11-agent-protocol)) |
@@ -94,11 +96,12 @@ checks MUST NOT be described as full conformance.
 ### 1.5 Scope
 
 This specification defines what exists in a snapshot, what it means,
-and what obligations consumers and agents have. It defines a small,
-runtime-neutral protocol for optional preparation hooks. The normative
-Git annex binds writable managed stores to a concrete version-control
-model without prescribing a CLI, library, hosting service, or agent
-runtime. Authorization and runtime synchronization remain external.
+and what obligations consumers and agents have. It defines small,
+runtime-neutral formats for optional preparation hooks and scheduled-routine
+declarations. The normative Git annex binds writable managed stores to a
+concrete version-control model without prescribing a CLI, library, hosting
+service, or agent runtime. Authorization, routine execution, and runtime
+synchronization remain external.
 
 ### 1.6 Terminology
 
@@ -140,6 +143,8 @@ Any directory in a snapshot — the root included — MAY contain an
   ([§6](#6-types-and-schemas));
 - `.engram/hooks/` — optional preparation-hook programs
   ([§8](#8-changesets-and-preparation-hooks));
+- `.engram/routines/` — optional scheduled-routine declarations
+  ([routine declarations annex](annex-routines.md));
 - `.engram/cache/` — RESERVED for derived state
   ([§10](#10-derived-state)); at the root only.
 
@@ -169,21 +174,22 @@ produce no further finding.
 1. **Name.** For a prospective non-dot content entry, validate its
    logical name under §2.6 before inspecting its kind. An invalid name
    produces E107 at the containing directory and is pruned. Inside
-   `.engram/schemas/` and `.engram/hooks/`, the closed name grammars of
-   §§6.4 and 8.2 apply instead; an invalid direct name produces E303 or
-   E308 at its specified containing directory and is pruned. Literal
-   `.git` is the exception and proceeds to the next step.
+   `.engram/schemas/`, `.engram/hooks/`, and `.engram/routines/`, the
+   closed name grammars of §6.4, §8.2, and the routine declarations annex
+   apply instead; an invalid direct name produces E303, E308, or E309 at
+   its specified containing directory and is pruned. Literal `.git` is the
+   exception and proceeds to the next step.
 2. **Reserved or root-only boundary.** A dot-prefixed content entry is
    reserved and pruned without kind inspection, with three exceptions:
    `.engram` is traversed as described below; root `.git` is pruned as
    repository metadata; and `.git` at any traversed boundary below the
    root produces E110 before being pruned. At a non-root `.engram`, a
    direct `cache` entry produces E109 and is pruned before kind
-   inspection. Within `.engram`, only `root.yaml`, `schemas`, and
-   `hooks`, plus the root `cache` boundary, continue; other direct
+   inspection. Within `.engram`, only `root.yaml`, `schemas`, `hooks`, and
+   `routines`, plus the root `cache` boundary, continue; other direct
    children and all `cache` descendants are pruned. Inside a traversed
-   schema or hook tree, its closed grammar takes precedence over ordinary
-   dot-reservation.
+   schema, hook, or routine tree, its closed grammar takes precedence over
+   ordinary dot-reservation.
 3. **Symbolic link.** A remaining traversed boundary that is a symbolic
    link produces E103 and is pruned. Consumers MUST NOT follow symbolic
    links.
@@ -191,15 +197,15 @@ produce no further finding.
    be a real directory; every required `README.md` and root
    `.engram/root.yaml` MUST be a regular file; and root `.engram/cache`,
    when present, MUST be a real directory. Another special or wrong kind
-   produces E104 and is pruned. The closed schema and hook trees use E303
-   and E308 respectively for their specialized kind rules.
+   produces E104 and is pruned. The closed schema, hook, and routine trees
+   use E303, E308, and E309 respectively for their specialized kind rules.
 5. **Content.** Only after those boundary checks may a consumer open and
    decode a normed file. Encoding and dependent-content precedence are
    defined by §9.1.
 
-`hooks` is allowed in any traversed `.engram`; `cache` is allowed only at
-the snapshot root. A root `.git` is outside the logical snapshot;
-managed-store consumers access it only under the Git annex.
+`hooks` and `routines` are allowed in any traversed `.engram`; `cache` is
+allowed only at the snapshot root. A root `.git` is outside the logical
+snapshot; managed-store consumers access it only under the Git annex.
 
 ### 2.5 Records, assets, maps
 
@@ -273,7 +279,7 @@ comparison is used only for E106; identity and ordering continue to use
 the original NFC logical name and its UTF-8 encoding.
 
 Every text file whose format is defined by this specification — store
-markdown, `root.yaml`, and hook programs — MUST
+markdown, `root.yaml`, hook programs, and routine declarations — MUST
 be encoded in UTF-8 without a byte-order mark, MUST use LF line endings
 (CR is forbidden), and MUST end with LF. Markdown structure normed by
 this specification — headings, fenced code blocks, inline code spans,
@@ -1203,6 +1209,10 @@ the offending artifact or entry. For cross-artifact rules:
   (`<D>/.engram/hooks` or
   `<D>/.engram/hooks/prepare-changeset`); a validly named hook program's
   interpreter error uses that file;
+- E309 routine-tree layout or filename findings use the wrong-kind boundary
+  itself or the nearest containing normed `<D>/.engram/routines` directory;
+  a validly named routine declaration's frontmatter, schedule, or body error
+  uses that file;
 - E5xx transition findings use the affected base-state record or schema
   path;
 - E6xx managed-store findings use the store root `.`;
@@ -1635,7 +1645,7 @@ stable interface.
 | E208 | Top-level `pinned` in record frontmatter is present but not boolean |
 | E209 | README without frontmatter, or frontmatter unparsable under [§3](#3-the-root-manifest) YAML rules |
 
-### E3xx — Schemas, hooks, and typed content
+### E3xx — Schemas, hooks, routines, and typed content
 
 | Code | Finding |
 |---|---|
@@ -1647,6 +1657,7 @@ stable interface.
 | E306 | Mutually exclusive policies both set to `true` |
 | E307 | Root does not define the `note` baseline, or `note` violates [§6.3](#63-the-note-baseline) |
 | E308 | Under §2.4 precedence, a hook boundary or tree has a wrong kind, contains an entry other than `prepare-changeset/` or its direct regular programs, has an invalid hook filename, or has an invalid interpreter line under [§8.2](#82-prepare-changeset-hook-programs) |
+| E309 | Under §2.4 precedence, a routine boundary or tree has a wrong kind, contains an entry other than a direct `<slug>.md` regular declaration, or a routine declaration violates the [routine declarations annex](annex-routines.md) |
 
 ### E4xx — Links and catalogs
 
