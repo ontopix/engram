@@ -15,10 +15,10 @@ The CLI handles operations that need whole-store validation, managed history,
 or runtime integration. Ordinary reading and content search remain filesystem
 operations.
 
-The routine declarations annex is specified independently of this release-
-candidate CLI. This CLI does not yet validate or bind `.engram/routines/`;
-until that support lands, it is not a conforming tool for a snapshot that
-contains routine declarations.
+This CLI validates the static `.engram/routines/` declaration format,
+including E309 and managed Git projection. It does not bind, schedule, or
+execute routines; those controller responsibilities remain external under the
+routine declarations annex.
 
 ## 1. Command model
 

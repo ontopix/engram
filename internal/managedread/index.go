@@ -90,7 +90,7 @@ func indexPrunedWithoutCoreFinding(directory, name string, mode gitraw.TreeMode)
 		switch name {
 		case "root.yaml", "schemas":
 			return false
-		case "hooks", "cache":
+		case "hooks", "routines", "cache":
 			return directory == ".engram" && name == "cache" && mode == gitraw.ModeDirectory
 		default:
 			return true

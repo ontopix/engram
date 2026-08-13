@@ -1035,7 +1035,7 @@ paths.
 
 Before constructing a changeset, a consumer MUST complete the §2.4
 boundary traversal, §2.6 case-collision check, and closed schema and hook
-tree-layout checks in both states. Any such preflight error forbids
+and routine tree-layout checks in both states. Any such preflight error forbids
 changeset serialization and hook invocation, makes a requested
 transition result `indeterminate` under §9.1, and causes a
 managed writer to reject before preparation.

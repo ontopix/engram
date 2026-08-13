@@ -10,11 +10,10 @@ This plan records how the v1 specification was implemented as the reference
 [observable CLI contract](cli/README.md) remain authoritative when this plan
 disagrees with them.
 
-The routine-declarations annex was added after this baseline and is
-intentionally specification-only for now. A follow-up implementation must add
-its E309 validation, Git projection, fixtures, and any separately chosen
-runtime binding before the reference CLI can claim support for
-`.engram/routines/`.
+The routine-declarations annex was added after this baseline. The reference
+CLI validates its E309 declaration format and Git projection, but intentionally
+does not bind, schedule, or execute routines. Any runtime binding remains a
+separate controller integration.
 
 ## 1. Direction
 

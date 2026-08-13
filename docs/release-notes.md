@@ -20,9 +20,9 @@ surface and the M0–M6 delivery gates:
 - advisory diagnostics, canonical skills, cross-platform CI, reproducible
   archives, checksums, licenses, provenance, and operator guidance.
 
-The routine-declarations annex is intentionally specification-only in this
-source tree. The `1.0.0-rc.1` reference CLI does not yet validate or bind
-`.engram/routines/` trees.
+The reference CLI validates static `.engram/routines/` declarations and their
+managed Git projection. It does not bind, schedule, or execute routines;
+those responsibilities remain external to the CLI.
 
 The standard and CLI contract remain drafts until the project publishes stable
 `v1.0.0`. Finding identities and protocol v1 shapes are therefore

@@ -10,16 +10,19 @@ import (
 func TestDiffIsByteExactAndOrdered(t *testing.T) {
 	t.Parallel()
 	base := &snapshot.Tree{Files: map[string]snapshot.File{
-		"z.md": {Path: "z.md", Data: []byte("same")},
-		"b.md": {Path: "b.md", Data: []byte("old")},
-		"d.md": {Path: "d.md", Data: []byte("gone")},
+		"z.md":                      {Path: "z.md", Data: []byte("same")},
+		"b.md":                      {Path: "b.md", Data: []byte("old")},
+		"d.md":                      {Path: "d.md", Data: []byte("gone")},
+		".engram/routines/daily.md": {Path: ".engram/routines/daily.md", Role: snapshot.RoleRoutine, Data: []byte("old routine")},
 	}}
 	candidate := &snapshot.Tree{Files: map[string]snapshot.File{
-		"z.md": {Path: "z.md", Data: []byte("same")},
-		"b.md": {Path: "b.md", Data: []byte("new")},
-		"a.md": {Path: "a.md", Data: []byte("added")},
+		"z.md":                      {Path: "z.md", Data: []byte("same")},
+		"b.md":                      {Path: "b.md", Data: []byte("new")},
+		"a.md":                      {Path: "a.md", Data: []byte("added")},
+		".engram/routines/daily.md": {Path: ".engram/routines/daily.md", Role: snapshot.RoleRoutine, Data: []byte("new routine")},
 	}}
 	want := []Change{
+		{Operation: Modified, Path: ".engram/routines/daily.md"},
 		{Operation: Added, Path: "a.md"},
 		{Operation: Modified, Path: "b.md"},
 		{Operation: Deleted, Path: "d.md"},
@@ -39,5 +42,8 @@ func TestPreflight(t *testing.T) {
 	}
 	if PreflightOK(&snapshot.Tree{Issues: []snapshot.Issue{{Code: "E107", Path: "."}}}) {
 		t.Fatal("boundary issue should fail preflight")
+	}
+	if PreflightOK(&snapshot.Tree{Issues: []snapshot.Issue{{Code: "E309", Path: ".engram/routines"}}}) {
+		t.Fatal("routine-tree layout issue should fail preflight")
 	}
 }

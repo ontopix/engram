@@ -44,6 +44,10 @@
 
 ### Reference implementation
 
+- Added static validation and managed Git projection for routine declarations,
+  including E309, the closed UTC cron profile, and the routine annex in the
+  reported and audited normative rule-set identity. The CLI still does not
+  bind, schedule, or execute routines.
 - Added local `config attachment add/remove`, `config harness`, and
   `config show` commands for idempotent, comment-preserving edits to project
   `engram.yaml`. Configuration remains separate from explicit `setup`: these

@@ -316,6 +316,7 @@ func TestAcceptedAuditRuleSetIdentityMatchesNormativeSources(t *testing.T) {
 	}{
 		{filepath.Join("..", "..", "docs", "spec", "README.md"), acceptedAuditCoreSHA256},
 		{filepath.Join("..", "..", "docs", "spec", "annex-git.md"), acceptedAuditGitSHA256},
+		{filepath.Join("..", "..", "docs", "spec", "annex-routines.md"), acceptedAuditRoutinesSHA256},
 	}
 	for _, test := range tests {
 		data, err := os.ReadFile(test.path)
@@ -326,7 +327,9 @@ func TestAcceptedAuditRuleSetIdentityMatchesNormativeSources(t *testing.T) {
 			t.Errorf("digest of %s = %s, want %s", test.path, got, test.want)
 		}
 	}
-	wantIdentity := "core/v1@sha256:" + acceptedAuditCoreSHA256 + ";annex-git/v1@sha256:" + acceptedAuditGitSHA256
+	wantIdentity := "core/v1@" + acceptedAuditCoreRevision + "@sha256:" + acceptedAuditCoreSHA256 +
+		";annex-git/v1@" + acceptedAuditGitRevision + "@sha256:" + acceptedAuditGitSHA256 +
+		";annex-routines/v1@" + acceptedAuditRoutinesRevision + "@sha256:" + acceptedAuditRoutinesSHA256
 	if acceptedAuditRuleSetIdentity != wantIdentity {
 		t.Fatalf("accepted audit rule-set identity = %q, want %q", acceptedAuditRuleSetIdentity, wantIdentity)
 	}

@@ -161,7 +161,15 @@ func (a *snapshotAnalysis) parseDocuments() {
 			a.parseRecord(file)
 		case snapshot.RoleSchema:
 			a.parseSchema(file)
+		case snapshot.RoleRoutine:
+			a.parseRoutine(file)
 		}
+	}
+}
+
+func (a *snapshotAnalysis) parseRoutine(file snapshot.File) {
+	if err := validateRoutineDeclaration(file.Data); err != nil {
+		a.findings.add("E309", file.Path, "invalid routine declaration")
 	}
 }
 

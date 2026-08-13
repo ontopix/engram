@@ -21,8 +21,8 @@ its links, and its directory maps cannot be accepted as a partial update.
 > currently identifies itself as the `1.0.0-rc.1` target, but interfaces may
 > still change before `v1.0.0`. The development tree also contains the
 > unreleased changes listed in the [changelog](CHANGELOG.md), including the
-> specification-only routine declarations annex; the reference CLI does not
-> yet validate or bind routines.
+> routine declarations annex. The reference CLI validates their static format,
+> but does not bind or execute routines.
 
 ## Start here
 

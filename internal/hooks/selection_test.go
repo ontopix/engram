@@ -224,6 +224,14 @@ func TestSelectTreeForChangesUsesHierarchicalScopesAndStableOrder(t *testing.T) 
 				".engram/hooks/prepare-changeset/90-global.sh",
 			},
 		},
+		{
+			name:    "routine declaration affects containing scope",
+			changes: []changeset.Change{{Operation: changeset.Modified, Path: "journal/.engram/routines/daily-journal.md"}},
+			want: []string{
+				"journal/.engram/hooks/prepare-changeset/10-journal.sh",
+				".engram/hooks/prepare-changeset/90-global.sh",
+			},
+		},
 		{name: "empty selects none", changes: []changeset.Change{}, want: []string{}},
 	}
 	for _, test := range tests {

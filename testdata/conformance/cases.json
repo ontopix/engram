@@ -1032,6 +1032,61 @@
       }
     },
     {
+      "id": "routine-valid-declaration",
+      "description": "A direct Markdown declaration with closed UTC cron frontmatter is a valid routine configuration file.",
+      "kind": "snapshot",
+      "snapshot": {
+        "operations": [
+          {
+            "operation": "write_text",
+            "path": ".engram/routines/daily-journal.md",
+            "source": "testdata/conformance/files/valid-routine.md"
+          }
+        ]
+      },
+      "expected": {
+        "findings": []
+      }
+    },
+    {
+      "id": "routine-invalid-cron",
+      "description": "A cron expression that restricts both day-of-month and day-of-week produces E309 at the declaration.",
+      "kind": "snapshot",
+      "snapshot": {
+        "operations": [
+          {
+            "operation": "write_text",
+            "path": ".engram/routines/invalid-cron.md",
+            "source": "testdata/conformance/files/invalid-routine-cron.md"
+          }
+        ]
+      },
+      "expected": {
+        "findings": [
+          {"code": "E309", "path": ".engram/routines/invalid-cron.md"}
+        ]
+      }
+    },
+    {
+      "id": "routine-closed-tree",
+      "description": "A routine tree entry outside the direct lowercase slug Markdown grammar produces E309 at its containing directory.",
+      "kind": "snapshot",
+      "snapshot": {
+        "operations": [
+          {
+            "operation": "write_text",
+            "path": ".engram/routines/Bad.md",
+            "source": "testdata/conformance/files/valid-routine.md"
+          }
+        ]
+      },
+      "expected": {
+        "findings": [
+          {"code": "E309", "path": ".engram/routines"}
+        ]
+      }
+    },
+    {
       "id": "typed-link-type-mismatch",
       "description": "An existing typed-link target whose record type is not admitted produces E402 at the source.",
       "kind": "snapshot",

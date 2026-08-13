@@ -48,6 +48,7 @@ const (
 	RoleRootManifest
 	RoleSchema
 	RoleHook
+	RoleRoutine
 )
 
 // File is one observed regular file in the logical validation tree.
@@ -239,6 +240,18 @@ func (w *walker) configDir(directory string, root bool) error {
 			if err := w.hooksDir(child); err != nil {
 				return err
 			}
+		case "routines":
+			if entry.Kind == KindSymlink {
+				w.issue("E103", child)
+				continue
+			}
+			if entry.Kind != KindDirectory {
+				w.issue("E309", child)
+				continue
+			}
+			if err := w.routinesDir(child); err != nil {
+				return err
+			}
 		case "cache":
 			if !root {
 				w.issue("E109", child)
@@ -337,6 +350,33 @@ func (w *walker) hookProgramDir(directory string) error {
 	return nil
 }
 
+func (w *walker) routinesDir(directory string) error {
+	entries, err := w.entries(directory)
+	if err != nil {
+		return fmt.Errorf("read routine directory %q: %w", directory, err)
+	}
+	for _, entry := range entries {
+		w.tree.Boundaries[join(directory, entry.Name)] = entry.Kind
+		if !validRoutineFilename(entry.Name) {
+			w.issue("E309", directory)
+			continue
+		}
+		child := join(directory, entry.Name)
+		if entry.Kind == KindSymlink {
+			w.issue("E103", child)
+			continue
+		}
+		if entry.Kind != KindRegular {
+			w.issue("E309", child)
+			continue
+		}
+		if err := w.file(child, RoleRoutine); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (w *walker) entries(directory string) ([]Entry, error) {
 	entries, err := w.source.ReadDir(directory)
 	if err != nil {
@@ -415,6 +455,10 @@ func validHookFilename(name string) bool {
 		}
 	}
 	return true
+}
+
+func validRoutineFilename(name string) bool {
+	return strings.HasSuffix(name, ".md") && validTypeSlug(strings.TrimSuffix(name, ".md"))
 }
 
 func join(directory, name string) string {
