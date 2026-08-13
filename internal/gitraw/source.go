@@ -147,7 +147,7 @@ func prunedWithoutCoreFinding(directory, name string, mode TreeMode) bool {
 		switch name {
 		case "root.yaml", "schemas":
 			return false
-		case "hooks", "cache":
+		case "hooks", "routines", "cache":
 			return directory == ".engram" && name == "cache" && mode == ModeDirectory
 		default:
 			return true

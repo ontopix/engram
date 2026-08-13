@@ -15,13 +15,18 @@ import (
 // The accepted-history checker implements these exact normative source bytes.
 // Keeping their digests in the cache key prevents a long-lived process from
 // reusing an audit after its rule-set identity changes. A repository test binds
-// both values to the authoritative checked-in documents.
+// every value to the authoritative checked-in documents.
 const (
-	acceptedAuditCoreSHA256 = "19ae8dc527c9e7519b202d0eef3a23ab08fe99e1733a49f52304bcc380d587ad"
-	acceptedAuditGitSHA256  = "7912f9f77ee5d87be06f1680c6924c8ad86453e809a5be0e7c05c21b41414193"
+	acceptedAuditCoreRevision     = "2026-08-13"
+	acceptedAuditCoreSHA256       = "8b2433ded56d2f2e30231a9a7f0559f5676efd03d85c07c06b04f82312231914"
+	acceptedAuditGitRevision      = "2026-08-13"
+	acceptedAuditGitSHA256        = "ca935a39075039d9613d4cf512ff28adf59c7b8e17dae329e10bac1522dc3430"
+	acceptedAuditRoutinesRevision = "2026-08-13"
+	acceptedAuditRoutinesSHA256   = "812421a50a82cdfe509ee5cd443d767f32a9a0f97d43ec30d759821ec17f60ad"
 
-	acceptedAuditRuleSetIdentity = "core/v1@sha256:" + acceptedAuditCoreSHA256 +
-		";annex-git/v1@sha256:" + acceptedAuditGitSHA256
+	acceptedAuditRuleSetIdentity = "core/v1@" + acceptedAuditCoreRevision + "@sha256:" + acceptedAuditCoreSHA256 +
+		";annex-git/v1@" + acceptedAuditGitRevision + "@sha256:" + acceptedAuditGitSHA256 +
+		";annex-routines/v1@" + acceptedAuditRoutinesRevision + "@sha256:" + acceptedAuditRoutinesSHA256
 )
 
 type acceptedAuditLoader func(context.Context, *Store) (*AcceptedAudit, error)

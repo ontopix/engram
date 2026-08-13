@@ -20,7 +20,9 @@ its links, and its directory maps cannot be accepted as a partial update.
 > drafts. The reference implementation is complete through milestone M6 and
 > currently identifies itself as the `1.0.0-rc.1` target, but interfaces may
 > still change before `v1.0.0`. The development tree also contains the
-> unreleased changes listed in the [changelog](CHANGELOG.md).
+> unreleased changes listed in the [changelog](CHANGELOG.md), including the
+> routine declarations annex. The reference CLI validates their static format,
+> but does not bind or execute routines.
 
 ## Start here
 
@@ -290,6 +292,7 @@ Start with the document that matches what you are trying to do:
 |---|---|
 | [Core specification](docs/spec/README.md) | Normative snapshot format, validation, transitions, and Agent Protocol |
 | [Managed Git annex](docs/spec/annex-git.md) | Normative accepted-history, transaction, synchronization, and recovery semantics |
+| [Routine declarations annex](docs/spec/annex-routines.md) | Normative portable scheduled-routine declarations and execution boundary |
 | [CLI contract](docs/cli/README.md) | Complete reference command grammar, output, exit status, and JSON protocol |
 | [Operator guide](docs/operator-guide.md) | Installation, trust, synchronization, recovery, backup, and upgrades |
 | [Rationale](docs/rationale.md) | Design reasoning, tradeoffs, and deliberate boundaries |

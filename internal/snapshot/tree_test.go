@@ -72,19 +72,23 @@ func TestTraversalPrecedenceAndPruning(t *testing.T) {
 		".engram/hooks":                   {kind: KindDirectory},
 		".engram/hooks/prepare-changeset": {kind: KindDirectory},
 		".engram/hooks/prepare-changeset/20-ok.sh": {kind: KindRegular, data: []byte("#!/usr/bin/env sh\n")},
-		".secret":                               {kind: KindSymlink},
-		"bad name":                              {kind: KindSymlink},
-		"nested":                                {kind: KindDirectory},
-		"nested/README.md":                      {kind: KindRegular, data: []byte("map\n")},
-		"nested/.git":                           {kind: KindDirectory},
-		"nested/.engram":                        {kind: KindDirectory},
-		"nested/.engram/hooks":                  {kind: KindSymlink},
-		"local":                                 {kind: KindDirectory},
-		"local/README.md":                       {kind: KindRegular, data: []byte("map\n")},
-		"local/.engram":                         {kind: KindDirectory},
-		"local/.engram/hooks":                   {kind: KindDirectory},
-		"local/.engram/hooks/prepare-changeset": {kind: KindDirectory},
+		".engram/routines":                         {kind: KindDirectory},
+		".engram/routines/daily-journal.md":        {kind: KindRegular, data: []byte("routine\n")},
+		".secret":                                  {kind: KindSymlink},
+		"bad name":                                 {kind: KindSymlink},
+		"nested":                                   {kind: KindDirectory},
+		"nested/README.md":                         {kind: KindRegular, data: []byte("map\n")},
+		"nested/.git":                              {kind: KindDirectory},
+		"nested/.engram":                           {kind: KindDirectory},
+		"nested/.engram/hooks":                     {kind: KindSymlink},
+		"local":                                    {kind: KindDirectory},
+		"local/README.md":                          {kind: KindRegular, data: []byte("map\n")},
+		"local/.engram":                            {kind: KindDirectory},
+		"local/.engram/hooks":                      {kind: KindDirectory},
+		"local/.engram/hooks/prepare-changeset":    {kind: KindDirectory},
 		"local/.engram/hooks/prepare-changeset/10-ok.sh": {kind: KindRegular, data: []byte("#!/usr/bin/env sh\n")},
+		"local/.engram/routines":                         {kind: KindDirectory},
+		"local/.engram/routines/weekly-review.md":        {kind: KindRegular, data: []byte("routine\n")},
 		"record.md": {kind: KindRegular, data: []byte("record\n")},
 	}
 	tree, err := Load(source)
@@ -108,6 +112,43 @@ func TestTraversalPrecedenceAndPruning(t *testing.T) {
 	}
 	if tree.Files["local/.engram/hooks/prepare-changeset/10-ok.sh"].Role != RoleHook {
 		t.Fatalf("local hook was not projected: %#v", tree.Files)
+	}
+	if tree.Files["local/.engram/routines/weekly-review.md"].Role != RoleRoutine {
+		t.Fatalf("local routine was not projected: %#v", tree.Files)
+	}
+}
+
+func TestRoutineTreeIsClosed(t *testing.T) {
+	t.Parallel()
+	source := memorySource{
+		".":                              {kind: KindDirectory},
+		".engram":                        {kind: KindDirectory},
+		".engram/routines":               {kind: KindDirectory},
+		".engram/routines/daily.md":      {kind: KindRegular, data: []byte("routine\n")},
+		".engram/routines/invalid.txt":   {kind: KindRegular},
+		".engram/routines/nested":        {kind: KindDirectory},
+		".engram/routines/wrong-kind.md": {kind: KindDirectory},
+		".engram/routines/symlinked.md":  {kind: KindSymlink},
+	}
+	tree, err := Load(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantIssues := []Issue{
+		{Code: "E309", Path: ".engram/routines"},
+		{Code: "E103", Path: ".engram/routines/symlinked.md"},
+		{Code: "E309", Path: ".engram/routines/wrong-kind.md"},
+	}
+	if !reflect.DeepEqual(tree.Issues, wantIssues) {
+		t.Fatalf("issues = %#v, want %#v", tree.Issues, wantIssues)
+	}
+	if file, exists := tree.Files[".engram/routines/daily.md"]; !exists || file.Role != RoleRoutine {
+		t.Fatalf("routine = %#v, exists = %t", file, exists)
+	}
+	for _, logicalPath := range []string{".engram/routines/invalid.txt", ".engram/routines/nested", ".engram/routines/wrong-kind.md", ".engram/routines/symlinked.md"} {
+		if _, exists := tree.Files[logicalPath]; exists {
+			t.Fatalf("closed routine tree projected %q", logicalPath)
+		}
 	}
 }
 

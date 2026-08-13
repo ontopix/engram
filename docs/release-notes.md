@@ -20,6 +20,10 @@ surface and the M0–M6 delivery gates:
 - advisory diagnostics, canonical skills, cross-platform CI, reproducible
   archives, checksums, licenses, provenance, and operator guidance.
 
+The reference CLI validates static `.engram/routines/` declarations and their
+managed Git projection. It does not bind, schedule, or execute routines;
+those responsibilities remain external to the CLI.
+
 The standard and CLI contract remain drafts until the project publishes stable
 `v1.0.0`. Finding identities and protocol v1 shapes are therefore
 release-candidate interfaces, not a retroactive stability promise for older

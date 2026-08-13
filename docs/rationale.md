@@ -93,8 +93,9 @@ runtime prose.
   richer graphs can be derived.
 - **No opaque record IDs.** Paths are identities in v1, so renames also
   rewrite inbound links.
-- **No embedded memory service.** The format chooses neither a daemon,
-  scheduler, database, nor runtime.
+- **No embedded memory service or scheduler.** The routine-declarations annex
+  can state portable UTC eligibility and instructions, but chooses neither a
+  daemon, scheduler, database, nor runtime.
 - **No universal bookkeeping timestamps.** Git records file history;
   schemas add dates only when time has domain meaning.
 - **No mandated retrieval stack.** Retrieval improves downstream of the

@@ -75,7 +75,7 @@ func TestAppVersionJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 	result := document["result"].(map[string]any)
-	if result["cli_version"] == "" || len(result["core_versions"].([]any)) != 1 || len(result["annex_versions"].([]any)) != 1 {
+	if result["cli_version"] == "" || len(result["core_versions"].([]any)) != 1 || len(result["annex_versions"].([]any)) != 2 {
 		t.Fatalf("result = %#v", result)
 	}
 }

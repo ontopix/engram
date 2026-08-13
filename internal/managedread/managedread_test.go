@@ -343,6 +343,39 @@ func TestAcceptedProjectionIncludesHierarchicalHooks(t *testing.T) {
 	}
 }
 
+func TestRoutineDeclarationsProjectThroughManagedStates(t *testing.T) {
+	root := newGitRepository(t, gitraw.SHA1, true)
+	routine := filepath.Join(root, "topics", ".engram", "routines", "daily-journal.md")
+	writeFile(t, routine, []byte("---\nengram: routine/v1\ncron: \"17 2 * * *\"\n---\n\n# Daily journal\n\nPropose a grounded update.\n"), 0o644)
+	runGit(t, root, nil, "add", "topics/.engram/routines/daily-journal.md")
+
+	store := openStore(t, root)
+	staged, err := store.Staged(context.Background())
+	if err != nil {
+		t.Fatalf("Staged: %v", err)
+	}
+	logicalPath := "topics/.engram/routines/daily-journal.md"
+	if staged.Snapshot == nil || staged.Snapshot.Validation.HasErrors() || staged.Snapshot.Tree.Files[logicalPath].Role != snapshot.RoleRoutine {
+		t.Fatalf("staged routine projection = %#v", staged)
+	}
+	if validation, _, err := store.CheckStaged(context.Background()); err != nil || validation.Status != checker.StatusComplete || validation.HasErrors() {
+		t.Fatalf("CheckStaged = %#v, %v", validation, err)
+	}
+
+	commitAll(t, root, "add routine declaration")
+	audit, err := openStore(t, root).AuditAccepted(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if audit.Validation.Status != checker.StatusComplete || audit.Validation.HasErrors() {
+		t.Fatalf("managed validation = %#v", audit.Validation)
+	}
+	tip := audit.Snapshots[audit.Tip]
+	if tip == nil || tip.Tree.Files[logicalPath].Role != snapshot.RoleRoutine {
+		t.Fatalf("accepted routine was not projected: %#v", tip)
+	}
+}
+
 func TestSHA256IndexObjectWidth(t *testing.T) {
 	root, ok := tryNewSHA256Repository(t)
 	if !ok {

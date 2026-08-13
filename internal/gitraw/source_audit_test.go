@@ -52,6 +52,35 @@ func TestTreeSourceDoesNotResolvePrunedOrTargetFreeEntries(t *testing.T) {
 	}
 }
 
+func TestTreeSourceProjectsRoutineDeclarations(t *testing.T) {
+	t.Parallel()
+	root := mustOID(t, SHA1, '1')
+	config := mustOID(t, SHA1, '2')
+	routines := mustOID(t, SHA1, '3')
+	declaration := mustOID(t, SHA1, '4')
+	rootTree := appendTreeEntry(nil, SHA1, ModeDirectory, ".engram", 0x22)
+	configTree := appendTreeEntry(nil, SHA1, ModeDirectory, "routines", 0x33)
+	routineTree := appendTreeEntry(nil, SHA1, ModeRegular, "daily-journal.md", 0x44)
+	reader := &memoryReader{objects: map[OID]Object{
+		root:        {OID: root, Type: TypeTree, Data: rootTree},
+		config:      {OID: config, Type: TypeTree, Data: configTree},
+		routines:    {OID: routines, Type: TypeTree, Data: routineTree},
+		declaration: {OID: declaration, Type: TypeBlob, Data: []byte("routine\n")},
+	}}
+	source := NewTreeSource(context.Background(), reader, root)
+	tree, err := snapshot.Load(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pruned := source.PrunedWithoutCoreFinding(); len(pruned) != 0 {
+		t.Fatalf("pruned = %v", pruned)
+	}
+	file, exists := tree.Files[".engram/routines/daily-journal.md"]
+	if !exists || file.Role != snapshot.RoleRoutine {
+		t.Fatalf("routine = %#v, exists = %t", file, exists)
+	}
+}
+
 func TestAuditStopsAtMergeBeforeTreeAndParents(t *testing.T) {
 	t.Parallel()
 	commitID := mustOID(t, SHA1, '1')

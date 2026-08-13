@@ -4,6 +4,10 @@
 
 ### Standard
 
+- Added the normative routine-declarations annex: each optional routine is a
+  Markdown file in a local `.engram/routines/` directory with a closed UTC
+  five-field cron profile and instructions in its body. Declarations are
+  runtime-neutral intent, never authority, hooks, or runtime state.
 - Added deterministic hierarchical `prepare-changeset` hooks: hooks may live
   under any logical directory, activate from the frozen initial changeset's
   affected subtrees, execute by ordering band then full logical path, and bind
@@ -40,6 +44,10 @@
 
 ### Reference implementation
 
+- Added static validation and managed Git projection for routine declarations,
+  including E309, the closed UTC cron profile, and the routine annex in the
+  reported and audited normative rule-set identity. The CLI still does not
+  bind, schedule, or execute routines.
 - Added local `config attachment add/remove`, `config harness`, and
   `config show` commands for idempotent, comment-preserving edits to project
   `engram.yaml`. Configuration remains separate from explicit `setup`: these
