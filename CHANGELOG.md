@@ -36,6 +36,10 @@
 
 ### Reference implementation
 
+- Added local `config attachment add/remove`, `config harness`, and
+  `config show` commands for idempotent, comment-preserving edits to project
+  `engram.yaml`. Configuration remains separate from explicit `setup`: these
+  commands never acquire stores, reconcile attachments, or install skills.
 - Extended `setup` to read strict project-root `engram.yaml`, acquire missing
   verified stores below `.memory/<name>`, maintain the root ignore rule,
   reconcile only declarative attachments, and install the selected harness in

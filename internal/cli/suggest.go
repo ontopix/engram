@@ -9,13 +9,14 @@ func commandSuggestions(model *Model, group, unknown string) []string {
 	}
 	seen := make(map[string]bool)
 	var candidates []string
+	prefix := strings.Fields(group)
 	for _, command := range model.Commands {
 		var candidate string
 		switch {
 		case group == "" && len(command.Path) > 0:
 			candidate = command.Path[0]
-		case group != "" && len(command.Path) == 2 && command.Path[0] == group:
-			candidate = command.Path[1]
+		case group != "" && len(command.Path) > len(prefix) && equalPathPrefix(command.Path, prefix):
+			candidate = command.Path[len(prefix)]
 		}
 		if candidate != "" && !seen[candidate] {
 			seen[candidate] = true

@@ -12,14 +12,26 @@ func WriteHelp(writer io.Writer, model *Model, invocation *Invocation) error {
 		return err
 	}
 	if invocation != nil && invocation.Group != "" {
+		prefix := strings.Fields(invocation.Group)
 		if _, err := fmt.Fprintf(writer, "Usage:\n  engram %s COMMAND [ARGS]\n\nCommands:\n", invocation.Group); err != nil {
 			return err
 		}
 		var entries []helpEntry
+		seen := make(map[string]bool)
 		for _, command := range model.Commands {
-			if len(command.Path) == 2 && command.Path[0] == invocation.Group {
-				entries = append(entries, helpEntry{Name: command.Path[1], Summary: command.Summary})
+			if len(command.Path) <= len(prefix) || !equalPathPrefix(command.Path, prefix) {
+				continue
 			}
+			name := command.Path[len(prefix)]
+			if seen[name] {
+				continue
+			}
+			seen[name] = true
+			summary := command.Summary
+			if len(command.Path) > len(prefix)+1 {
+				summary = nestedGroupSummary(invocation.Group, name)
+			}
+			entries = append(entries, helpEntry{Name: name, Summary: summary})
 		}
 		if err := writeHelpEntries(writer, entries, 0); err != nil {
 			return err
@@ -51,6 +63,25 @@ func WriteHelp(writer io.Writer, model *Model, invocation *Invocation) error {
 	}
 	_, err := fmt.Fprintln(writer, "\nGlobal options:\n  -s, --store PATH       Select a store root\n      --format FORMAT    Set output format: text or json\n      --no-color         Disable ANSI styling\n  -q, --quiet            Suppress ordinary successful text\n  -h, --help             Show help\n  -V, --version          Show CLI version\n\nRun 'engram COMMAND --help' for more information on a command.")
 	return err
+}
+
+func equalPathPrefix(path, prefix []string) bool {
+	if len(path) < len(prefix) {
+		return false
+	}
+	for index := range prefix {
+		if path[index] != prefix[index] {
+			return false
+		}
+	}
+	return true
+}
+
+func nestedGroupSummary(group, name string) string {
+	if group == "config" && name == "attachment" {
+		return "Manage declared memory repositories"
+	}
+	return "Manage " + name
 }
 
 type helpEntry struct {

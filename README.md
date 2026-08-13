@@ -198,7 +198,7 @@ The CLI groups commands by the job they perform:
 
 | Workflow | Commands |
 |---|---|
-| Create, obtain, and connect stores | `init`, `clone`, `attach`, `detach`, `setup` |
+| Create, obtain, and connect stores | `init`, `clone`, `attach`, `detach`, `setup`, `config` |
 | Inspect state | `status`, `diff`, `log`, `check` |
 | Work on the current draft | `add`, `fmt`, `new`, `mv`, `schema` |
 | Accept and undo changes | `commit`, `revert` |
@@ -222,13 +222,23 @@ a conforming managed writer.
 An agent project can declare its harness and independently owned memory
 repositories in a tracked `engram.yaml`:
 
+```sh
+engram config attachment add project-memory git@github.com:example/project-memory.git
+engram config attachment add shared-memory git@github.com:example/shared-memory.git
+engram config harness codex
+engram config show
+```
+
+These commands only edit or inspect the tracked declaration. The equivalent
+file is:
+
 ```yaml
 version: 1
 harness: codex
 attachments:
-  - name: project
+  - name: project-memory
     url: git@github.com:example/project-memory.git
-  - name: shared
+  - name: shared-memory
     url: git@github.com:example/shared-memory.git
 ```
 

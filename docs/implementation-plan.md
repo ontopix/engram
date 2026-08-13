@@ -167,8 +167,8 @@ deterministic inspection results.
 coordination; dry-run/check behavior; lossless link/catalog rewrites; local
 `attach` and `detach` through project `MEMORY.md`; project-scoped harness
 `setup`; declarative project `engram.yaml`, ignored `.memory/` acquisition and
-attachment reconciliation; and the bounded `doctor --recover` support required
-by CLI-owned helper state.
+attachment reconciliation; local idempotent manifest inspection and editing;
+and the bounded `doctor --recover` support required by CLI-owned helper state.
 
 **Gate:** helpers preserve unrelated bytes, reject collisions and concurrent
 changes, publish no partial successful result, never move accepted refs, and
@@ -176,7 +176,8 @@ match JSON/text goldens. Attachment tests cover missing, valid, malformed,
 duplicate, aliased, and concurrently updated owned blocks. Declarative setup
 tests cover strict parsing, dry-run network silence, verified acquisition,
 exact reuse without fetch, harness overrides, external attachment preservation,
-and non-destructive removal.
+non-destructive removal, comment-preserving configuration edits, and separation
+between configuration and materialization.
 
 #### M4 — Hooks, trust, and managed acceptance
 

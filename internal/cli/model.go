@@ -6,32 +6,36 @@ import "strings"
 type CommandName string
 
 const (
-	CommandInit            CommandName = "init"
-	CommandClone           CommandName = "clone"
-	CommandAttach          CommandName = "attach"
-	CommandDetach          CommandName = "detach"
-	CommandSetup           CommandName = "setup"
-	CommandStatus          CommandName = "status"
-	CommandDiff            CommandName = "diff"
-	CommandLog             CommandName = "log"
-	CommandAdd             CommandName = "add"
-	CommandCheck           CommandName = "check"
-	CommandFmt             CommandName = "fmt"
-	CommandNew             CommandName = "new"
-	CommandMove            CommandName = "mv"
-	CommandSchemaInventory CommandName = "schema.inventory"
-	CommandSchemaList      CommandName = "schema.list"
-	CommandSchemaShow      CommandName = "schema.show"
-	CommandSchemaCopy      CommandName = "schema.copy"
-	CommandCommit          CommandName = "commit"
-	CommandRevert          CommandName = "revert"
-	CommandHooksList       CommandName = "hooks.list"
-	CommandHooksTrust      CommandName = "hooks.trust"
-	CommandHooksRevoke     CommandName = "hooks.revoke"
-	CommandDoctor          CommandName = "doctor"
-	CommandPull            CommandName = "pull"
-	CommandPush            CommandName = "push"
-	CommandVersion         CommandName = "version"
+	CommandInit                   CommandName = "init"
+	CommandClone                  CommandName = "clone"
+	CommandAttach                 CommandName = "attach"
+	CommandDetach                 CommandName = "detach"
+	CommandSetup                  CommandName = "setup"
+	CommandConfigAttachmentAdd    CommandName = "config.attachment.add"
+	CommandConfigAttachmentRemove CommandName = "config.attachment.remove"
+	CommandConfigHarness          CommandName = "config.harness"
+	CommandConfigShow             CommandName = "config.show"
+	CommandStatus                 CommandName = "status"
+	CommandDiff                   CommandName = "diff"
+	CommandLog                    CommandName = "log"
+	CommandAdd                    CommandName = "add"
+	CommandCheck                  CommandName = "check"
+	CommandFmt                    CommandName = "fmt"
+	CommandNew                    CommandName = "new"
+	CommandMove                   CommandName = "mv"
+	CommandSchemaInventory        CommandName = "schema.inventory"
+	CommandSchemaList             CommandName = "schema.list"
+	CommandSchemaShow             CommandName = "schema.show"
+	CommandSchemaCopy             CommandName = "schema.copy"
+	CommandCommit                 CommandName = "commit"
+	CommandRevert                 CommandName = "revert"
+	CommandHooksList              CommandName = "hooks.list"
+	CommandHooksTrust             CommandName = "hooks.trust"
+	CommandHooksRevoke            CommandName = "hooks.revoke"
+	CommandDoctor                 CommandName = "doctor"
+	CommandPull                   CommandName = "pull"
+	CommandPush                   CommandName = "push"
+	CommandVersion                CommandName = "version"
 )
 
 type StorePolicy uint8
@@ -126,11 +130,12 @@ func DefaultModel() *Model {
 
 	return &Model{
 		CommandGroups: []CommandGroupSpec{
+			{Name: "config", Summary: "Inspect and edit declarative project setup"},
 			{Name: "schema", Summary: "Inspect and copy schemas"},
 			{Name: "hooks", Summary: "Inspect and manage preparation-hook trust"},
 		},
 		HelpCategories: []HelpCategorySpec{
-			{Title: "Create, obtain, and connect stores", Commands: []string{"init", "clone", "attach", "detach", "setup"}},
+			{Title: "Create, obtain, and connect stores", Commands: []string{"init", "clone", "attach", "detach", "setup", "config"}},
 			{Title: "Inspect state", Commands: []string{"status", "diff", "log", "check"}},
 			{Title: "Work on the current draft", Commands: []string{"add", "fmt", "new", "mv", "schema"}},
 			{Title: "Accept and undo changes", Commands: []string{"commit", "revert"}},
@@ -152,6 +157,10 @@ func DefaultModel() *Model {
 			{Name: CommandAttach, Path: []string{"attach"}, Usage: "engram attach STORE [--project PATH] [--memory-file FILE]", Summary: "Attach a store through a project memory manifest", Positionals: positionals(1, 1, "STORE"), Options: []OptionSpec{value("project", "PATH", "--project"), value("memory-file", "FILE", "--memory-file")}, Store: StoreForbidden},
 			{Name: CommandDetach, Path: []string{"detach"}, Usage: "engram detach STORE [--project PATH] [--memory-file FILE]", Summary: "Detach a store from a project memory manifest", Positionals: positionals(1, 1, "STORE"), Options: []OptionSpec{value("project", "PATH", "--project"), value("memory-file", "FILE", "--memory-file")}, Store: StoreForbidden},
 			{Name: CommandSetup, Path: []string{"setup"}, Usage: "engram setup [--harness HARNESS] [--project PATH] [--memory-file FILE] [--dry-run]", Summary: "Converge project memories and agent-harness integration", Positionals: positionals(0, 0), Options: []OptionSpec{enumValue("harness", "HARNESS", []string{"claude-code", "codex"}, "--harness"), value("project", "PATH", "--project"), value("memory-file", "FILE", "--memory-file"), dryRun}, Store: StoreForbidden},
+			{Name: CommandConfigAttachmentAdd, Path: []string{"config", "attachment", "add"}, Usage: "engram config attachment add NAME URL [--project PATH]", Summary: "Declare a project memory repository", Positionals: positionals(2, 2, "NAME", "URL"), Options: []OptionSpec{value("project", "PATH", "--project")}, Store: StoreForbidden},
+			{Name: CommandConfigAttachmentRemove, Path: []string{"config", "attachment", "remove"}, Usage: "engram config attachment remove NAME [--project PATH]", Summary: "Remove a declared memory repository", Positionals: positionals(1, 1, "NAME"), Options: []OptionSpec{value("project", "PATH", "--project")}, Store: StoreForbidden},
+			{Name: CommandConfigHarness, Path: []string{"config", "harness"}, Usage: "engram config harness HARNESS [--project PATH]", Summary: "Set the default project harness", Positionals: positionals(1, 1, "HARNESS"), Options: []OptionSpec{value("project", "PATH", "--project")}, Store: StoreForbidden},
+			{Name: CommandConfigShow, Path: []string{"config", "show"}, Usage: "engram config show [--project PATH]", Summary: "Show declarative project setup", Positionals: positionals(0, 0), Options: []OptionSpec{value("project", "PATH", "--project")}, Store: StoreForbidden},
 			{Name: CommandStatus, Path: []string{"status"}, Usage: "engram status", Summary: "Show working draft and initial candidate status", Positionals: positionals(0, 0), Store: StoreAllowed},
 			{Name: CommandDiff, Path: []string{"diff"}, Usage: "engram diff [REV-A [REV-B]] [--staged|--cached] [--stat|--name-only]", Summary: "Show changes between store states", Positionals: positionals(0, 2, "REV-A", "REV-B"), Options: []OptionSpec{flag("staged", "--staged", "--cached"), flag("stat", "--stat"), flag("name-only", "--name-only")}, Store: StoreAllowed, Validate: validateDiff},
 			{Name: CommandLog, Path: []string{"log"}, Usage: "engram log [-n COUNT] [--oneline]", Summary: "Show accepted store history", Positionals: positionals(0, 0), Options: []OptionSpec{value("count", "COUNT", "-n"), flag("oneline", "--oneline")}, Store: StoreAllowed, Validate: validateLog},
@@ -210,6 +219,11 @@ func (m *Model) command(path []string) *CommandSpec {
 }
 
 func (m *Model) isGroup(name string) bool {
+	for _, group := range m.CommandGroups {
+		if group.Name == name {
+			return true
+		}
+	}
 	for _, command := range m.Commands {
 		if len(command.Path) > 1 && command.Path[0] == name {
 			return true
@@ -221,6 +235,25 @@ func (m *Model) isGroup(name string) bool {
 func (m *Model) isTopLevel(name string) bool {
 	for _, command := range m.Commands {
 		if command.Path[0] == name {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *Model) pathPrefix(path []string) bool {
+	for _, command := range m.Commands {
+		if len(command.Path) <= len(path) {
+			continue
+		}
+		matched := true
+		for index := range path {
+			if command.Path[index] != path[index] {
+				matched = false
+				break
+			}
+		}
+		if matched {
 			return true
 		}
 	}

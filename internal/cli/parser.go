@@ -123,9 +123,14 @@ func Parse(model *Model, arguments []string) (*Invocation, *ParseFailure) {
 		commandPath = append(commandPath, token)
 		index++
 		invocation.Command = model.command(commandPath)
+		if invocation.Command == nil && model.pathPrefix(commandPath) {
+			invocation.Group = strings.Join(commandPath, " ")
+			continue
+		}
 		if invocation.Command == nil {
-			failed := failureWithHelp(invocation, usageError("unknown %s subcommand %q", commandPath[0], token))
-			failed.Suggestions = commandSuggestions(model, commandPath[0], token)
+			group := strings.Join(commandPath[:len(commandPath)-1], " ")
+			failed := failureWithHelp(invocation, usageError("unknown %s subcommand %q", group, token))
+			failed.Suggestions = commandSuggestions(model, group, token)
 			return nil, failed
 		}
 	}

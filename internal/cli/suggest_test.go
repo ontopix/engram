@@ -18,6 +18,7 @@ func TestCommandSuggestionsAreScopedAndDeterministic(t *testing.T) {
 		{name: "case mismatch", unknown: "CLONE", want: []string{"clone"}},
 		{name: "equally close commands", unknown: "pusl", want: []string{"pull", "push"}},
 		{name: "group subcommand", group: "schema", unknown: "shwo", want: []string{"show"}},
+		{name: "nested group subcommand", group: "config attachment", unknown: "ad", want: []string{"add"}},
 		{name: "unrelated short token", unknown: "wat"},
 		{name: "bounded input", unknown: "this-command-name-is-deliberately-longer-than-sixty-four-bytes-to-bound-suggestion-work"},
 	}

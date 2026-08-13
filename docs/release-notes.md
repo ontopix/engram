@@ -11,7 +11,8 @@ surface and the M0–M6 delivery gates:
   and changeset validation;
 - raw managed-Git discovery, projection, lineage audit, status, diff, and log;
 - working-draft, staging, `MEMORY.md` attachment, declarative `engram.yaml`
-  acquisition, verified agent-harness setup, schema, and hook-trust workflows;
+  editing and acquisition, verified agent-harness setup, schema, and hook-trust
+  workflows;
 - crash-recoverable managed commit, inverse revert, initialization, and
   verified clone;
 - conditional push and exact linear pull replay with explicit conflict,
