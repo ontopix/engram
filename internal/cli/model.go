@@ -126,7 +126,7 @@ func positionals(minimum, maximum int, names ...string) PositionalSpec {
 func DefaultModel() *Model {
 	dryRun := flag("dry-run", "--dry-run")
 	message := value("message", "MESSAGE", "-m")
-	state := enumValue("state", "STATE", []string{"accepted", "working"}, "--state")
+	state := enumValue("state", "STATE", []string{"accepted", "working", "staged"}, "--state")
 
 	return &Model{
 		CommandGroups: []CommandGroupSpec{
@@ -175,8 +175,8 @@ func DefaultModel() *Model {
 			{Name: CommandSchemaCopy, Path: []string{"schema", "copy"}, Usage: "engram schema copy TYPE [--to SCOPE] [--dry-run]", Summary: "Copy one bundled schema into a store", Positionals: positionals(1, 1, "TYPE"), Options: []OptionSpec{value("to", "SCOPE", "--to"), dryRun}, Store: StoreAllowed},
 			{Name: CommandCommit, Path: []string{"commit"}, Usage: "engram commit -m MESSAGE [--dry-run]\nengram commit --dry-run", Summary: "Prepare, validate, and accept the initial candidate", Positionals: positionals(0, 0), Options: []OptionSpec{message, dryRun}, Store: StoreAllowed, Validate: validateCommit},
 			{Name: CommandRevert, Path: []string{"revert"}, Usage: "engram revert COMMIT [-m MESSAGE] [--dry-run]", Summary: "Revert an accepted commit through a new transaction", Positionals: positionals(1, 1, "COMMIT"), Options: []OptionSpec{message, dryRun}, Store: StoreAllowed, Validate: validateOptionalMessage},
-			{Name: CommandHooksList, Path: []string{"hooks", "list"}, Usage: "engram hooks list [--state accepted|working]", Summary: "List hooks and their local trust state", Positionals: positionals(0, 0), Options: []OptionSpec{state}, Store: StoreAllowed},
-			{Name: CommandHooksTrust, Path: []string{"hooks", "trust"}, Usage: "engram hooks trust [--state accepted|working]", Summary: "Trust one complete selected hook set", Positionals: positionals(0, 0), Options: []OptionSpec{state}, Store: StoreAllowed},
+			{Name: CommandHooksList, Path: []string{"hooks", "list"}, Usage: "engram hooks list [--state accepted|working|staged]", Summary: "List hooks and their local trust state", Positionals: positionals(0, 0), Options: []OptionSpec{state}, Store: StoreAllowed},
+			{Name: CommandHooksTrust, Path: []string{"hooks", "trust"}, Usage: "engram hooks trust [--state accepted|working|staged]", Summary: "Trust one complete selected hook set", Positionals: positionals(0, 0), Options: []OptionSpec{state}, Store: StoreAllowed},
 			{Name: CommandHooksRevoke, Path: []string{"hooks", "revoke"}, Usage: "engram hooks revoke [HOOK...]", Summary: "Revoke hook trust grants", Positionals: positionals(0, -1, "HOOK"), Store: StoreAllowed},
 			{Name: CommandDoctor, Path: []string{"doctor"}, Usage: "engram doctor [PATH] [--recover] [--format text|json]", Summary: "Diagnose integration and recovery state", Positionals: positionals(0, 1, "PATH"), Options: []OptionSpec{flag("recover", "--recover")}, Store: StoreConditional, Validate: validateDoctor},
 			{Name: CommandPull, Path: []string{"pull"}, Usage: "engram pull [REMOTE [BRANCH]]\nengram pull --continue\nengram pull --abort", Summary: "Synchronize accepted history from a remote", Positionals: positionals(0, 2, "REMOTE", "BRANCH"), Options: []OptionSpec{flag("continue", "--continue"), flag("abort", "--abort")}, Store: StoreAllowed, Validate: validatePull},

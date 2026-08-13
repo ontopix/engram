@@ -2,7 +2,7 @@
 
 **Version:** v1
 **Status:** Draft
-**Revision:** 2026-08-11
+**Revision:** 2026-08-13
 **Normative status:** Normative
 
 This annex binds the core standard's portable snapshots and changesets to Git-managed writable
@@ -62,8 +62,10 @@ explicit directories and regular-file paths and bytes. A raw-tree entry whose Ap
 valid but which the core prunes without emitting its own `E` finding—including root `.git`, cache,
 unknown tool state, or dot-prefixed content—produces E603. An entry pruned by E103, E104, E107,
 E109, E110, E303, or E308 produces that core finding and MUST NOT additionally produce E603.
-Untracked, ignored,
-index-only, and unstaged worktree content is not accepted state. Appendix A defines projection.
+Hook trees at every logical content directory remain in the projection and are
+validated and diffed as ordinary normed configuration; they are not pruned
+as unknown state. Untracked, ignored, index-only, and unstaged worktree content
+is not accepted state. Appendix A defines projection.
 
 ### 2.3 Writable presentation
 
@@ -141,10 +143,10 @@ representable for boundary preflight; it is never followed or treated as a regul
    captured base and only the paths and bytes declared by the captured index.
 2. Run the core §8.1 boundary preflight on base and candidate. Reject any entry
    that would be pruned from an accepted raw tree, then compute the initial
-   changeset.
-3. Prepare under core §8 with the exact applicable hook set and bytes from the
-   captured base. One designated executor runs that set exactly once; no Git or
-   integration hook may prepare the candidate again.
+   changeset and freeze its affected hook scopes.
+3. Prepare under core §8 with the exact applicable hook set and bytes selected
+   from the captured base for those scopes. One designated executor runs that
+   set exactly once; no Git or integration hook may prepare the candidate again.
 4. From the sealed final candidate, run complete core snapshot and transition
    validation against the captured base. Continue only on a `complete` result
    with no `E` finding.

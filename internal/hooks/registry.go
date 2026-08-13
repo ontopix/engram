@@ -29,9 +29,9 @@ var (
 	// ErrUnsafePermissions identifies controller state writable by another
 	// host account or readable outside its owner.
 	ErrUnsafePermissions = errors.New("unsafe hook trust registry permissions")
-	// ErrInvalidName identifies a caller-supplied direct hook filename which
+	// ErrInvalidName identifies a caller-supplied hook logical path which
 	// cannot be addressed by the revoke operation.
-	ErrInvalidName = errors.New("invalid direct hook name")
+	ErrInvalidName = errors.New("invalid hook logical path")
 )
 
 // Registry owns complete-set grants in one controller-selected external file.
@@ -209,8 +209,10 @@ func (r *Registry) Trust(store string, set Set) (Selection, error) {
 }
 
 // Revoke removes every historical grant for the current physical store which
-// contains any named direct hook. With no names it removes all grants for the
-// store. Duplicate names collapse. It never executes a hook.
+// contains any named hook logical path. A direct filename remains a
+// compatibility spelling for the corresponding root hook. With no names it
+// removes all grants for the store. Duplicate names collapse. It never
+// executes a hook.
 func (r *Registry) Revoke(store string, names ...string) (RevokeResult, error) {
 	if r == nil {
 		return RevokeResult{}, fmt.Errorf("hook trust registry is nil")
@@ -224,10 +226,14 @@ func (r *Registry) Revoke(store string, names ...string) (RevokeResult, error) {
 	}
 	wanted := make(map[string]struct{}, len(names))
 	for _, name := range names {
-		if strings.Contains(name, "/") || strings.Contains(name, "\\") || !validFilename(name) {
+		logicalPath := name
+		if !strings.Contains(name, "/") && !strings.Contains(name, "\\") && validFilename(name) {
+			logicalPath = programDirectory + "/" + name
+		}
+		if _, ok := programScope(logicalPath); !ok || !validFilename(path.Base(logicalPath)) || strings.Contains(logicalPath, "\\") {
 			return RevokeResult{}, fmt.Errorf("%w: %q", ErrInvalidName, name)
 		}
-		wanted[name] = struct{}{}
+		wanted[logicalPath] = struct{}{}
 	}
 	result := RevokeResult{RevokedSets: []string{}}
 	changed, err := r.update(func(document *registryDocument) (bool, error) {
@@ -466,10 +472,10 @@ func (existing grant) validate() error {
 		return fmt.Errorf("%w: invalid grant", ErrCorruptRegistry)
 	}
 	for index, hook := range existing.Hooks {
-		if path.Dir(hook.Path) != programDirectory || !validFilename(path.Base(hook.Path)) || !validInterpreterToken(hook.Interpreter) || !validDigest(hook.SHA256) || hook.Bytes != nil {
+		if _, ok := programScope(hook.Path); !ok || !validFilename(path.Base(hook.Path)) || !validInterpreterToken(hook.Interpreter) || !validDigest(hook.SHA256) || hook.Bytes != nil {
 			return fmt.Errorf("%w: invalid stored hook description", ErrCorruptRegistry)
 		}
-		if index != 0 && bytes.Compare([]byte(existing.Hooks[index-1].Path), []byte(hook.Path)) >= 0 {
+		if index != 0 && !hookLess(existing.Hooks[index-1], hook) {
 			return fmt.Errorf("%w: duplicate or unordered stored hooks", ErrCorruptRegistry)
 		}
 	}
@@ -554,7 +560,7 @@ func sameDescriptions(left, right []Hook) bool {
 
 func grantContains(existing grant, wanted map[string]struct{}) bool {
 	for _, hook := range existing.Hooks {
-		if _, found := wanted[path.Base(hook.Path)]; found {
+		if _, found := wanted[hook.Path]; found {
 			return true
 		}
 	}

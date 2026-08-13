@@ -72,14 +72,20 @@ func TestTraversalPrecedenceAndPruning(t *testing.T) {
 		".engram/hooks":                   {kind: KindDirectory},
 		".engram/hooks/prepare-changeset": {kind: KindDirectory},
 		".engram/hooks/prepare-changeset/20-ok.sh": {kind: KindRegular, data: []byte("#!/usr/bin/env sh\n")},
-		".secret":              {kind: KindSymlink},
-		"bad name":             {kind: KindSymlink},
-		"nested":               {kind: KindDirectory},
-		"nested/README.md":     {kind: KindRegular, data: []byte("map\n")},
-		"nested/.git":          {kind: KindDirectory},
-		"nested/.engram":       {kind: KindDirectory},
-		"nested/.engram/hooks": {kind: KindSymlink},
-		"record.md":            {kind: KindRegular, data: []byte("record\n")},
+		".secret":                               {kind: KindSymlink},
+		"bad name":                              {kind: KindSymlink},
+		"nested":                                {kind: KindDirectory},
+		"nested/README.md":                      {kind: KindRegular, data: []byte("map\n")},
+		"nested/.git":                           {kind: KindDirectory},
+		"nested/.engram":                        {kind: KindDirectory},
+		"nested/.engram/hooks":                  {kind: KindSymlink},
+		"local":                                 {kind: KindDirectory},
+		"local/README.md":                       {kind: KindRegular, data: []byte("map\n")},
+		"local/.engram":                         {kind: KindDirectory},
+		"local/.engram/hooks":                   {kind: KindDirectory},
+		"local/.engram/hooks/prepare-changeset": {kind: KindDirectory},
+		"local/.engram/hooks/prepare-changeset/10-ok.sh": {kind: KindRegular, data: []byte("#!/usr/bin/env sh\n")},
+		"record.md": {kind: KindRegular, data: []byte("record\n")},
 	}
 	tree, err := Load(source)
 	if err != nil {
@@ -88,7 +94,7 @@ func TestTraversalPrecedenceAndPruning(t *testing.T) {
 	wantIssues := []Issue{
 		{Code: "E107", Path: "."},
 		{Code: "E303", Path: ".engram/schemas"},
-		{Code: "E109", Path: "nested/.engram/hooks"},
+		{Code: "E103", Path: "nested/.engram/hooks"},
 		{Code: "E110", Path: "nested/.git"},
 	}
 	if !reflect.DeepEqual(tree.Issues, wantIssues) {
@@ -99,6 +105,9 @@ func TestTraversalPrecedenceAndPruning(t *testing.T) {
 	}
 	if tree.Files["record.md"].Role != RoleRecord || tree.Files["README.md"].Role != RoleMap {
 		t.Fatalf("unexpected file roles: %#v", tree.Files)
+	}
+	if tree.Files["local/.engram/hooks/prepare-changeset/10-ok.sh"].Role != RoleHook {
+		t.Fatalf("local hook was not projected: %#v", tree.Files)
 	}
 }
 

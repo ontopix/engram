@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/ontopix/engram/internal/changeset"
 	"github.com/ontopix/engram/internal/snapshot"
 )
 
@@ -173,6 +174,86 @@ func TestAddDeleteRenameAndByteChangeProduceDistinctSets(t *testing.T) {
 	}
 }
 
+func TestSelectTreeForChangesUsesHierarchicalScopesAndStableOrder(t *testing.T) {
+	tree := hookTreePaths(map[string][]byte{
+		".engram/hooks/prepare-changeset/90-global.sh":              []byte("#!/usr/bin/env sh\n"),
+		"journal/.engram/hooks/prepare-changeset/10-journal.sh":     []byte("#!/usr/bin/env sh\n"),
+		"journal/daily/.engram/hooks/prepare-changeset/20-daily.sh": []byte("#!/usr/bin/env sh\n"),
+		"people/.engram/hooks/prepare-changeset/10-people.sh":       []byte("#!/usr/bin/env sh\n"),
+	})
+	tests := []struct {
+		name    string
+		changes []changeset.Change
+		want    []string
+	}{
+		{
+			name:    "daily selects root parent and child",
+			changes: []changeset.Change{{Operation: changeset.Modified, Path: "journal/daily/2026-08-13.md"}},
+			want: []string{
+				"journal/.engram/hooks/prepare-changeset/10-journal.sh",
+				"journal/daily/.engram/hooks/prepare-changeset/20-daily.sh",
+				".engram/hooks/prepare-changeset/90-global.sh",
+			},
+		},
+		{
+			name:    "parent excludes child and sibling",
+			changes: []changeset.Change{{Operation: changeset.Modified, Path: "journal/README.md"}},
+			want: []string{
+				"journal/.engram/hooks/prepare-changeset/10-journal.sh",
+				".engram/hooks/prepare-changeset/90-global.sh",
+			},
+		},
+		{
+			name: "movement activates source and destination",
+			changes: []changeset.Change{
+				{Operation: changeset.Deleted, Path: "journal/daily/moved.md"},
+				{Operation: changeset.Added, Path: "people/moved.md"},
+			},
+			want: []string{
+				"journal/.engram/hooks/prepare-changeset/10-journal.sh",
+				"people/.engram/hooks/prepare-changeset/10-people.sh",
+				"journal/daily/.engram/hooks/prepare-changeset/20-daily.sh",
+				".engram/hooks/prepare-changeset/90-global.sh",
+			},
+		},
+		{
+			name:    "hook change affects containing scope",
+			changes: []changeset.Change{{Operation: changeset.Modified, Path: "people/.engram/hooks/prepare-changeset/10-people.sh"}},
+			want: []string{
+				"people/.engram/hooks/prepare-changeset/10-people.sh",
+				".engram/hooks/prepare-changeset/90-global.sh",
+			},
+		},
+		{name: "empty selects none", changes: []changeset.Change{}, want: []string{}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			set, err := SelectTreeForChanges(tree, test.changes)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := make([]string, len(set.Hooks))
+			for index, hook := range set.Hooks {
+				got[index] = hook.Path
+			}
+			if !reflect.DeepEqual(got, test.want) {
+				t.Fatalf("paths = %#v, want %#v", got, test.want)
+			}
+		})
+	}
+}
+
+func TestSelectTreeForChangesValidatesUnselectedHookTree(t *testing.T) {
+	tree := hookTreePaths(map[string][]byte{
+		".engram/hooks/prepare-changeset/90-global.sh":        []byte("#!/usr/bin/env sh\n"),
+		"people/.engram/hooks/prepare-changeset/10-people.sh": []byte("#!/usr/bin/env sh -e\n"),
+	})
+	set, err := SelectTreeForChanges(tree, []changeset.Change{{Operation: changeset.Modified, Path: "journal/entry.md"}})
+	if !errors.Is(err, ErrInvalidSelection) || !reflect.DeepEqual(set, Set{}) {
+		t.Fatalf("set, error = %#v, %v", set, err)
+	}
+}
+
 func mustSelect(t *testing.T, programs map[string][]byte) Set {
 	t.Helper()
 	set, err := SelectTree(hookTree(programs))
@@ -183,9 +264,16 @@ func mustSelect(t *testing.T, programs map[string][]byte) Set {
 }
 
 func hookTree(programs map[string][]byte) *snapshot.Tree {
-	files := make(map[string]snapshot.File, len(programs))
+	paths := make(map[string][]byte, len(programs))
 	for name, data := range programs {
-		logicalPath := programDirectory + "/" + name
+		paths[programDirectory+"/"+name] = data
+	}
+	return hookTreePaths(paths)
+}
+
+func hookTreePaths(programs map[string][]byte) *snapshot.Tree {
+	files := make(map[string]snapshot.File, len(programs))
+	for logicalPath, data := range programs {
 		files[logicalPath] = snapshot.File{Path: logicalPath, Role: snapshot.RoleHook, Data: data}
 	}
 	return &snapshot.Tree{Files: files}

@@ -2,7 +2,7 @@
 
 **Version:** v1
 **Status:** Draft
-**Revision:** 2026-08-11
+**Revision:** 2026-08-13
 **Normative status:** Normative
 
 ## Table of contents
@@ -139,7 +139,7 @@ Any directory in a snapshot — the root included — MAY contain an
   its descendants
   ([§6](#6-types-and-schemas));
 - `.engram/hooks/` — optional preparation-hook programs
-  ([§8](#8-changesets-and-preparation-hooks)); at the root only;
+  ([§8](#8-changesets-and-preparation-hooks));
 - `.engram/cache/` — RESERVED for derived state
   ([§10](#10-derived-state)); at the root only.
 
@@ -178,8 +178,8 @@ produce no further finding.
    `.engram` is traversed as described below; root `.git` is pruned as
    repository metadata; and `.git` at any traversed boundary below the
    root produces E110 before being pruned. At a non-root `.engram`, a
-   direct `hooks` or `cache` entry produces E109 and is pruned before
-   kind inspection. Within `.engram`, only `root.yaml`, `schemas`, and
+   direct `cache` entry produces E109 and is pruned before kind
+   inspection. Within `.engram`, only `root.yaml`, `schemas`, and
    `hooks`, plus the root `cache` boundary, continue; other direct
    children and all `cache` descendants are pruned. Inside a traversed
    schema or hook tree, its closed grammar takes precedence over ordinary
@@ -197,8 +197,8 @@ produce no further finding.
    decode a normed file. Encoding and dependent-content precedence are
    defined by §9.1.
 
-`hooks` and `cache` are allowed only at the snapshot root. A root `.git`
-is outside the logical snapshot;
+`hooks` is allowed in any traversed `.engram`; `cache` is allowed only at
+the snapshot root. A root `.git` is outside the logical snapshot;
 managed-store consumers access it only under the Git annex.
 
 ### 2.5 Records, assets, maps
@@ -1071,14 +1071,14 @@ apply these transition rules retroactively over an accepted lineage.
 ### 8.2 `prepare-changeset` hook programs
 
 An **executor** is software that runs preparation hooks for a
-transaction. The snapshot root MAY contain hook programs as direct files
-under `.engram/hooks/prepare-changeset/`. `.engram/hooks/` MUST NOT appear
-below the store root. If the root `.engram/hooks` entry exists, it MUST
-be a real directory containing only the real directory
-`prepare-changeset`. If that directory exists, it MUST contain only
-direct regular hook-program files and MUST NOT contain subdirectories.
-Violations of this closed tree produce E308; traversal, pruning, and
-precedence follow §2.4.
+transaction. Any logical content directory `<D>`, including the snapshot
+root, MAY contain hook programs as direct files under
+`<D>/.engram/hooks/prepare-changeset/`. The containing `.engram/hooks`
+entry MUST be a real directory containing only the real directory
+`prepare-changeset`. If that directory exists, it MUST contain only direct
+regular hook-program files and MUST NOT contain subdirectories. Violations
+of any such closed tree produce E308; traversal, pruning, and precedence
+follow §2.4.
 
 Each hook filename has the form
 `<NN>-<slug>[.<extension>...]`, where:
@@ -1102,9 +1102,14 @@ extension is documentary; an executor MUST select the interpreter from
 the first line, not from the extension, and resolve that token through
 the host's executable search path.
 
-Every base-state hook is applicable to every non-empty changeset. V1 has
-no path or type filter; a hook may inspect its input and exit successfully
-without changing the candidate.
+The scope of a hook below `<D>` is the logical subtree `<D>/**`; a root hook's
+scope is the complete snapshot. For a non-empty initial changeset, a base-state
+hook is applicable if and only if at least one initial change path is in its
+scope. Changes to `<D>/.engram/hooks/**` are in `<D>`'s scope. A removal and an
+addition are distinct changes, so a move represented by those entries can
+activate both source and destination scopes. V1 has no additional path or type
+filter; an applicable hook may inspect its input and exit successfully without
+changing the candidate.
 
 ### 8.3 Invocation protocol
 
@@ -1112,9 +1117,9 @@ The complete normative invocation algorithm is in
 [Appendix C](#appendix-c--preparation-hook-protocol-normative). In
 outline, one transaction proceeds as follows:
 
-1. preflight the base and initial candidate, select the applicable hooks
-   and bytes from the base, and establish trust for that exact ordered
-   set;
+1. preflight the base and initial candidate, compute the initial changeset,
+   derive its affected scopes, select the applicable hooks and bytes from the
+   base, and establish trust for that exact ordered set;
 2. for each hook, create fresh disposable base and candidate trees,
    invoke it with the closed environment and canonical changeset input,
    then capture its successful result privately;
@@ -1128,18 +1133,19 @@ does not replace validation or authorize acceptance.
 
 ### 8.4 Selection, ordering, and final validation
 
-The base state fixes the applicable hook set and bytes. Initialization
-has none; a candidate hook change takes effect only on the next
-transaction. Hooks run sequentially and exactly once in complete-filename
-ASCII order. One executor owns each preparation attempt; a retry starts
-again from the declared initial candidate. Appendix C defines the exact
+The initial changeset fixes the affected scopes, and the base state fixes the
+applicable hook paths and bytes. Initialization has none; a candidate hook
+change takes effect only on the next transaction. Hooks run sequentially and
+exactly once, ordered first by the `<NN>` prefix and then by complete logical
+path in UTF-8 byte order. One executor owns each preparation attempt; a retry
+starts again from the declared initial candidate. Appendix C defines the exact
 selection, isolation, capture, rejection, and final-validation rules.
 
 ### 8.5 Trust and executor conformance
 
 Hook presence is not authorization. External trust MUST cover the exact
-ordered set, store, relative paths, and program bytes. Software MAY omit
-hook support; once acting as executor, it MUST execute the complete set
+ordered set, store, complete store-relative logical paths, and program bytes.
+Software MAY omit hook support; once acting as executor, it MUST execute the complete set
 under Appendix C or stop without accepting the transaction. Executors
 SHOULD isolate hooks with a read-only base, only the candidate writable,
 network denied by default, and finite resource limits.
@@ -1186,7 +1192,7 @@ the offending artifact or entry. For cross-artifact rules:
 - E106 case-collision and E107 invalid-name findings use the containing
   directory, so even an entry whose raw name is not valid UTF-8 has a
   representable normative path;
-- E109 uses the forbidden non-root `.engram/hooks` or `.engram/cache`
+- E109 uses the forbidden non-root `.engram/cache`
   boundary itself and prunes it without descendant findings;
 - E303 schema-tree-layout findings use a wrong-kind `.engram/schemas`
   boundary itself, or the containing `.engram/schemas` directory for an
@@ -1194,8 +1200,9 @@ the offending artifact or entry. For cross-artifact rules:
   that file;
 - E308 hook-tree layout or filename findings use the wrong-kind boundary
   itself or the nearest containing normed hook directory
-  (`.engram/hooks` or `.engram/hooks/prepare-changeset`); a validly named
-  hook program's interpreter error uses that file;
+  (`<D>/.engram/hooks` or
+  `<D>/.engram/hooks/prepare-changeset`); a validly named hook program's
+  interpreter error uses that file;
 - E5xx transition findings use the affected base-state record or schema
   path;
 - E6xx managed-store findings use the store root `.`;
@@ -1611,7 +1618,7 @@ stable interface.
 | E106 | Entries in one directory collide under the Unicode case-fold key of [§2.6](#26-filenames-and-encoding) |
 | E107 | Non-reserved content-entry name violates [§2.6](#26-filenames-and-encoding) |
 | E108 | Normed text file is not UTF-8, has a BOM or CR, or does not end with LF |
-| E109 | Root-only `.engram/hooks` or `.engram/cache` entry appears below the store root |
+| E109 | Root-only `.engram/cache` entry appears below the store root |
 | E110 | `.git` entry appears at a traversed boundary below the store root |
 
 ### E2xx — Records and maps
@@ -1639,7 +1646,7 @@ stable interface.
 | E305 | Schema sets top-level `additionalProperties: false` without direct top-level `properties` entries for `type` and `description` |
 | E306 | Mutually exclusive policies both set to `true` |
 | E307 | Root does not define the `note` baseline, or `note` violates [§6.3](#63-the-note-baseline) |
-| E308 | Under §2.4 precedence, the root hook boundary or tree has a wrong kind, contains an entry other than `prepare-changeset/` or its direct regular programs, has an invalid hook filename, or has an invalid interpreter line under [§8.2](#82-prepare-changeset-hook-programs) |
+| E308 | Under §2.4 precedence, a hook boundary or tree has a wrong kind, contains an entry other than `prepare-changeset/` or its direct regular programs, has an invalid hook filename, or has an invalid interpreter line under [§8.2](#82-prepare-changeset-hook-programs) |
 
 ### E4xx — Links and catalogs
 
@@ -1686,14 +1693,16 @@ accepting the transaction.
 
 ### C.1 Selection, trust, and ownership
 
-The applicable hook paths and bytes MUST be selected from the base before
-any hook runs. Initialization has no hooks. A hook added, modified,
-renamed, or deleted by the candidate takes effect only on the next
-transaction. Candidate mutations do not add hooks or restart earlier
-ones.
+After preflight, the executor MUST compute the initial changeset and derive
+all affected scopes from its change paths. It MUST then select the applicable
+hook paths and bytes from the base before any hook runs. This selection MUST be
+frozen for the attempt. Initialization has no hooks. A hook added, modified,
+renamed, or deleted by the candidate takes effect only on the next transaction.
+Candidate mutations do not affect scopes, add hooks, or restart earlier ones.
 
-Applicable hooks execute sequentially and exactly once, by complete
-filename in ASCII byte order. The controlling environment MUST designate
+Applicable hooks execute sequentially and exactly once, ordered first by
+their two-digit `<NN>` prefixes and then by their complete logical paths in
+UTF-8 byte order. The controlling environment MUST designate
 one executor for each attempt and candidate. Integration layers MUST
 coordinate so no other layer prepares that attempt again; they MAY
 validate its result. Distinct isolated candidates MAY be prepared
@@ -1702,8 +1711,8 @@ initial candidate, never a partially prepared tree.
 
 Before execution, the user or controlling environment MUST explicitly
 trust the complete ordered set. Trust state MUST live outside the store
-and distinguish the store, relative path, and exact bytes of every
-program. Independent per-program grants do not combine into set trust.
+and distinguish the store, complete store-relative logical path, and exact
+bytes of every program. Independent per-program grants do not combine into set trust.
 Any addition, deletion, rename, or byte change creates a new set that
 requires trust. An empty set runs nothing and requires no hook trust.
 
@@ -1713,9 +1722,11 @@ acceptance; it MUST NOT skip an untrusted hook or unsupported interpreter.
 
 ### C.2 Preflight and materialization
 
-Before serializing input or invoking a hook, the executor MUST complete
-the §8.1 preflight in both states and reject any failure. It MUST also
-reject E108 or E308 in an applicable base hook.
+Before serializing input, selecting hooks, or invoking a hook, the executor
+MUST complete the §8.1 preflight in both states and reject any failure. It MUST
+also validate every hook program in every base and candidate hook tree and
+reject E108 or E308 anywhere in those trees, including outside an affected
+scope.
 
 For each invocation, the executor MUST expose fresh disposable base and
 candidate filesystem trees and MUST NOT execute against the live store.

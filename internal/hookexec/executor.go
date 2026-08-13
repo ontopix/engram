@@ -85,11 +85,16 @@ func (e *Executor) prepare(ctx context.Context, request Request) (*Result, error
 		return nil, typed(ErrorHook, "", nil, nil, fmt.Errorf("%w: initial candidate fails changeset preflight", ErrRejected))
 	}
 	current := candidateState{image: initialImage, snapshot: currentSnapshot}
+	// Candidate hook structure and program bytes are validated completely even
+	// though executable inventory is always selected from the immutable base.
+	if _, err := hooks.SelectTree(current.snapshot.Tree); err != nil {
+		return nil, typed(ErrorHook, "", nil, nil, fmt.Errorf("%w: validate candidate hooks: %v", ErrRejected, err))
+	}
 
 	initialChanges := changeset.Diff(snapshotTree(baseSnapshot), current.snapshot.Tree)
 	selected := hooks.EmptySet()
 	if !request.Initialization && len(initialChanges) != 0 {
-		selected, err = hooks.SelectTree(baseSnapshot.Tree)
+		selected, err = hooks.SelectTreeForChanges(baseSnapshot.Tree, initialChanges)
 		if err != nil {
 			return nil, typed(ErrorHook, "", nil, nil, fmt.Errorf("%w: select base hooks: %v", ErrRejected, err))
 		}

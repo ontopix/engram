@@ -16,6 +16,7 @@ import (
 	"github.com/ontopix/engram/internal/changeset"
 	"github.com/ontopix/engram/internal/checker"
 	"github.com/ontopix/engram/internal/gitraw"
+	"github.com/ontopix/engram/internal/snapshot"
 )
 
 func TestLogMaximumCountTraversesOnlyAvailableHistory(t *testing.T) {
@@ -319,6 +320,26 @@ func TestInvalidAcceptedHistoryAggregatesCheckerResults(t *testing.T) {
 	}
 	if _, err := store.ResolveRevision(context.Background(), rootID[:12]); err == nil {
 		t.Fatal("abbreviated revision accepted")
+	}
+}
+
+func TestAcceptedProjectionIncludesHierarchicalHooks(t *testing.T) {
+	root := newGitRepository(t, gitraw.SHA1, true)
+	hook := filepath.Join(root, "topics", ".engram", "hooks", "prepare-changeset", "10-local.sh")
+	writeFile(t, hook, []byte("#!/usr/bin/env sh\nexit 0\n"), 0o644)
+	commitAll(t, root, "add hierarchical hook")
+
+	audit, err := openStore(t, root).AuditAccepted(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if audit.Validation.Status != checker.StatusComplete || audit.Validation.HasErrors() {
+		t.Fatalf("managed validation = %#v", audit.Validation)
+	}
+	tip := audit.Snapshots[audit.Tip]
+	logicalPath := "topics/.engram/hooks/prepare-changeset/10-local.sh"
+	if tip == nil || tip.Tree.Files[logicalPath].Role != snapshot.RoleHook {
+		t.Fatalf("hierarchical hook was not projected: %#v", tip)
 	}
 }
 
