@@ -2,7 +2,7 @@
 
 **Version:** v1
 **Status:** Draft
-**Revision:** 2026-08-11
+**Revision:** 2026-08-13
 **Normative status:** Non-normative with respect to the engram standard
 
 This document defines the observable contract of the reference `engram`
@@ -55,7 +55,7 @@ Authority is intentionally centralized:
 |---|---|
 | `init`, `clone` | Core snapshot/transition rules; Git annex §§2–4, §7, Appendix B |
 | `attach`, `detach` | Core §12; Git annex §6 |
-| `setup` | Core §11–12; skills and adapters annexes |
+| `setup` | Core §11–12; Git annex §§3 and 6 for acquired attachments; skills and adapters annexes |
 | `status`, `diff`, `log` | Git annex §§3 and 5 |
 | `check` | Core §9; Git annex §§3 and 8 for managed forms |
 | `add`, `fmt`, `new`, `mv`, `schema` | Core §§5–8; Git annex §5 for working drafts and staging |
@@ -153,9 +153,11 @@ successful text, not errors or JSON.
 
 ### 2.1 Network and authority boundary
 
-`clone`, `pull`, and `push` are the only built-in commands that initiate
-repository network access. Local inspection, editing, staging, attachment,
-acceptance, and recovery do not fetch or publish implicitly.
+`clone`, `pull`, `push`, and declarative `setup` are the only built-in commands
+that initiate repository network access. Setup may clone a configured store
+only when its `.memory/<name>` destination is absent; it never fetches an
+existing store. Local inspection, editing, staging, attachment, acceptance,
+and recovery do not fetch or publish implicitly.
 
 Read, write, hook-execution, credential, fetch, and publication authority are
 separate. Selecting or attaching a store grants none of them. A trusted store
@@ -381,6 +383,12 @@ This shape prevents clients from treating an uncertain or partly published
 operation as safe to retry. Recovery semantics follow
 [Git annex Appendix B](../spec/annex-git.md#appendix-b--atomicity-and-recovery-profile-normative).
 
+Setup is a convergent composite operation. If it fails after completing one or
+more ordinary, non-recovery-bearing setup actions, its error response may use
+the normal setup result from §3.3 to report those completed actions. If the
+failing acquisition or attachment carries recovery evidence, the closed
+recovery result above takes precedence.
+
 ### 3.3 Complete command results
 
 The following table defines every complete non-error `result`. Presentation
@@ -392,7 +400,7 @@ flags do not change JSON shape.
 | `clone` | `root` host path, `remote` string, `accepted` Git state, `published` and `reused` booleans, `verified_commits` integer, `launcher`, managed-store `validation`, root-to-tip `audits` |
 | `attach` | `project`, `store`, `memory_file` host paths; `changed`; managed-store `validation`; root-to-tip `audits` |
 | `detach` | `project`, `store`, `memory_file` host paths; `changed` |
-| `setup` | `project`, `memory_file`, `entrypoint`, and `skills_dir` host paths; `harness`; `dry_run`; `changed`; ordered `files` with project-relative `path` and `action` (`created`, `updated`) |
+| `setup` | `project`, nullable `config_file`, nullable `memory_dir`, `memory_file`, `entrypoint`, and `skills_dir` host paths; `harness`; `dry_run`; `changed`; ordered configured `attachments` with `name`, exact `url`, `store`, `action` (`clone`, `cloned`, `reuse`, `reused`, `rejected`), nullable managed-store `validation`, and root-to-tip `audits`; ordered `files` with project-relative `path` and `action` (`created`, `updated`) |
 | `status` | `mode` (`normal`, `pull-replay`), `accepted`, `candidate_base`, `staged`, `unstaged`, nullable `replay` |
 | `diff` | `from`, `to` state selectors, logical `changes`, and `stat` with `added`, `modified`, `deleted` counts |
 | `log` | newest-first `commits` |
@@ -511,8 +519,8 @@ and email must be configured in the cloned repository before a managed
 commit. An invalid or indeterminate lineage is reported without publishing a
 fresh destination.
 
-The command is the only acquisition operation and therefore requires explicit
-network and credential authority. It follows
+The command and declarative `setup` are the only acquisition operations and
+therefore require explicit network and credential authority. Clone follows
 [Git annex §§3 and 7](../spec/annex-git.md#3-accepted-history) and the same
 atomic publication/recovery guarantees as Appendix B.
 
@@ -589,15 +597,62 @@ project's attachment.
 ### 4.5 `setup`
 
 ```text
-engram setup --harness HARNESS [--project PATH] [--memory-file FILE] [--dry-run]
+engram setup [--harness HARNESS] [--project PATH] [--memory-file FILE] [--dry-run]
 ```
 
-Installs a project-scoped agent integration for `claude-code` or `codex`. The
-project follows the same explicit/current-Git-root/current-directory selection
-as `attach`. Claude Code uses `CLAUDE.md` and `.claude/skills/`; Codex uses
-`AGENTS.md` and `.agents/skills/`. `--memory-file` follows `attach` and defaults
-to project `MEMORY.md`; setup writes that selected project-relative path into
-the runtime entrypoint.
+Converges declarative project memories and installs a project-scoped agent
+integration for `claude-code` or `codex`. The project follows the same
+explicit/current-Git-root/current-directory selection as `attach`.
+`--memory-file` follows `attach` and defaults to project `MEMORY.md`.
+
+When project-root `engram.yaml` is present it is a strict, single-document YAML
+manifest with this shape:
+
+```yaml
+version: 1
+harness: codex
+attachments:
+  - name: project
+    url: git@github.com:example/project-memory.git
+  - name: shared
+    url: git@github.com:example/shared-memory.git
+```
+
+The top-level object contains only integer `version` equal to `1`, optional
+`harness`, and optional `attachments`. Each attachment contains exactly `name`
+and `url`. Names are unique, 1–63 byte lowercase ASCII slugs containing letters,
+digits, and internal `-`; URLs are unique exact locations accepted by `clone`.
+Embedded URL passwords, YAML aliases, merge keys, duplicate mapping keys,
+unknown fields, reserved Windows device names, and multiple YAML documents are
+rejected. One URL configures the resulting `origin` for clone, pull, and push.
+Credentials and publication authority remain external to the file.
+
+`--harness` takes precedence over the manifest for that invocation and never
+edits it. After overlay resolution a harness is required. With no manifest,
+the established imperative form remains available through an explicit
+`--harness` and setup performs no acquisition or `.gitignore` management.
+
+Declarative attachments materialize at `.memory/<name>`. Setup reserves that
+directory for manifest-owned stores and maintains a root `/.memory/` exclusion
+in `.gitignore`; a non-directory or symlink at that path is a conflict. A
+missing store is acquired through the same complete lineage audit, guarded
+publication, and recovery protocol as `clone`. An existing destination is
+network-silently reused only when its exact URL, upstream, accepted lineage,
+store identity, guard, presentation, and cache exclusion still match. Setup
+never fetches or pulls an existing store.
+
+Only attachments below `.memory/` are reconciled from the manifest. Existing
+imperative attachments outside that namespace are preserved. Removing a
+manifest entry removes its path from `MEMORY.md` but never deletes its clone,
+rewrites its history, or revokes other authority. Re-adding the exact entry can
+therefore reuse it. Deleting orphaned clones is outside this command.
+
+Setup preflights the complete manifest, ignore file, attachment registry, and
+harness-owned paths before mutation. It writes the ignore rule before acquiring
+stores, acquires missing stores one at a time, and publishes the reconciled
+attachment block only after every desired store is definitively valid. A later
+failure may therefore leave a verified ignored clone for an idempotent retry,
+but never attaches an invalid or only partly acquired store.
 
 Setup verifies the complete canonical skill manifest embedded in the running
 binary, materializes every listed `SKILL.md`, records their trusted installed
@@ -608,9 +663,12 @@ installed manifest; a locally modified skill, malformed owned manifest, path
 alias, or malformed entrypoint block is an integration error rather than an
 overwrite.
 
-The command is idempotent and performs no network access, store mutation, hook
-execution, trust grant, or synchronization. `--dry-run` reports the exact
-planned files without creating directories or writing bytes.
+The command is idempotent. Invoking it explicitly authorizes acquisition from
+the manifest URLs only for missing stores; it does not authorize pull, push,
+hook execution, hook trust, memory writes, or deletion. `--dry-run` reports
+planned acquisitions and exact project files without network access, directory
+creation, or byte writes; existing configured clones are still verified
+locally.
 
 When the selected entrypoint contains the exact CLI-owned legacy
 `engram:adoption:v1` block, setup imports its store list into `MEMORY.md` before

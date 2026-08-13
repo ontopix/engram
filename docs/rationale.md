@@ -79,6 +79,14 @@ store without placing its commits in their code histories. A project-level
 entrypoints, while those entrypoints only point to the registry and load skills
 from an independently trusted installation.
 
+A project setup manifest and `MEMORY.md` answer different questions rather
+than competing as two sources of truth. Tracked `engram.yaml` declares which
+repository locations and harness a project intends to use. Local `MEMORY.md`
+records where verified stores are materialized on this host. This lets one
+project command reproduce discovery without putting nested repositories in the
+consumer project's history or teaching agents to acquire repositories from
+runtime prose.
+
 ## Deliberate boundaries
 
 - **No graph database.** Typed links form the portable relational layer;

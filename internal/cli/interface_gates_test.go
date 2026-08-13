@@ -26,7 +26,7 @@ var protocolCommandGoldens = []commandGolden{
 	{CommandClone, []string{"clone"}, "engram clone URL [PATH]", []string{"clone", "https://example.test/memory.git", "memory"}, StoreForbidden},
 	{CommandAttach, []string{"attach"}, "engram attach STORE [--project PATH] [--memory-file FILE]", []string{"attach", "memory"}, StoreForbidden},
 	{CommandDetach, []string{"detach"}, "engram detach STORE [--project PATH] [--memory-file FILE]", []string{"detach", "memory"}, StoreForbidden},
-	{CommandSetup, []string{"setup"}, "engram setup --harness HARNESS [--project PATH] [--memory-file FILE] [--dry-run]", []string{"setup", "--harness", "codex", "--dry-run"}, StoreForbidden},
+	{CommandSetup, []string{"setup"}, "engram setup [--harness HARNESS] [--project PATH] [--memory-file FILE] [--dry-run]", []string{"setup", "--dry-run"}, StoreForbidden},
 	{CommandStatus, []string{"status"}, "engram status", []string{"status"}, StoreAllowed},
 	{CommandDiff, []string{"diff"}, "engram diff [REV-A [REV-B]] [--staged|--cached] [--stat|--name-only]", []string{"diff", "--name-only"}, StoreAllowed},
 	{CommandLog, []string{"log"}, "engram log [-n COUNT] [--oneline]", []string{"log", "-n", "1"}, StoreAllowed},
@@ -123,7 +123,7 @@ const rootHelpGolden = "Usage:\n" +
 	"  clone    Clone a managed store into a new directory\n" +
 	"  attach   Attach a store through a project memory manifest\n" +
 	"  detach   Detach a store from a project memory manifest\n" +
-	"  setup    Install an agent-harness integration\n\n" +
+	"  setup    Converge project memories and agent-harness integration\n\n" +
 	"Inspect state:\n" +
 	"  status   Show working draft and initial candidate status\n" +
 	"  diff     Show changes between store states\n" +

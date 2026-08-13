@@ -60,6 +60,15 @@ type Result struct {
 	Changed    bool   `json:"changed"`
 }
 
+// ManagedResult describes reconciliation of the setup-owned attachment
+// namespace. Stores outside ManagedRoot are preserved verbatim.
+type ManagedResult struct {
+	Project     string `json:"project"`
+	MemoryFile  string `json:"memory_file"`
+	ManagedRoot string `json:"managed_root"`
+	Changed     bool   `json:"changed"`
+}
+
 // Effect is the closed protocol evidence attached to a failed update. The
 // containing EffectError also records that publication may already be visible
 // when Durable is false (rename completed but directory sync did not).
@@ -211,6 +220,20 @@ func Detach(project, memoryFile, store string) (Result, error) {
 	return NewUpdater().Detach(project, memoryFile, store)
 }
 
+// PlanManaged reports whether replacing the attachments below managedRoot
+// with stores would change the registry. Missing desired stores are accepted
+// for planning; callers remain responsible for acquiring and auditing them.
+func PlanManaged(project, memoryFile, managedRoot string, stores []string) (ManagedResult, error) {
+	return NewUpdater().reconcileManaged(project, memoryFile, managedRoot, stores, false)
+}
+
+// ReconcileManaged atomically replaces only attachments below managedRoot.
+// It preserves attachments outside that namespace and never deletes stores.
+// Callers must acquire and completely audit every desired store first.
+func ReconcileManaged(project, memoryFile, managedRoot string, stores []string) (ManagedResult, error) {
+	return NewUpdater().reconcileManaged(project, memoryFile, managedRoot, stores, true)
+}
+
 func (u *Updater) Attach(project, memoryFile, store string) (Result, error) {
 	return u.update(project, memoryFile, store, true)
 }
@@ -290,7 +313,7 @@ func (u *Updater) update(project, memoryFile, store string, attach bool) (result
 	}
 	sort.Slice(stores, func(left, right int) bool { return stores[left].Path < stores[right].Path })
 
-	updated, err := replace(original, block, present, stores)
+	updated, err := replace(original, block, present, stores, false)
 	if err != nil {
 		return Result{}, err
 	}
@@ -303,6 +326,215 @@ func (u *Updater) update(project, memoryFile, store string, attach bool) (result
 	}
 	result.Changed = true
 	return result, nil
+}
+
+func (u *Updater) reconcileManaged(project, memoryFile, managedRoot string, stores []string, publish bool) (result ManagedResult, resultErr error) {
+	if u == nil {
+		return ManagedResult{}, fmt.Errorf("attachment updater is nil")
+	}
+	var err error
+	project, err = realDirectory(project)
+	if err != nil {
+		return ManagedResult{}, err
+	}
+	memoryFile, err = ResolveMemoryFile(project, memoryFile)
+	if err != nil {
+		return ManagedResult{}, err
+	}
+	managedRoot, err = resolveManagedRoot(project, managedRoot)
+	if err != nil {
+		return ManagedResult{}, err
+	}
+	desired, err := normalizeManagedStores(project, managedRoot, stores, !publish)
+	if err != nil {
+		return ManagedResult{}, err
+	}
+	result = ManagedResult{Project: project, MemoryFile: memoryFile, ManagedRoot: managedRoot}
+
+	var lock *lockFile
+	if publish {
+		lock, err = acquireLockWith(memoryFile+".engram.lock", u.establishLockIdentity)
+		if err != nil {
+			return ManagedResult{}, err
+		}
+		published := publication{}
+		defer func() {
+			residual, releaseErr := lock.release(u.beforeRemove, u.afterRelease)
+			if releaseErr != nil {
+				resultErr = errors.Join(resultErr, fmt.Errorf("release attachment lock: %w", releaseErr))
+			}
+			if resultErr != nil {
+				result = ManagedResult{}
+				resultErr = withEffect(resultErr, published, residual)
+			}
+		}()
+
+		original, originalInfo, readErr := readOptional(memoryFile)
+		if readErr != nil {
+			return ManagedResult{}, readErr
+		}
+		updated, updateErr := reconcileManagedBytes(project, managedRoot, original, desired)
+		if updateErr != nil {
+			return ManagedResult{}, updateErr
+		}
+		if bytes.Equal(original, updated) {
+			return result, nil
+		}
+		published, err = u.publish(memoryFile, original, originalInfo, updated)
+		if err != nil {
+			return ManagedResult{}, err
+		}
+		result.Changed = true
+		return result, nil
+	}
+
+	original, _, err := readOptional(memoryFile)
+	if err != nil {
+		return ManagedResult{}, err
+	}
+	updated, err := reconcileManagedBytes(project, managedRoot, original, desired)
+	if err != nil {
+		return ManagedResult{}, err
+	}
+	result.Changed = !bytes.Equal(original, updated)
+	return result, nil
+}
+
+func reconcileManagedBytes(project, managedRoot string, original []byte, desired []string) ([]byte, error) {
+	block, present, err := parse(original)
+	if err != nil {
+		return nil, err
+	}
+	stores := []attachedStore(nil)
+	if present {
+		stores = append(stores, block.stores...)
+	}
+	if err := validatePhysicalDuplicates(project, stores); err != nil {
+		return nil, err
+	}
+
+	kept := make([]attachedStore, 0, len(stores)+len(desired))
+	for _, existing := range stores {
+		if !storedPathBelow(project, existing.Path, managedRoot) {
+			kept = append(kept, existing)
+		}
+	}
+	for _, store := range desired {
+		kept = append(kept, describeStore(project, store))
+	}
+	sort.Slice(kept, func(left, right int) bool { return kept[left].Path < kept[right].Path })
+	seen := make(map[string]struct{}, len(kept))
+	for _, store := range kept {
+		if _, duplicate := seen[store.Path]; duplicate {
+			return nil, ErrMalformedBlock
+		}
+		seen[store.Path] = struct{}{}
+	}
+	if err := validatePhysicalDuplicates(project, kept); err != nil {
+		return nil, err
+	}
+	return replace(original, block, present, kept, true)
+}
+
+func resolveManagedRoot(project, root string) (string, error) {
+	if root == "" || !utf8.ValidString(root) {
+		return "", fmt.Errorf("managed attachment root is empty or not UTF-8")
+	}
+	if !filepath.IsAbs(root) {
+		root = filepath.Join(project, root)
+	}
+	absolute, err := filepath.Abs(root)
+	if err != nil {
+		return "", err
+	}
+	absolute = filepath.Clean(absolute)
+	info, statErr := os.Lstat(absolute)
+	switch {
+	case statErr == nil:
+		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return "", fmt.Errorf("managed attachment root is not a real directory")
+		}
+		absolute, err = filepath.EvalSymlinks(absolute)
+		if err != nil {
+			return "", err
+		}
+	case errors.Is(statErr, os.ErrNotExist):
+		parent, parentErr := filepath.EvalSymlinks(filepath.Dir(absolute))
+		if parentErr != nil {
+			return "", parentErr
+		}
+		absolute = filepath.Join(parent, filepath.Base(absolute))
+	default:
+		return "", statErr
+	}
+	absolute = filepath.Clean(absolute)
+	if !pathBelow(absolute, project) {
+		return "", fmt.Errorf("managed attachment root must stay below project root")
+	}
+	return absolute, nil
+}
+
+func normalizeManagedStores(project, managedRoot string, stores []string, allowMissing bool) ([]string, error) {
+	result := make([]string, 0, len(stores))
+	seen := make(map[string]struct{}, len(stores))
+	for _, store := range stores {
+		if store == "" || !utf8.ValidString(store) {
+			return nil, fmt.Errorf("managed store path is empty or not UTF-8")
+		}
+		if !filepath.IsAbs(store) {
+			store = filepath.Join(project, store)
+		}
+		absolute, err := filepath.Abs(store)
+		if err != nil {
+			return nil, err
+		}
+		absolute = filepath.Clean(absolute)
+		info, statErr := os.Lstat(absolute)
+		switch {
+		case statErr == nil:
+			if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+				return nil, fmt.Errorf("managed store is not a real directory: %s", store)
+			}
+			absolute, err = filepath.EvalSymlinks(absolute)
+			if err != nil {
+				return nil, err
+			}
+		case errors.Is(statErr, os.ErrNotExist) && allowMissing:
+			// Planning uses the exact lexical child which setup will acquire.
+		case errors.Is(statErr, os.ErrNotExist):
+			return nil, fmt.Errorf("managed store does not exist: %s", store)
+		default:
+			return nil, statErr
+		}
+		absolute = filepath.Clean(absolute)
+		if !pathBelow(absolute, managedRoot) {
+			return nil, fmt.Errorf("managed store must stay below managed attachment root")
+		}
+		key := filepath.ToSlash(absolute)
+		if _, duplicate := seen[key]; duplicate {
+			return nil, fmt.Errorf("duplicate managed store path %q", key)
+		}
+		seen[key] = struct{}{}
+		result = append(result, absolute)
+	}
+	return result, nil
+}
+
+func pathBelow(name, directory string) bool {
+	relative, err := filepath.Rel(directory, name)
+	return err == nil && relative != "." && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
+}
+
+func storedPathBelow(project, stored, directory string) bool {
+	candidate := filepath.FromSlash(stored)
+	if !filepath.IsAbs(candidate) {
+		candidate = filepath.Join(project, candidate)
+	}
+	absolute, err := filepath.Abs(candidate)
+	if err != nil {
+		return false
+	}
+	return pathBelow(filepath.Clean(absolute), directory)
 }
 
 func withEffect(err error, published publication, residual bool) error {
@@ -431,8 +663,8 @@ func rejectDuplicateJSONFields(data []byte) error {
 	return walk()
 }
 
-func replace(original []byte, block parsedBlock, present bool, stores []attachedStore) ([]byte, error) {
-	if len(stores) == 0 && !present {
+func replace(original []byte, block parsedBlock, present bool, stores []attachedStore, ensure bool) ([]byte, error) {
+	if len(stores) == 0 && !present && !ensure {
 		return append([]byte(nil), original...), nil
 	}
 	encoded, err := encode(stores)

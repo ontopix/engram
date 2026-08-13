@@ -166,6 +166,39 @@ func Clone(ctx context.Context, location string, options Options) (Result, error
 	return New().Run(ctx, location, options)
 }
 
+// Reuse verifies that destination is an existing clone of the exact location
+// and that its accepted lineage, upstream, guard, and presentation still
+// conform. It performs no network access and never mutates the clone.
+func Reuse(ctx context.Context, location, destination string) (Result, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return Result{}, typed(ErrorCancelled, "reuse clone", err)
+	}
+	if err := transport.ValidateLocation(location); err != nil {
+		return Result{}, typed(ErrorUsage, "validate clone location", err)
+	}
+	if destination == "" || !utf8.ValidString(destination) {
+		return Result{}, typed(ErrorUsage, "select clone destination", errors.New("destination is empty or not UTF-8"))
+	}
+	absolute, err := filepath.Abs(destination)
+	if err != nil {
+		return Result{}, typed(ErrorUsage, "select clone destination", err)
+	}
+	absolute = filepath.Clean(absolute)
+	parent := filepath.Dir(absolute)
+	parentInfo, err := os.Lstat(parent)
+	if err != nil || parentInfo.Mode()&os.ModeSymlink != 0 || !parentInfo.IsDir() {
+		return Result{}, typed(ErrorUsage, "select clone destination", errors.New("destination parent is not an existing real directory"))
+	}
+	canonicalParent, err := filepath.EvalSymlinks(parent)
+	if err != nil {
+		return Result{}, typed(ErrorUsage, "select clone destination", err)
+	}
+	return reuse(ctx, location, filepath.Join(filepath.Clean(canonicalParent), filepath.Base(absolute)))
+}
+
 // Run obtains location into the exact token-derived private stage, records a
 // durable publication plan, and publishes only after the lifecycle state has
 // advanced to cleanup-required.
@@ -939,29 +972,29 @@ func cloneDestination(location string, options Options) (string, error) {
 
 func reuse(ctx context.Context, location, destination string) (Result, error) {
 	if _, _, err := lifecycle.Read(destination, lifecycle.Acquisition); err == nil {
-		return Result{}, typed(ErrorConflict, "reuse default clone", errors.New("existing clone has active or recoverable acquisition state"))
+		return Result{}, typed(ErrorConflict, "reuse clone", errors.New("existing clone has active or recoverable acquisition state"))
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return Result{}, typed(ErrorConflict, "reuse default clone", errors.New("existing clone acquisition state is inconsistent"))
+		return Result{}, typed(ErrorConflict, "reuse clone", errors.New("existing clone acquisition state is inconsistent"))
 	}
 	result, repository, err := verify(ctx, destination)
 	if err != nil {
-		return Result{}, typed(ErrorConflict, "reuse default clone", err)
+		return Result{}, typed(ErrorConflict, "reuse clone", err)
 	}
 	if result.Validation.Status != checker.StatusComplete || result.Validation.HasErrors() {
-		return Result{}, typed(ErrorConflict, "reuse default clone", errors.New("existing clone no longer has a conforming accepted lineage"))
+		return Result{}, typed(ErrorConflict, "reuse clone", errors.New("existing clone no longer has a conforming accepted lineage"))
 	}
 	if err := verifyOriginAndUpstream(ctx, destination, location, repository.HeadRef); err != nil {
-		return Result{}, typed(ErrorConflict, "reuse default clone", err)
+		return Result{}, typed(ErrorConflict, "reuse clone", err)
 	}
 	if _, err := hooks.ResolveStoreIdentity(destination); err != nil {
-		return Result{}, typed(ErrorConflict, "reuse default clone identity", err)
+		return Result{}, typed(ErrorConflict, "reuse clone identity", err)
 	}
 	launcher, err := guard.Inspect(ctx, repository)
 	if err != nil || launcher != guard.Unchanged {
-		return Result{}, typed(ErrorConflict, "reuse default clone guard", err)
+		return Result{}, typed(ErrorConflict, "reuse clone guard", err)
 	}
 	if ok, err := hasCacheExclusion(repository.GitDir); err != nil || !ok {
-		return Result{}, typed(ErrorConflict, "reuse default clone cache exclusion", err)
+		return Result{}, typed(ErrorConflict, "reuse clone cache exclusion", err)
 	}
 	result.Root = destination
 	result.Remote = "origin"

@@ -91,10 +91,46 @@ the destination visible. It does not copy ambient author identity into the
 store; configure the local identity before the first managed commit. Clone
 grants no preparation-hook trust and no push authority.
 
-## Connect a store to an agent project
+## Set up an agent project
 
-From the agent project, attach one or more independent stores. The project
-defaults to the current Git root, or the current directory outside Git:
+For reproducible onboarding, commit a project-root `engram.yaml` which names
+the default harness and each independent memory repository:
+
+```yaml
+version: 1
+harness: codex
+attachments:
+  - name: project
+    url: git@github.com:example/project-memory.git
+  - name: shared
+    url: git@github.com:example/shared-memory.git
+```
+
+Then run from the project:
+
+```sh
+engram setup --dry-run
+engram setup
+```
+
+Setup adds the root `.memory/` exclusion to `.gitignore`, acquires missing
+stores at `.memory/<name>`, audits them before publication, reconciles
+`MEMORY.md`, installs the embedded canonical skills, and points `AGENTS.md` or
+`CLAUDE.md` at the registry. A command-line `--harness codex|claude-code`
+overrides the manifest for that invocation without editing it.
+
+Repeating setup verifies and reuses an exact existing clone without fetching.
+Use `engram pull` explicitly inside a selected store when synchronization is
+authorized. Removing a declaration removes only its `MEMORY.md` attachment;
+the ignored repository remains available for inspection or later reuse.
+
+The one attachment URL becomes `origin` for clone, pull, and push. Use an SSH
+location such as `git@github.com:owner/memory.git` when the same checkout must
+publish through SSH. Do not put credentials or tokens in the manifest.
+
+Projects without `engram.yaml` retain the imperative flow. Attach one or more
+existing independent stores; the project defaults to the current Git root, or
+the current directory outside Git:
 
 ```sh
 engram attach ../memory
@@ -105,7 +141,7 @@ Each command audits the store and creates or updates project `MEMORY.md`.
 Attachments only discover locations; they grant no read, write, hook, network,
 or synchronization authority.
 
-Install the project-scoped integration for the harness in use:
+Then install the project-scoped integration for the harness in use:
 
 ```sh
 engram setup --harness codex

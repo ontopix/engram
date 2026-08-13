@@ -106,7 +106,6 @@ func TestParseRejectsInvalidGrammar(t *testing.T) {
 		{"check half pair", []string{"check", "--base", "base"}, "provided together"},
 		{"new description", []string{"new", "note", "new.md"}, "requires --description"},
 		{"new body title", []string{"new", "note", "new.md", "--description", "A note.", "--body", "body.md", "--title", "Title"}, "mutually exclusive"},
-		{"setup harness", []string{"setup"}, "requires --harness"},
 		{"commit message", []string{"commit"}, "requires -m"},
 		{"commit newline", []string{"commit", "-m", "bad\n"}, "MESSAGE must"},
 		{"hooks state", []string{"hooks", "list", "--state", "candidate"}, "invalid STATE"},

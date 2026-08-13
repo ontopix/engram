@@ -1,10 +1,26 @@
 # Codex integration
 
 This example gives a Codex project a discoverable, independently owned engram
-store. `engram attach` records it in project `MEMORY.md`; `engram setup`
-installs verified project skills and points `AGENTS.md` at that registry.
+store. A tracked `engram.yaml` can acquire and attach it in one setup; the
+imperative `engram attach` form remains available for an existing local store.
+Setup installs verified project skills and points `AGENTS.md` at `MEMORY.md`.
 
-## Attach the store and set up Codex
+## Declarative setup
+
+Commit a project-root manifest using the store's actual repository URL:
+
+```yaml
+version: 1
+harness: codex
+attachments:
+  - name: project
+    url: git@github.com:example/project-memory.git
+```
+
+Then run `engram setup` from that project. The verified checkout is materialized
+below ignored `.memory/project` and registered in `MEMORY.md`.
+
+## Imperative local attachment
 
 Set both paths to existing absolute paths:
 
@@ -18,7 +34,8 @@ engram setup --harness codex --project "$project_root"
 
 Setup verifies the canonical bundle embedded in the trusted CLI before writing
 `.agents/skills/`. The generated `MEMORY.md` registry uses a project-relative
-store path when possible. Neither command grants store or network authority.
+store path when possible. Attachment grants no authority; declarative setup
+uses network credentials only to acquire a missing configured store.
 
 ## Try a session
 

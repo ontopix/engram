@@ -2,7 +2,7 @@
 
 **Version:** v1
 **Status:** Draft
-**Revision:** 2026-08-11
+**Revision:** 2026-08-13
 **Normative status:** Non-normative
 
 This annex describes optional bindings between engram and agent runtimes. An
@@ -34,7 +34,44 @@ A runtime integration may provide any subset of these surfaces:
 Each surface is optional. Installing skills or attachments does not make the
 adapter a writer or executor.
 
-## 2. Managed-write binding
+## 2. Declarative project setup
+
+An adapter MAY recognize a tracked project-root `engram.yaml` as portable setup
+intent distinct from runtime attachment state. Version 1 has this strict shape:
+
+```yaml
+version: 1
+harness: codex
+attachments:
+  - name: project
+    url: git@github.com:example/project-memory.git
+```
+
+`harness` selects an adapter default and may be overridden by the invoking
+host. Each unique portable `name` identifies one local materialization; the
+single exact `url` supplies its fetch and push location. Credentials never
+belong in the manifest.
+
+The manifest describes desired repository sources, while core §12 `MEMORY.md`
+describes resolved local store paths. An adapter may materialize declared
+stores below project `.memory/<name>`, exclude the complete `.memory/` tree
+from the consumer repository, and reconcile those paths into `MEMORY.md`.
+Attachments outside that reserved namespace remain independently managed.
+
+A setup invocation may grant bounded network and credential authority to
+acquire a missing declared repository. Merely opening the project, loading the
+manifest, or exposing `MEMORY.md` to an agent grants no such authority. A
+conforming managed-store acquisition audits accepted history before making a
+checkout visible and never executes store hooks.
+
+Repeated setup should verify and reuse an exact existing checkout without
+fetching. Synchronization remains explicit. Removing a declaration should
+remove its attachment without deleting the independent checkout; destructive
+cleanup needs separate authority. These boundaries keep setup convergent and
+recoverable without turning repository configuration into an implicit delete,
+pull, push, hook-trust, or memory-write request.
+
+## 3. Managed-write binding
 
 The managed store owns its repository worktree; an attached project only
 discovers it. A write-capable adapter coordinates one bounded editor, stages
@@ -53,7 +90,7 @@ explicit correction and restaging.
 A local commit neither fetches nor pushes. Network synchronization is a
 separately authorized operation under the Git annex's synchronizer profile.
 
-## 3. Runtime profiles
+## 4. Runtime profiles
 
 These profiles differ only in packaging and lifecycle hooks; they use the same
 store and managed-write contracts:
@@ -71,7 +108,7 @@ other canonical skills, but the registry cannot bootstrap trust in that copy.
 A store may serve several unrelated projects, but they still refer to the
 independently owned store checkout.
 
-## 4. Operational guidance
+## 5. Operational guidance
 
 - Filesystem tools remain the primary data interface; adapters need not proxy
   ordinary reading, search, or editing through another protocol.
@@ -83,7 +120,7 @@ independently owned store checkout.
 - Unattended integrations surface validation, hook, and recovery failures on a
   channel a human or controller observes.
 
-## 5. Normative roles an adapter may assume
+## 6. Normative roles an adapter may assume
 
 An adapter that accepts writes assumes every managed-writer obligation in Git
 annex §4; one that runs hooks also assumes every executor obligation in core

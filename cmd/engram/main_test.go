@@ -150,7 +150,7 @@ func TestExecutableRealCommandSurface(t *testing.T) {
 		"changed", "memory_file", "project", "store")
 	run("setup", "ok", 0,
 		[]string{"setup", "--harness", "codex", "--project", project, "--format", "json"},
-		"changed", "dry_run", "entrypoint", "files", "harness", "memory_file", "project", "skills_dir")
+		"attachments", "changed", "config_file", "dry_run", "entrypoint", "files", "harness", "memory_dir", "memory_file", "project", "skills_dir")
 
 	run("hooks.list", "ok", 0,
 		[]string{"--store", store, "hooks", "list", "--format", "json"},

@@ -10,8 +10,8 @@ surface and the M0–M6 delivery gates:
 - deterministic portable snapshot, schema, Markdown, link, catalog, finding,
   and changeset validation;
 - raw managed-Git discovery, projection, lineage audit, status, diff, and log;
-- working-draft, staging, `MEMORY.md` attachment, verified agent-harness setup,
-  schema, and hook-trust workflows;
+- working-draft, staging, `MEMORY.md` attachment, declarative `engram.yaml`
+  acquisition, verified agent-harness setup, schema, and hook-trust workflows;
 - crash-recoverable managed commit, inverse revert, initialization, and
   verified clone;
 - conditional push and exact linear pull replay with explicit conflict,

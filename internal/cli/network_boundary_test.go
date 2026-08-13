@@ -21,8 +21,8 @@ const modulePath = "github.com/ontopix/engram"
 // makes both sides of the boundary explicit:
 //
 //   - every literal capable of selecting a Git repository-network operation
-//     is confined to the clone, pull, and push controllers (apart from command
-//     grammar and remote-selection metadata); and
+//     is confined to the clone, declarative setup, pull, and push controllers
+//     (apart from command grammar and remote-selection metadata); and
 //   - those controllers can enter the command layer only through their named
 //     adapters. Doctor may inspect/reconcile exact recovery state, but does not
 //     get an unreviewed network entry point.
@@ -32,17 +32,18 @@ func TestInterfaceGateRepositoryNetworkBoundary(t *testing.T) {
 
 	wantNetworkCommands := map[CommandName]bool{
 		CommandClone: true,
+		CommandSetup: true,
 		CommandPull:  true,
 		CommandPush:  true,
 	}
 	for _, golden := range protocolCommandGoldens {
 		_, network := wantNetworkCommands[golden.name]
-		if network != (golden.name == CommandClone || golden.name == CommandPull || golden.name == CommandPush) {
+		if network != (golden.name == CommandClone || golden.name == CommandSetup || golden.name == CommandPull || golden.name == CommandPush) {
 			t.Fatalf("invalid network command classification for %q", golden.name)
 		}
 	}
-	if len(wantNetworkCommands) != 3 {
-		t.Fatalf("network command count = %d, want 3", len(wantNetworkCommands))
+	if len(wantNetworkCommands) != 4 {
+		t.Fatalf("network command count = %d, want 4", len(wantNetworkCommands))
 	}
 
 	networkVerbs := map[string]bool{
@@ -70,7 +71,9 @@ func TestInterfaceGateRepositoryNetworkBoundary(t *testing.T) {
 
 	allowedImporters := map[string]map[string]bool{
 		modulePath + "/internal/acquire": {
-			"internal/commands/acquire.go": true,
+			"internal/commands/acquire.go":   true,
+			"internal/commands/setup.go":     true,
+			"internal/projectsetup/setup.go": true,
 			// Acquisition recovery is exact-target cleanup and verification;
 			// it is specified to be network-silent.
 			"internal/commands/doctor.go": true,
@@ -87,6 +90,9 @@ func TestInterfaceGateRepositoryNetworkBoundary(t *testing.T) {
 		modulePath + "/internal/remoteselect": {
 			"internal/pullflow/network.go": true,
 			"internal/syncflow/push.go":    true,
+		},
+		modulePath + "/internal/projectsetup": {
+			"internal/commands/setup.go": true,
 		},
 	}
 	seenImports := make(map[string][]string)
@@ -111,10 +117,11 @@ func TestInterfaceGateRepositoryNetworkBoundary(t *testing.T) {
 		seenImports[path] = importers
 	}
 	wantImports := map[string][]string{
-		modulePath + "/internal/acquire":      {"internal/commands/acquire.go"},
+		modulePath + "/internal/acquire":      {"internal/commands/acquire.go", "internal/commands/setup.go", "internal/projectsetup/setup.go"},
 		modulePath + "/internal/pullflow":     {"internal/commands/pull.go", "internal/doctor/recovery.go"},
 		modulePath + "/internal/syncflow":     {"internal/commands/sync.go"},
 		modulePath + "/internal/remoteselect": {"internal/pullflow/network.go", "internal/syncflow/push.go"},
+		modulePath + "/internal/projectsetup": {"internal/commands/setup.go"},
 	}
 	for path, required := range wantImports {
 		for _, importer := range required {
@@ -209,6 +216,11 @@ func networkLiteralAllowed(relative, function, value string) bool {
 		"internal/acquire/clone.go": {
 			"Run":      {"clone": true},
 			"runClone": {"clone": true},
+		},
+		"internal/projectsetup/setup.go": {
+			"Run":             {"clone": true},
+			"acquireOne":      {"clone": true},
+			"planAcquisition": {"clone": true},
 		},
 		"internal/pullflow/network.go": {
 			"acquireTip": {"fetch": true},
