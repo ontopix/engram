@@ -4,6 +4,10 @@
 
 ### Standard
 
+- Added deterministic hierarchical `prepare-changeset` hooks: hooks may live
+  under any logical directory, activate from the frozen initial changeset's
+  affected subtrees, execute by ordering band then full logical path, and bind
+  trust to the exact applicable base set. Cache remains root-only.
 - Added the non-normative project setup manifest `engram.yaml`, separating
   versioned repository and harness intent from the materialized local paths in
   `MEMORY.md`. Declarative stores use the ignored `.memory/` namespace while

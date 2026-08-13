@@ -21,8 +21,8 @@ func TestLoadRepositoryManifest(t *testing.T) {
 	}
 
 	ids := manifest.SortedCaseIDs()
-	if len(ids) != 54 || !sort.StringsAreSorted(ids) {
-		t.Fatalf("case IDs = %q, want 54 sorted IDs", ids)
+	if len(ids) != 55 || !sort.StringsAreSorted(ids) {
+		t.Fatalf("case IDs = %q, want 55 sorted IDs", ids)
 	}
 
 	var snapshots, changesets, managed int
@@ -36,8 +36,8 @@ func TestLoadRepositoryManifest(t *testing.T) {
 			managed++
 		}
 	}
-	if snapshots != 38 || changesets != 13 || managed != 3 {
-		t.Fatalf("kind counts = snapshot:%d changeset:%d managed:%d, want 38, 13, and 3", snapshots, changesets, managed)
+	if snapshots != 39 || changesets != 13 || managed != 3 {
+		t.Fatalf("kind counts = snapshot:%d changeset:%d managed:%d, want 39, 13, and 3", snapshots, changesets, managed)
 	}
 }
 

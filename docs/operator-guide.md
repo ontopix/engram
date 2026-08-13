@@ -188,16 +188,19 @@ prepares the complete candidate once, validates the final candidate, and moves
 the accepted ref only through a managed transaction. Do not use raw
 `git commit`, `git merge`, `git reset`, or force-push as substitutes.
 
-Before authorizing store-controlled programs, inspect the complete selected
-set and trust that exact set:
+Before authorizing store-controlled programs for a staged initial candidate,
+inspect the exact applicable base set and trust it:
 
 ```sh
-engram hooks list --state accepted
-engram hooks trust --state accepted
+engram hooks list --state staged
+engram hooks trust --state staged
 ```
 
-Any change to the set invalidates the grant. `hooks revoke` removes local
-controller grants; it does not alter store history.
+`--state accepted` and `--state working` remain available to inspect complete
+inventories. Any change to an applicable set invalidates its grant. `hooks
+revoke` accepts a complete logical hook path (or a root-hook filename for
+compatibility) and removes local controller grants; it does not alter store
+history.
 
 ## Synchronization
 

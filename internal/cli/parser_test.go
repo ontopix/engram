@@ -41,6 +41,7 @@ func TestParseCompleteCommandSurface(t *testing.T) {
 		{"commit dry-run", []string{"commit", "--dry-run"}, CommandCommit},
 		{"revert", []string{"revert", "HEAD", "-m", "Undo"}, CommandRevert},
 		{"hooks list", []string{"hooks", "list", "--state", "working"}, CommandHooksList},
+		{"hooks staged", []string{"hooks", "list", "--state", "staged"}, CommandHooksList},
 		{"hooks trust", []string{"hooks", "trust"}, CommandHooksTrust},
 		{"hooks revoke", []string{"hooks", "revoke", "20-catalog.py"}, CommandHooksRevoke},
 		{"doctor", []string{"doctor", "--recover"}, CommandDoctor},

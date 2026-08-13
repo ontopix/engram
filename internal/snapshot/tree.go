@@ -228,10 +228,6 @@ func (w *walker) configDir(directory string, root bool) error {
 				return err
 			}
 		case "hooks":
-			if !root {
-				w.issue("E109", child)
-				continue
-			}
 			if entry.Kind == KindSymlink {
 				w.issue("E103", child)
 				continue

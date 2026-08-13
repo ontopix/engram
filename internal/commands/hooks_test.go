@@ -60,6 +60,57 @@ func TestHooksListTrustAndRevokeJSON(t *testing.T) {
 	}
 }
 
+func TestHooksStagedSelectsOnlyApplicableBaseScopes(t *testing.T) {
+	root := managedFixture(t)
+	rootHook := filepath.Join(root, ".engram", "hooks", "prepare-changeset", "90-root.sh")
+	localHook := filepath.Join(root, "topics", ".engram", "hooks", "prepare-changeset", "10-local.sh")
+	for _, name := range []string{rootHook, localHook} {
+		if err := os.MkdirAll(filepath.Dir(name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(name, []byte("#!/usr/bin/env sh\nexit 0\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	managedGit(t, root, "add", ".engram/hooks/prepare-changeset/90-root.sh", "topics/.engram/hooks/prepare-changeset/10-local.sh")
+	managedGit(t, root, "commit", "--no-verify", "-m", "add hierarchical hooks")
+
+	mapPath := filepath.Join(root, "README.md")
+	file, err := os.OpenFile(mapPath, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.WriteString("\nStaged root-only change.\n"); err != nil {
+		file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	managedGit(t, root, "add", "README.md")
+
+	registry := filepath.Join(t.TempDir(), "controller", "hook-trust-v1.json")
+	listed := runHooksJSON(t, root, registry, "hooks", "list", "--state", "staged", "--format", "json")
+	assertEnvelope(t, listed, "hooks.list", cli.OutcomeOK, 0)
+	result := decodeObject(t, listed.Result)
+	if result["state"] != "staged" {
+		t.Fatalf("state = %#v", result["state"])
+	}
+	descriptions := result["hooks"].([]any)
+	if len(descriptions) != 1 || decodeObject(t, json.RawMessage(mustJSON(t, descriptions[0])))["path"] != ".engram/hooks/prepare-changeset/90-root.sh" {
+		t.Fatalf("staged hooks = %#v", descriptions)
+	}
+}
+
+func mustJSON(t *testing.T, value any) []byte {
+	t.Helper()
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
 type fakeHookRegistry struct {
 	trustErr  error
 	revokeErr error

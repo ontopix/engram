@@ -219,10 +219,49 @@ func TestSelectiveAndTotalRevokeHistoricalSets(t *testing.T) {
 
 func TestRevokeRejectsNonDirectHookNames(t *testing.T) {
 	registry, store := registryFixture(t)
-	for _, name := range []string{"", "../10-a.sh", "prepare-changeset/10-a.sh", "10-BAD.sh"} {
+	for _, name := range []string{"", "../10-a.sh", "prepare-changeset/10-a.sh", "journal/../.engram/hooks/prepare-changeset/10-a.sh", "10-BAD.sh"} {
 		if _, err := registry.Revoke(store, name); !errors.Is(err, ErrInvalidName) {
 			t.Fatalf("Revoke(%q) error = %v, want ErrInvalidName", name, err)
 		}
+	}
+}
+
+func TestRevokeDistinguishesCompleteLogicalHookPaths(t *testing.T) {
+	registry, store := registryFixture(t)
+	rootSet, err := SelectTree(hookTreePaths(map[string][]byte{
+		".engram/hooks/prepare-changeset/10-same.sh": []byte("#!/usr/bin/env sh\n"),
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	localSet, err := SelectTree(hookTreePaths(map[string][]byte{
+		"journal/.engram/hooks/prepare-changeset/10-same.sh": []byte("#!/usr/bin/env sh\n"),
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, set := range []Set{rootSet, localSet} {
+		if _, err := registry.Trust(store, set); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// The legacy direct filename denotes only the root hook.
+	if _, err := registry.Revoke(store, "10-same.sh"); err != nil {
+		t.Fatal(err)
+	}
+	if listed, err := registry.List(store, rootSet); err != nil || listed.Trusted {
+		t.Fatalf("root set after revoke = %#v, %v", listed, err)
+	}
+	if listed, err := registry.List(store, localSet); err != nil || !listed.Trusted {
+		t.Fatalf("local set after root revoke = %#v, %v", listed, err)
+	}
+
+	if _, err := registry.Revoke(store, "journal/.engram/hooks/prepare-changeset/10-same.sh"); err != nil {
+		t.Fatal(err)
+	}
+	if listed, err := registry.List(store, localSet); err != nil || listed.Trusted {
+		t.Fatalf("local set after full-path revoke = %#v, %v", listed, err)
 	}
 }
 

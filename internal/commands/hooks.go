@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/ontopix/engram/internal/changeset"
 	"github.com/ontopix/engram/internal/checker"
 	"github.com/ontopix/engram/internal/cli"
 	"github.com/ontopix/engram/internal/hooks"
@@ -158,6 +159,31 @@ func selectHooks(ctx context.Context, invocation *cli.Invocation) (string, strin
 			return "", "", hooks.Set{}, &failed
 		}
 		tree = working.Snapshot.Tree
+	} else if state == "staged" {
+		staged, err := store.Staged(ctx)
+		if err != nil {
+			failed := managedFailure(err, "inspect staged initial candidate")
+			return "", "", hooks.Set{}, &failed
+		}
+		if staged.Snapshot == nil || staged.Snapshot.Tree == nil {
+			failed := commandError(cli.ErrorRepository, "staged initial candidate is unavailable")
+			return "", "", hooks.Set{}, &failed
+		}
+		if !changeset.PreflightOK(staged.Snapshot.Tree) {
+			failed := commandError(cli.ErrorRepository, "staged initial candidate fails changeset preflight")
+			return "", "", hooks.Set{}, &failed
+		}
+		if _, err := hooks.SelectTree(staged.Snapshot.Tree); err != nil {
+			failed := hookFailure(err, "validate staged hook tree")
+			return "", "", hooks.Set{}, &failed
+		}
+		initial := changeset.Diff(accepted.Tree, staged.Snapshot.Tree)
+		set, err := hooks.SelectTreeForChanges(accepted.Tree, initial)
+		if err != nil {
+			failed := hookFailure(err, "select applicable base hook set")
+			return "", "", hooks.Set{}, &failed
+		}
+		return store.Repository().Root, state, set, nil
 	}
 	set, err := hooks.SelectTree(tree)
 	if err != nil {

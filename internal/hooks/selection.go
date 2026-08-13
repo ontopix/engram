@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/ontopix/engram/internal/changeset"
 	"github.com/ontopix/engram/internal/documentprofile"
 	"github.com/ontopix/engram/internal/snapshot"
 )
@@ -92,11 +93,25 @@ func SelectSource(source snapshot.Source) (Set, error) {
 	return SelectTree(tree)
 }
 
-// SelectTree selects every direct base-state preparation hook, validates its
-// normed bytes and interpreter line, and orders programs by complete filename
-// in ASCII byte order. Hook-layout findings make the entire selection fail;
-// no partial set is returned.
+// SelectTree selects the complete hierarchical preparation-hook inventory,
+// validates every program's normed bytes and interpreter line, and orders it
+// by two-digit band then complete logical path. Hook-layout findings make the
+// entire selection fail; no partial set is returned.
 func SelectTree(tree *snapshot.Tree) (Set, error) {
+	return selectTree(tree, nil)
+}
+
+// SelectTreeForChanges validates the complete hierarchical hook inventory and
+// selects only base hooks whose scope contains at least one initial change.
+// A non-nil empty changeset therefore selects the empty set.
+func SelectTreeForChanges(tree *snapshot.Tree, initial []changeset.Change) (Set, error) {
+	if initial == nil {
+		initial = []changeset.Change{}
+	}
+	return selectTree(tree, initial)
+}
+
+func selectTree(tree *snapshot.Tree, initial []changeset.Change) (Set, error) {
 	if tree == nil {
 		return Set{}, fmt.Errorf("%w: snapshot tree is nil", ErrInvalidSelection)
 	}
@@ -133,7 +148,8 @@ func SelectTree(tree *snapshot.Tree) (Set, error) {
 			}
 			continue
 		}
-		if path.Dir(logicalPath) != programDirectory || !validFilename(path.Base(logicalPath)) {
+		scope, ok := programScope(logicalPath)
+		if !ok || !validFilename(path.Base(logicalPath)) {
 			return Set{}, &SelectionError{Code: "E308", Path: logicalPath, Detail: "hook is not an admitted direct program"}
 		}
 		if err := documentprofile.ValidateText(file.Data); err != nil {
@@ -144,6 +160,9 @@ func SelectTree(tree *snapshot.Tree) (Set, error) {
 			return Set{}, &SelectionError{Code: "E308", Path: logicalPath, Detail: "invalid preparation-hook interpreter line"}
 		}
 		digest := sha256.Sum256(file.Data)
+		if initial != nil && !scopeAffected(scope, initial) {
+			continue
+		}
 		programs = append(programs, Hook{
 			Path:        logicalPath,
 			Interpreter: interpreter,
@@ -151,6 +170,13 @@ func SelectTree(tree *snapshot.Tree) (Set, error) {
 			Bytes:       append([]byte(nil), file.Data...),
 		})
 	}
+	sort.Slice(programs, func(i, j int) bool {
+		leftName, rightName := path.Base(programs[i].Path), path.Base(programs[j].Path)
+		if leftName[:2] != rightName[:2] {
+			return leftName[:2] < rightName[:2]
+		}
+		return bytes.Compare([]byte(programs[i].Path), []byte(programs[j].Path)) < 0
+	})
 	return buildSet(programs)
 }
 
@@ -199,10 +225,10 @@ func buildSet(programs []Hook) (Set, error) {
 
 func validateHooks(programs []Hook) error {
 	for index, hook := range programs {
-		if path.Dir(hook.Path) != programDirectory || !validFilename(path.Base(hook.Path)) {
+		if _, ok := programScope(hook.Path); !ok || !validFilename(path.Base(hook.Path)) {
 			return fmt.Errorf("%w: invalid hook path %q", ErrInvalidSelection, hook.Path)
 		}
-		if index != 0 && bytes.Compare([]byte(path.Base(programs[index-1].Path)), []byte(path.Base(hook.Path))) >= 0 {
+		if index != 0 && !hookLess(programs[index-1], hook) {
 			return fmt.Errorf("%w: hooks are not in strict ASCII order", ErrInvalidSelection)
 		}
 		if err := documentprofile.ValidateText(hook.Bytes); err != nil {
@@ -221,7 +247,53 @@ func validateHooks(programs []Hook) error {
 }
 
 func hookPath(logicalPath string) bool {
-	return logicalPath == ".engram/hooks" || strings.HasPrefix(logicalPath, ".engram/hooks/")
+	return logicalPath == ".engram/hooks" || strings.HasPrefix(logicalPath, ".engram/hooks/") ||
+		strings.Contains(logicalPath, "/.engram/hooks")
+}
+
+func programScope(logicalPath string) (string, bool) {
+	if logicalPath == "" || path.Clean(logicalPath) != logicalPath || strings.HasPrefix(logicalPath, "/") || strings.Contains(logicalPath, "\\") {
+		return "", false
+	}
+	directory := path.Dir(logicalPath)
+	if directory == programDirectory {
+		return ".", true
+	}
+	const suffix = "/.engram/hooks/prepare-changeset"
+	if !strings.HasSuffix(directory, suffix) {
+		return "", false
+	}
+	scope := strings.TrimSuffix(directory, suffix)
+	if scope == "" || path.Clean(scope) != scope || strings.HasPrefix(scope, "/") {
+		return "", false
+	}
+	for _, segment := range strings.Split(scope, "/") {
+		if !snapshot.ValidContentName(segment) || segment == "README.md" {
+			return "", false
+		}
+	}
+	return scope, true
+}
+
+func scopeAffected(scope string, initial []changeset.Change) bool {
+	if scope == "." {
+		return len(initial) != 0
+	}
+	prefix := scope + "/"
+	for _, change := range initial {
+		if strings.HasPrefix(change.Path, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func hookLess(left, right Hook) bool {
+	leftName, rightName := path.Base(left.Path), path.Base(right.Path)
+	if leftName[:2] != rightName[:2] {
+		return leftName[:2] < rightName[:2]
+	}
+	return bytes.Compare([]byte(left.Path), []byte(right.Path)) < 0
 }
 
 func interpreter(data []byte) (string, bool) {

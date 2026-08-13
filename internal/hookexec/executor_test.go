@@ -171,6 +171,106 @@ func TestPrepareRejectsUntrustedSetBeforeExecution(t *testing.T) {
 	}
 }
 
+func TestPrepareFreezesHierarchicalSelectionBeforeExecution(t *testing.T) {
+	requireShell(t)
+	fixture := newFixture(t, map[string]string{
+		"10-root.sh": "#!/usr/bin/env sh\nprintf '\\nroot-created-topic-change\\n' >> topics/why-files.md\n",
+	})
+	local := "topics/.engram/hooks/prepare-changeset/20-local.sh"
+	writeFixtureHook(t, fixture.store, local, "#!/usr/bin/env sh\nprintf '\\nlocal-must-not-run\\n' >> topics/why-files.md\n")
+	writeFixtureHook(t, fixture.candidate, local, "#!/usr/bin/env sh\nprintf '\\nlocal-must-not-run\\n' >> topics/why-files.md\n")
+	rootMap := filepath.Join(fixture.candidate, "README.md")
+	file, err := os.OpenFile(rootMap, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.WriteString("\nInitial root change.\n"); err != nil {
+		file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	trust := &trustRecorder{trusted: true}
+	executor := New(trust)
+	executor.TempRoot = fixture.temp
+	result, err := executor.Prepare(t.Context(), fixture.request(t, false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Diagnostics) != 1 || result.Diagnostics[0].Hook != ".engram/hooks/prepare-changeset/10-root.sh" {
+		t.Fatalf("frozen execution = %#v", result.Diagnostics)
+	}
+	data := string(result.Final.Tree.Files["topics/why-files.md"].Data)
+	if !strings.Contains(data, "root-created-topic-change") || strings.Contains(data, "local-must-not-run") {
+		t.Fatalf("final topic bytes show a cascade:\n%s", data)
+	}
+}
+
+func TestPrepareUsesBaseHookBytesAcrossCandidateHookChanges(t *testing.T) {
+	requireShell(t)
+	for _, operation := range []string{"add", "modify", "delete"} {
+		t.Run(operation, func(t *testing.T) {
+			fixture := newFixture(t, map[string]string{
+				"10-base.sh": "#!/usr/bin/env sh\nprintf '\\nbase-hook-ran\\n' >> topics/why-files.md\n",
+			})
+			baseHook := filepath.Join(fixture.candidate, ".engram", "hooks", "prepare-changeset", "10-base.sh")
+			switch operation {
+			case "add":
+				writeFixtureHook(t, fixture.candidate, ".engram/hooks/prepare-changeset/20-added.sh", "#!/usr/bin/env sh\nprintf '\\nadded-hook-ran\\n' >> topics/why-files.md\n")
+			case "modify":
+				if err := os.WriteFile(baseHook, []byte("#!/usr/bin/env sh\nprintf '\\ncandidate-hook-ran\\n' >> topics/why-files.md\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			case "delete":
+				if err := os.Remove(baseHook); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			executor := New(&trustRecorder{trusted: true})
+			executor.TempRoot = fixture.temp
+			result, err := executor.Prepare(t.Context(), fixture.request(t, false))
+			if err != nil {
+				t.Fatal(err)
+			}
+			data := string(result.Final.Tree.Files["topics/why-files.md"].Data)
+			if !strings.Contains(data, "base-hook-ran") || strings.Contains(data, "candidate-hook-ran") || strings.Contains(data, "added-hook-ran") {
+				t.Fatalf("%s used candidate hook inventory:\n%s", operation, data)
+			}
+			if len(result.Diagnostics) != 1 || result.Diagnostics[0].Hook != ".engram/hooks/prepare-changeset/10-base.sh" {
+				t.Fatalf("%s diagnostics = %#v", operation, result.Diagnostics)
+			}
+		})
+	}
+}
+
+func TestPrepareRejectsMalformedUnselectedCandidateHook(t *testing.T) {
+	fixture := newFixture(t, map[string]string{
+		"10-root.sh": "#!/usr/bin/env sh\n",
+	})
+	writeFixtureHook(t, fixture.candidate, "topics/.engram/hooks/prepare-changeset/20-bad.sh", "#!/usr/bin/env sh -e\n")
+	rootMap := filepath.Join(fixture.candidate, "README.md")
+	file, err := os.OpenFile(rootMap, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.WriteString("\nInitial root change.\n"); err != nil {
+		file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	executor := New(&trustRecorder{trusted: true})
+	executor.TempRoot = fixture.temp
+	result, err := executor.Prepare(t.Context(), fixture.request(t, false))
+	if result != nil || KindOf(err) != ErrorHook || !errors.Is(err, ErrRejected) || !strings.Contains(err.Error(), "validate candidate hooks") {
+		t.Fatalf("result, error = %#v, %v", result, err)
+	}
+}
+
 func TestPrepareRejectsOriginalCandidateBoundaryBeforeMaterialization(t *testing.T) {
 	fixture := newFixture(t, nil)
 	request := fixture.request(t, false)
@@ -433,6 +533,17 @@ func appendCandidate(t *testing.T, candidate, value string) {
 		t.Fatal(err)
 	}
 	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeFixtureHook(t *testing.T, root, logicalPath, program string) {
+	t.Helper()
+	name := filepath.Join(root, filepath.FromSlash(logicalPath))
+	if err := os.MkdirAll(filepath.Dir(name), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(name, []byte(program), 0o644); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -947,8 +947,8 @@ validation, and preservation checks without installing integration, creating a
 commit, moving a ref, or changing the index/worktree.
 
 The command audits accepted history, prepares the candidate once with the
-trusted base hook set, validates the sealed final candidate and transition,
-and accepts only a complete result with no `E` finding. A successful real
+trusted applicable base hook set, validates the sealed final candidate and
+transition, and accepts only a complete result with no `E` finding. A successful real
 invocation creates one single-parent commit (or the initialization root via
 `init`), compare-and-swap updates the accepted ref, and safely reconciles hook
 output while preserving unrelated draft bytes.
@@ -985,22 +985,28 @@ unchanged.
 ## 8. Hooks and trust
 
 ```text
-engram hooks list [--state accepted|working]
-engram hooks trust [--state accepted|working]
+engram hooks list [--state accepted|working|staged]
+engram hooks trust [--state accepted|working|staged]
 engram hooks revoke [HOOK...]
 ```
 
-`accepted` is the default state for `list` and `trust`. `list` reports the
-complete selected set in execution order, including path, interpreter, exact
-file digest, set digest, and local trust state. It does not execute hooks.
+`accepted` is the default state for `list` and `trust`. `accepted` and
+`working` inspect the complete hook inventory in that snapshot. `staged`
+compares the accepted base with the index-declared initial candidate and
+reports only the applicable base hooks for that frozen initial changeset.
+`list` reports the selected set in execution order, including complete logical
+path, interpreter, exact file digest, set digest, and local trust state. It
+does not execute hooks.
 
-`trust` explicitly authorizes the complete non-empty selected set for this
+`trust` explicitly authorizes the complete non-empty reported set for this
 physical managed-store binding. A copied, moved, added, removed, renamed, or
 byte-changed set needs a new grant. The empty set needs no code-execution grant
 but still needs valid local integration identity. `revoke` removes every
 historical grant containing a named hook, or all grants for the store when no
-name is given; duplicate names collapse. Each `HOOK` is one admitted direct
-program filename with no `/`.
+name is given; duplicate names collapse. Each `HOOK` is a complete logical hook
+path such as `journal/.engram/hooks/prepare-changeset/10-normalize.py`. For
+compatibility, a direct program filename with no `/` denotes the corresponding
+root hook only.
 
 Trust lives in controller-owned user configuration outside the store and its
 history. Repository-controlled marker bytes alone confer no trust. Moving or

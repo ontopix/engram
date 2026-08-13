@@ -669,7 +669,7 @@
     },
     {
       "id": "structure-root-only-boundary",
-      "description": "A hooks boundary below the store root produces E109 before kind inspection.",
+      "description": "A cache boundary below the store root produces E109 before kind inspection.",
       "kind": "snapshot",
       "snapshot": {
         "operations": [
@@ -680,15 +680,32 @@
           },
           {
             "operation": "write_base64",
-            "path": "nested/.engram/hooks",
+            "path": "nested/.engram/cache",
             "content": ""
           }
         ]
       },
       "expected": {
         "findings": [
-          {"code": "E109", "path": "nested/.engram/hooks"}
+          {"code": "E109", "path": "nested/.engram/cache"}
         ]
+      }
+    },
+    {
+      "id": "structure-hierarchical-hook",
+      "description": "A valid hook below a logical content directory is projected and conforms.",
+      "kind": "snapshot",
+      "snapshot": {
+        "operations": [
+          {
+            "operation": "write_text",
+            "path": "topics/.engram/hooks/prepare-changeset/10-local.sh",
+            "source": "testdata/conformance/files/valid-hook.sh"
+          }
+        ]
+      },
+      "expected": {
+        "findings": []
       }
     },
     {
