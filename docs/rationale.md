@@ -82,7 +82,11 @@ from an independently trusted installation.
 A project setup manifest and `MEMORY.md` answer different questions rather
 than competing as two sources of truth. Tracked `engram.yaml` declares which
 repository locations and harness a project intends to use. Local `MEMORY.md`
-records where verified stores are materialized on this host. This lets one
+records where validated stores are materialized on this host. Setup validates
+the current accepted state by default because discovery needs a usable present
+snapshot, while a complete historical conformance claim remains an explicit
+audit. Managed writes and synchronization still apply the stronger lineage
+requirements where history is part of the operation. This lets one
 project command reproduce discovery without putting nested repositories in the
 consumer project's history or teaching agents to acquire repositories from
 runtime prose.

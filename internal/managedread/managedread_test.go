@@ -281,6 +281,13 @@ func TestInvalidAcceptedHistoryAggregatesCheckerResults(t *testing.T) {
 	tipID := strings.TrimSpace(runGit(t, root, nil, "rev-parse", "HEAD"))
 
 	store := openStore(t, root)
+	state, err := store.CheckAcceptedState(context.Background())
+	if err != nil {
+		t.Fatalf("CheckAcceptedState: %v", err)
+	}
+	if state.Target != checker.TargetManagedState || state.Status != checker.StatusComplete || !hasFinding(state.Findings, "E105", ".engram/root.yaml") {
+		t.Fatalf("managed state validation = %#v", state)
+	}
 	audit, err := store.AuditAccepted(context.Background())
 	if err != nil {
 		t.Fatalf("AuditAccepted: %v", err)
@@ -424,6 +431,10 @@ func TestManagedOperationsRejectAcceptedRefChangeAfterCapture(t *testing.T) {
 		}},
 		{name: operationDiff, run: func(ctx context.Context, store *Store) error {
 			_, err := store.DiffWorking(ctx)
+			return err
+		}},
+		{name: operationCheckAcceptedState, run: func(ctx context.Context, store *Store) error {
+			_, err := store.CheckAcceptedState(ctx)
 			return err
 		}},
 		{name: operationCheckStaged, run: func(ctx context.Context, store *Store) error {

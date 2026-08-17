@@ -12,13 +12,50 @@ import (
 	"github.com/ontopix/engram/internal/gitraw"
 )
 
-// CheckAccepted performs tolerant read-only discovery for the managed check.
-// Unlike Open, it turns a stably invalid managed target, HEAD, or accepted ref
-// into the normative E601 result. Writers continue to use strict Open and
-// therefore never receive a Store from invalid topology.
+// CheckAcceptedState performs tolerant read-only discovery and validates only
+// the accepted state named by the current branch. Unlike Open, it turns a
+// stably invalid managed target, HEAD, or accepted ref into the normative E601
+// result. It never follows the accepted tip's parent IDs.
+func CheckAcceptedState(ctx context.Context, selectedPath string) (checker.Result, error) {
+	return checkAccepted(ctx, selectedPath, checker.TargetManagedState,
+		func(ctx context.Context, store *Store, _ *gitraw.Repository) (checker.Result, error) {
+			return store.CheckAcceptedState(ctx)
+		})
+}
+
+// CheckAcceptedHistory performs the complete root-to-tip managed-store audit
+// while retaining tolerant attribution for an invalid selected target.
+func CheckAcceptedHistory(ctx context.Context, selectedPath string) (checker.Result, error) {
+	return checkAccepted(ctx, selectedPath, checker.TargetManagedStore,
+		func(ctx context.Context, store *Store, repository *gitraw.Repository) (checker.Result, error) {
+			if repository.Head == nil {
+				validation, err := store.CheckAcceptedState(ctx)
+				if err != nil {
+					return validation, err
+				}
+				validation.Target = checker.TargetManagedStore
+				return validation, nil
+			}
+			audit, err := store.AuditAccepted(ctx)
+			if err != nil {
+				return checker.Result{}, err
+			}
+			return audit.Validation, nil
+		})
+}
+
+// CheckAccepted retains the pre-split API for callers that explicitly depend
+// on a complete managed-store audit. New state-only callers should use
+// CheckAcceptedState.
 func CheckAccepted(ctx context.Context, selectedPath string) (checker.Result, error) {
+	return CheckAcceptedHistory(ctx, selectedPath)
+}
+
+type acceptedCheck func(context.Context, *Store, *gitraw.Repository) (checker.Result, error)
+
+func checkAccepted(ctx context.Context, selectedPath string, target checker.Target, check acceptedCheck) (checker.Result, error) {
 	validation := checker.Result{
-		Target:   checker.TargetManagedStore,
+		Target:   target,
 		Status:   checker.StatusComplete,
 		Findings: []checker.Finding{},
 	}
@@ -65,20 +102,9 @@ func CheckAccepted(ctx context.Context, selectedPath string) (checker.Result, er
 	if err != nil {
 		return validation, err
 	}
-	if repository.Head == nil {
-		// An unborn symbolic local branch is the annex's one admitted empty
-		// accepted state. Presentation inputs are still checked.
-		findings, _, err := store.auditPresentation(ctx, repository, nil)
-		if err != nil {
-			return validation, err
-		}
-		validation.Findings = append(validation.Findings, findings...)
-	} else {
-		audit, err := store.AuditAccepted(ctx)
-		if err != nil {
-			return validation, err
-		}
-		validation = audit.Validation
+	validation, err = check(ctx, store, repository)
+	if err != nil {
+		return validation, err
 	}
 	mergeManagedFindings(&validation, selectedFinding)
 	return validation, nil

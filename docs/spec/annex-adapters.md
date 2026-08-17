@@ -2,7 +2,7 @@
 
 **Version:** v1
 **Status:** Draft
-**Revision:** 2026-08-13
+**Revision:** 2026-08-18
 **Normative status:** Non-normative
 
 This annex describes optional bindings between engram and agent runtimes. An
@@ -68,9 +68,11 @@ implicit credential, network, deletion, or harness-installation request.
 
 A setup invocation may grant bounded network and credential authority to
 acquire a missing declared repository. Merely opening the project, loading the
-manifest, or exposing `MEMORY.md` to an agent grants no such authority. A
-conforming managed-store acquisition audits accepted history before making a
-checkout visible and never executes store hooks.
+manifest, or exposing `MEMORY.md` to an agent grants no such authority. Before
+making a checkout visible, an adapter may validate the bounded current managed
+state; an explicit complete-history mode may additionally establish
+managed-store conformance. An acquisition that claims managed-store conformance
+audits the complete accepted history. Acquisition never executes store hooks.
 
 Repeated setup should verify and reuse an exact existing checkout without
 fetching. Synchronization remains explicit. Removing a declaration should

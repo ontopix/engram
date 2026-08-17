@@ -13,6 +13,7 @@ type Target string
 const (
 	TargetSnapshot     Target = "snapshot"
 	TargetChangeset    Target = "changeset"
+	TargetManagedState Target = "managed-state"
 	TargetManagedStore Target = "managed-store"
 )
 

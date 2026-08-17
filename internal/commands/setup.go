@@ -37,9 +37,13 @@ func runSetup(ctx context.Context, invocation *cli.Invocation) cli.Result {
 	}
 	harnessName, _ := invocation.Options.One("harness")
 	memoryFileOption, _ := invocation.Options.One("memory-file")
+	validationScope := acquire.ValidationScopeCurrent
+	if invocation.Options.Has("check-history") {
+		validationScope = acquire.ValidationScopeHistory
+	}
 	result, err := projectsetup.Run(ctx, projectsetup.Options{
 		Project: project, Harness: harnessName, MemoryFile: memoryFileOption,
-		DryRun: invocation.Options.Has("dry-run"),
+		DryRun: invocation.Options.Has("dry-run"), ValidationScope: validationScope,
 	})
 	if err != nil {
 		switch {

@@ -212,7 +212,7 @@ func TestExecutableRealCommandSurface(t *testing.T) {
 	clone := filepath.Join(workspace, "clone")
 	run("clone", "ok", 0,
 		[]string{"clone", remoteURL, clone, "--format", "json"},
-		"accepted", "audits", "launcher", "published", "remote", "reused", "root", "validation", "verified_commits")
+		"accepted", "audits", "launcher", "published", "remote", "reused", "root", "validation", "validation_scope", "verified_commits")
 	run("pull", "ok", 0,
 		[]string{"--store", clone, "pull", "--format", "json"},
 		"after", "audits", "before", "candidate_validation", "changes", "conflicts", "fetched", "remote", "remote_ref", "replayed", "state", "validation")

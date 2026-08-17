@@ -14,8 +14,10 @@ attachments:
     url: git@github.com:example/project-memory.git
 ```
 
-Run `engram setup` from that project. It acquires a missing verified clone below
-`.memory/project`, reconciles `MEMORY.md`, and installs the integration.
+Run `engram setup` from that project. It acquires a missing
+current-state-validated clone below `.memory/project`, reconciles `MEMORY.md`,
+and installs the integration. Use `engram setup --check-history` to require a
+complete accepted-lineage audit.
 
 ## Imperative local attachment
 

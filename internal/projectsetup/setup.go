@@ -56,16 +56,17 @@ type ConfigAttachment struct {
 }
 
 type Options struct {
-	Project      string
-	Harness      string
-	MemoryFile   string
-	DryRun       bool
-	ConfigLoader func(string) (*Config, string, error)
-	AcquireClone func(context.Context, string, acquire.Options) (acquire.Result, error)
-	AcquireReuse func(context.Context, string, string) (acquire.Result, error)
-	HarnessSetup func(string, string, string, bool) (harness.Result, error)
-	PlanManaged  func(string, string, string, []string) (attachment.ManagedResult, error)
-	ApplyManaged func(string, string, string, []string) (attachment.ManagedResult, error)
+	Project         string
+	Harness         string
+	MemoryFile      string
+	DryRun          bool
+	ValidationScope acquire.ValidationScope
+	ConfigLoader    func(string) (*Config, string, error)
+	AcquireClone    func(context.Context, string, acquire.Options) (acquire.Result, error)
+	AcquireReuse    func(context.Context, string, string, acquire.Options) (acquire.Result, error)
+	HarnessSetup    func(string, string, string, bool) (harness.Result, error)
+	PlanManaged     func(string, string, string, []string) (attachment.ManagedResult, error)
+	ApplyManaged    func(string, string, string, []string) (attachment.ManagedResult, error)
 }
 
 type FileChange struct {
@@ -74,12 +75,13 @@ type FileChange struct {
 }
 
 type AttachmentResult struct {
-	Name       string                     `json:"name"`
-	URL        string                     `json:"url"`
-	Store      string                     `json:"store"`
-	Action     string                     `json:"action"`
-	Validation *checker.Result            `json:"validation"`
-	Audits     []managedread.HistoryAudit `json:"audits"`
+	Name            string                     `json:"name"`
+	URL             string                     `json:"url"`
+	Store           string                     `json:"store"`
+	Action          string                     `json:"action"`
+	ValidationScope acquire.ValidationScope    `json:"validation_scope"`
+	Validation      *checker.Result            `json:"validation"`
+	Audits          []managedread.HistoryAudit `json:"audits"`
 }
 
 type Result struct {
@@ -115,6 +117,11 @@ func Run(ctx context.Context, options Options) (Result, error) {
 	if err := ctx.Err(); err != nil {
 		return Result{}, err
 	}
+	validationScope, err := setupValidationScope(options.ValidationScope)
+	if err != nil {
+		return Result{}, err
+	}
+	options.ValidationScope = validationScope
 	project, err := realDirectory(options.Project)
 	if err != nil {
 		return Result{}, err
@@ -184,7 +191,7 @@ func Run(ctx context.Context, options Options) (Result, error) {
 
 	if options.DryRun {
 		for index, configured := range config.Attachments {
-			planned, planErr := planAcquisition(ctx, configured, destinations[index], options.AcquireReuse)
+			planned, planErr := planAcquisition(ctx, configured, destinations[index], validationScope, options.AcquireReuse)
 			if planErr != nil {
 				return result, planErr
 			}
@@ -219,7 +226,7 @@ func Run(ctx context.Context, options Options) (Result, error) {
 		result.Changed = result.Changed || created
 	}
 	for index, configured := range config.Attachments {
-		acquired, acquireErr := acquireOne(ctx, configured, destinations[index], options.AcquireClone, options.AcquireReuse)
+		acquired, acquireErr := acquireOne(ctx, configured, destinations[index], validationScope, options.AcquireClone, options.AcquireReuse)
 		if acquireErr != nil {
 			return result, acquireErr
 		}
@@ -262,7 +269,7 @@ func withDefaults(options Options) Options {
 		options.AcquireClone = acquire.Clone
 	}
 	if options.AcquireReuse == nil {
-		options.AcquireReuse = acquire.Reuse
+		options.AcquireReuse = acquire.ReuseWithOptions
 	}
 	if options.HarnessSetup == nil {
 		options.HarnessSetup = harness.Setup
@@ -274,6 +281,17 @@ func withDefaults(options Options) Options {
 		options.ApplyManaged = attachment.ReconcileManaged
 	}
 	return options
+}
+
+func setupValidationScope(scope acquire.ValidationScope) (acquire.ValidationScope, error) {
+	switch scope {
+	case "", acquire.ValidationScopeCurrent:
+		return acquire.ValidationScopeCurrent, nil
+	case acquire.ValidationScopeHistory:
+		return acquire.ValidationScopeHistory, nil
+	default:
+		return "", fmt.Errorf("%w: unsupported validation scope %q", ErrUsage, scope)
+	}
 }
 
 // LoadConfig reads the project-root engram.yaml without following a symlink.
@@ -495,15 +513,15 @@ func hasEmbeddedPassword(value string) bool {
 	return present
 }
 
-func planAcquisition(ctx context.Context, configured ConfigAttachment, destination string, reuse func(context.Context, string, string) (acquire.Result, error)) (AttachmentResult, error) {
-	result := AttachmentResult{Name: configured.Name, URL: configured.URL, Store: destination, Action: "clone", Audits: []managedread.HistoryAudit{}}
+func planAcquisition(ctx context.Context, configured ConfigAttachment, destination string, validationScope acquire.ValidationScope, reuse func(context.Context, string, string, acquire.Options) (acquire.Result, error)) (AttachmentResult, error) {
+	result := AttachmentResult{Name: configured.Name, URL: configured.URL, Store: destination, Action: "clone", ValidationScope: validationScope, Audits: []managedread.HistoryAudit{}}
 	if _, err := os.Lstat(destination); errors.Is(err, os.ErrNotExist) {
 		return result, nil
 	} else if err != nil {
 		return result, err
 	}
 	result.Action = "reuse"
-	reused, err := reuse(ctx, configured.URL, destination)
+	reused, err := reuse(ctx, configured.URL, destination, acquire.Options{ValidationScope: validationScope})
 	if err != nil {
 		return result, err
 	}
@@ -512,17 +530,17 @@ func planAcquisition(ctx context.Context, configured ConfigAttachment, destinati
 	return result, nil
 }
 
-func acquireOne(ctx context.Context, configured ConfigAttachment, destination string, clone func(context.Context, string, acquire.Options) (acquire.Result, error), reuse func(context.Context, string, string) (acquire.Result, error)) (AttachmentResult, error) {
-	result := AttachmentResult{Name: configured.Name, URL: configured.URL, Store: destination, Audits: []managedread.HistoryAudit{}}
+func acquireOne(ctx context.Context, configured ConfigAttachment, destination string, validationScope acquire.ValidationScope, clone func(context.Context, string, acquire.Options) (acquire.Result, error), reuse func(context.Context, string, string, acquire.Options) (acquire.Result, error)) (AttachmentResult, error) {
+	result := AttachmentResult{Name: configured.Name, URL: configured.URL, Store: destination, ValidationScope: validationScope, Audits: []managedread.HistoryAudit{}}
 	_, statErr := os.Lstat(destination)
 	var acquired acquire.Result
 	var err error
 	if errors.Is(statErr, os.ErrNotExist) {
 		result.Action = "clone"
-		acquired, err = clone(ctx, configured.URL, acquire.Options{Destination: destination, DestinationProvided: true})
+		acquired, err = clone(ctx, configured.URL, acquire.Options{Destination: destination, DestinationProvided: true, ValidationScope: validationScope})
 	} else if statErr == nil {
 		result.Action = "reuse"
-		acquired, err = reuse(ctx, configured.URL, destination)
+		acquired, err = reuse(ctx, configured.URL, destination, acquire.Options{ValidationScope: validationScope})
 	} else {
 		return result, statErr
 	}

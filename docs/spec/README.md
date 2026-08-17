@@ -2,7 +2,7 @@
 
 **Version:** v1
 **Status:** Draft
-**Revision:** 2026-08-13
+**Revision:** 2026-08-18
 **Normative status:** Normative
 
 ## Table of contents
@@ -77,12 +77,13 @@ Four principles explain the requirements that follow:
 
 ### 1.4 Conformance targets
 
-This specification defines four independent conformance targets:
+This specification defines five independent conformance targets:
 
 | Target | Criterion |
 |---|---|
 | **Snapshot** | No `E` finding from the static E1xx–E4xx rules for one logical state, including any hook-program files and routine declarations it contains |
-| **Managed store** | A conforming accepted snapshot plus the repository and accepted-lineage rules of the normative [Git annex](annex-git.md) |
+| **Managed state** | A conforming current accepted snapshot plus the repository identity, raw-tip projection, and current presentation rules of the normative [Git annex](annex-git.md), without a claim about earlier accepted history |
+| **Managed store** | A conforming managed state plus the complete accepted-lineage rules of the normative [Git annex](annex-git.md) |
 | **Tool** | The applicable consumer or executor obligations in this specification |
 | **Agent** | The Agent Protocol ([§11](#11-agent-protocol)) |
 
@@ -108,6 +109,9 @@ synchronization remain external.
 - **snapshot** — one portable logical state: a directory tree whose root
   contains `.engram/root.yaml`, with or without repository metadata.
 - **store** — an engram memory considered across its snapshots.
+- **managed state** — the current accepted snapshot together with the bounded
+  repository and presentation evidence required by the Git annex, without an
+  accepted-history claim.
 - **managed store** — a writable store whose accepted snapshots and
   transitions follow the Git annex.
 - **consumer** — software that reads or processes a snapshot or store.
@@ -1215,7 +1219,7 @@ the offending artifact or entry. For cross-artifact rules:
   uses that file;
 - E5xx transition findings use the affected base-state record or schema
   path;
-- E6xx managed-store findings use the store root `.`;
+- E6xx managed-state and managed-store findings use the store root `.`;
 - a duplicated-description warning is emitted for every affected
 record.
 
@@ -1229,21 +1233,26 @@ literal suffix operation is unambiguous.
 - **Changeset rules** (E5xx) evaluate a transition and require a
   changeset together with its base and candidate snapshots as input
   ([§6.8](#68-policies), [§8.1](#81-changesets)).
-- **Managed-store rules** (E6xx) evaluate the local repository shape
-  and accepted lineage defined by the
-  [Git annex](annex-git.md). Managed-store conformance requires its
-  complete lineage audit to be available and `complete`, with every
-  accepted snapshot conforming and no E5xx or E6xx finding.
+- **Managed-state rules** evaluate the local repository shape and the accepted
+  commit currently named by its accepted ref, as defined by the
+  [Git annex](annex-git.md). Managed-state conformance requires that current
+  snapshot to conform and no applicable current-tip E6xx finding. It makes no
+  claim about an ancestor snapshot or transition.
+- **Managed-store rules** additionally evaluate the complete accepted lineage.
+  Managed-store conformance requires that audit to be available and
+  `complete`, with every accepted snapshot conforming and no E5xx or E6xx
+  finding.
 - **Warnings** (W9xx) never affect conformance.
 
-A snapshot check reads only the logical state under validation; a
-changeset check additionally reads its declared base and candidate; a
-managed check additionally reads local repository metadata and the
-accepted ancestry required by the Git annex. Check performs no network
-access. Missing repository history or capabilities are surfaced as a
-tool capability failure rather than fetched or guessed. Output ordering
-is deterministic: first by the UTF-8 bytes of `path`, then by the ASCII
-bytes of `code`.
+A snapshot check reads only the logical state under validation; a changeset
+check additionally reads its declared base and candidate; a managed-state
+check additionally reads local repository metadata and the current accepted
+commit and tree, but does not dereference its parent object IDs. A managed-store
+check additionally reads the accepted ancestry required by the Git annex.
+Check performs no network access. History unavailable to a managed-store check,
+or another unavailable required capability, is surfaced as a tool capability
+failure rather than fetched or guessed. Output ordering is deterministic: first
+by the UTF-8 bytes of `path`, then by the ASCII bytes of `code`.
 
 A changeset check runs the complete E1xx–E4xx snapshot rules on the
 candidate. It does not union an unrelated full static check of the base
@@ -1610,8 +1619,9 @@ description: "<one line for the catalog>"
 Before the first stable release (`v1.0.0`), codes are draft identifiers and
 may change under [§13](#13-versioning). Published stable codes are assigned
 once and never reused. `E` findings in the snapshot ranges (E1xx–E4xx) decide
-snapshot conformance; E5xx require a changeset; E6xx decide the additional
-managed-store target; `W` findings are advisory.
+snapshot conformance; E5xx require a changeset; applicable current-tip E6xx
+decide the additional managed-state target, while the complete E5xx/E6xx
+lineage result decides the managed-store target; `W` findings are advisory.
 Finding identity, path attribution, deduplication, and ordering follow
 [§9.1](#91-check); diagnostic detail is not part of this catalog's
 stable interface.
@@ -1682,7 +1692,7 @@ stable interface.
 
 | Code | Finding |
 |---|---|
-| E601 | Managed target is not the exact root of a non-bare Git worktree, its `HEAD` does not directly name a valid-UTF-8 non-symbolic local branch (or that branch does not directly contain a commit after initialization), a present required raw Git object/reference is structurally malformed or has the wrong object type, or its managed worktree is not a complete byte-transparent presentation |
+| E601 | Managed target is not the exact root of a non-bare Git worktree, its `HEAD` does not directly name a valid-UTF-8 non-symbolic local branch, a requested managed-state or managed-store target has no accepted commit, a present required raw Git object/reference is structurally malformed or has the wrong object type, or its managed worktree is not a complete byte-transparent presentation |
 | E602 | Accepted lineage contains a commit with more than one parent |
 | E603 | Accepted commit raw tree contains a grammatically valid entry that the core prunes without emitting its own `E` finding |
 

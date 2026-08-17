@@ -252,9 +252,11 @@ engram setup
 ```
 
 `--harness claude-code` overrides the configured harness for one invocation.
-Existing exact clones are verified and reused without fetching; explicit
-`engram pull` and `engram push` retain synchronization authority. Removing a
-declaration detaches its store but never deletes the local clone.
+Existing exact clones have their current accepted state validated and are
+reused without fetching; add `--check-history` to require a complete lineage
+audit. Explicit `engram pull` and `engram push` retain synchronization
+authority. Removing a declaration detaches its store but never deletes the
+local clone.
 
 The imperative flow remains available when no `engram.yaml` exists:
 

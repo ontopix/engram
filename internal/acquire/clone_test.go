@@ -11,6 +11,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/ontopix/engram/internal/checker"
 	"github.com/ontopix/engram/internal/fileidentity"
 	"github.com/ontopix/engram/internal/guard"
 	"github.com/ontopix/engram/internal/lifecycle"
@@ -31,7 +32,7 @@ func TestClonePublishesOnlyVerifiedManagedStore(t *testing.T) {
 		t.Fatal(err)
 	}
 	canonicalDestination := filepath.Join(canonicalParent, filepath.Base(destination))
-	if !result.Published || result.Reused || result.Root != canonicalDestination || result.Remote != "origin" || result.VerifiedCommits != 1 || result.Launcher != guard.Installed || result.Validation.HasErrors() {
+	if !result.Published || result.Reused || result.Root != canonicalDestination || result.Remote != "origin" || result.VerifiedCommits != 1 || result.ValidationScope != ValidationScopeHistory || result.Launcher != guard.Installed || result.Validation.HasErrors() {
 		t.Fatalf("result = %#v", result)
 	}
 	store, err := managedread.Open(context.Background(), canonicalDestination)
@@ -60,6 +61,41 @@ func TestReuseVerifiesExplicitCloneWithoutNetwork(t *testing.T) {
 	}
 	if _, err := Reuse(context.Background(), "file:///definitely-not-the-origin", destination); KindOf(err) != ErrorConflict {
 		t.Fatalf("mismatched reuse error = %v", err)
+	}
+}
+
+func TestCurrentValidationScopeChecksOnlyAcceptedTip(t *testing.T) {
+	location := recoveredHistoryFixture(t)
+	currentDestination := filepath.Join(t.TempDir(), "current")
+	current, err := Clone(context.Background(), location, Options{
+		Destination: currentDestination, DestinationProvided: true,
+		ValidationScope: ValidationScopeCurrent,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !current.Published || current.ValidationScope != ValidationScopeCurrent || current.VerifiedCommits != 1 || current.Validation.Target != checker.TargetManagedState || current.Validation.HasErrors() || len(current.Audits) != 0 {
+		t.Fatalf("current result = %#v", current)
+	}
+
+	reused, err := ReuseWithOptions(context.Background(), location, currentDestination, Options{ValidationScope: ValidationScopeCurrent})
+	if err != nil || !reused.Reused || reused.ValidationScope != ValidationScopeCurrent || reused.Validation.Target != checker.TargetManagedState || len(reused.Audits) != 0 {
+		t.Fatalf("current reuse = %#v, %v", reused, err)
+	}
+	if _, err := Reuse(context.Background(), location, currentDestination); KindOf(err) != ErrorConflict {
+		t.Fatalf("history reuse error = %v", err)
+	}
+
+	historyDestination := filepath.Join(t.TempDir(), "history")
+	history, err := Clone(context.Background(), location, Options{Destination: historyDestination, DestinationProvided: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if history.Published || history.ValidationScope != ValidationScopeHistory || history.Validation.Target != checker.TargetManagedStore || !history.Validation.HasErrors() || len(history.Audits) < 2 {
+		t.Fatalf("history result = %#v", history)
+	}
+	if _, err := os.Lstat(historyDestination); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("history-invalid destination was published: %v", err)
 	}
 }
 
@@ -253,6 +289,31 @@ func TestClonePublishedFaultRecoversAcceptedCheckout(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestClonePublishedCurrentScopeRecoveryPreservesScope(t *testing.T) {
+	location := recoveredHistoryFixture(t)
+	destination := canonicalTestDestination(t, "published-current-scope")
+	runFaultedCloneWithScope(t, location, destination, PhasePublished, "", ValidationScopeCurrent)
+
+	observation, err := lifecycle.ObserveRecovery(destination, lifecycle.Acquisition)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := RecoverExpected(context.Background(), destination, observation.Expectation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !recovered.Needed || !recovered.Performed || !recovered.Published || !recovered.Durable || recovered.RecoveryRequired || recovered.Accepted == nil {
+		t.Fatalf("recovered = %#v", recovered)
+	}
+	if _, _, err := verifyPublishedStoreWithScope(context.Background(), destination, ValidationScopeCurrent); err != nil {
+		t.Fatalf("current-scope verification: %v", err)
+	}
+	if _, _, err := verifyPublishedStore(context.Background(), destination); err == nil {
+		t.Fatal("history-invalid checkout unexpectedly passed complete verification")
+	}
+	assertNoAcquisitionState(t, destination)
 }
 
 func TestCloneRecoveryWithoutLifecycleStateIsANoop(t *testing.T) {
@@ -1032,6 +1093,7 @@ func TestCloneRecoveryFaultHelper(t *testing.T) {
 	destination := os.Getenv("ENGRAM_ACQUIRE_DESTINATION")
 	wanted := Phase(os.Getenv("ENGRAM_ACQUIRE_PHASE"))
 	mode := os.Getenv("ENGRAM_ACQUIRE_MODE")
+	validationScope := ValidationScope(os.Getenv("ENGRAM_ACQUIRE_VALIDATION_SCOPE"))
 	reached := false
 	cloner := &Cloner{Fault: func(phase Phase) error {
 		if phase != wanted {
@@ -1049,7 +1111,9 @@ func TestCloneRecoveryFaultHelper(t *testing.T) {
 		}
 		return errors.New("injected helper fault")
 	}}
-	_, err := cloner.Run(context.Background(), location, Options{Destination: destination, DestinationProvided: true})
+	_, err := cloner.Run(context.Background(), location, Options{
+		Destination: destination, DestinationProvided: true, ValidationScope: validationScope,
+	})
 	if !reached {
 		t.Fatalf("clone failed before requested phase %q: %v", wanted, err)
 	}
@@ -1059,6 +1123,10 @@ func TestCloneRecoveryFaultHelper(t *testing.T) {
 }
 
 func runFaultedClone(t *testing.T, location, destination string, phase Phase, mode string) {
+	runFaultedCloneWithScope(t, location, destination, phase, mode, "")
+}
+
+func runFaultedCloneWithScope(t *testing.T, location, destination string, phase Phase, mode string, validationScope ValidationScope) {
 	t.Helper()
 	command := exec.Command(os.Args[0], "-test.run=^TestCloneRecoveryFaultHelper$")
 	command.Env = append(os.Environ(),
@@ -1067,6 +1135,7 @@ func runFaultedClone(t *testing.T, location, destination string, phase Phase, mo
 		"ENGRAM_ACQUIRE_DESTINATION="+destination,
 		"ENGRAM_ACQUIRE_PHASE="+string(phase),
 		"ENGRAM_ACQUIRE_MODE="+mode,
+		"ENGRAM_ACQUIRE_VALIDATION_SCOPE="+string(validationScope),
 	)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("fault helper: %v\n%s", err, output)
@@ -1115,6 +1184,43 @@ func bareFixture(t *testing.T, invalid bool) string {
 	}
 	value := testpath.FileURL(bare)
 	return value
+}
+
+func recoveredHistoryFixture(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	minimal := filepath.Join(repositoryRoot(t), "examples", "minimal")
+	if err := os.CopyFS(root, os.DirFS(minimal)); err != nil {
+		t.Fatal(err)
+	}
+	readme := filepath.Join(root, "README.md")
+	original, err := os.ReadFile(readme)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, root, "init", "--initial-branch=main")
+	runGit(t, root, "config", "user.name", "Test")
+	runGit(t, root, "config", "user.email", "test@example.test")
+	runGit(t, root, "config", "commit.gpgsign", "false")
+	runGit(t, root, "add", "--all")
+	runGit(t, root, "commit", "--no-verify", "-m", "initial")
+	if err := os.WriteFile(readme, []byte("invalid historical snapshot\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, root, "add", "--all")
+	runGit(t, root, "commit", "--no-verify", "-m", "invalid middle state")
+	if err := os.WriteFile(readme, original, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, root, "add", "--all")
+	runGit(t, root, "commit", "--no-verify", "-m", "restore valid tip")
+	bare := filepath.Join(t.TempDir(), "remote.git")
+	command := exec.Command("git", "clone", "--bare", "--", root, bare)
+	command.Env = testGitEnvironment()
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("bare clone: %v\n%s", err, output)
+	}
+	return testpath.FileURL(bare)
 }
 
 func runGit(t *testing.T, root string, arguments ...string) {

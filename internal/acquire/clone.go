@@ -1,4 +1,4 @@
-// Package acquire implements verified, publish-after-audit managed-store
+// Package acquire implements publish-after-validation managed-repository
 // acquisition. Clone is the only operation here which may initiate network or
 // credential effects; reuse inspection is strictly local.
 package acquire
@@ -100,7 +100,18 @@ func MutationOf(err error) (Mutation, bool) {
 type Options struct {
 	Destination         string
 	DestinationProvided bool
+	ValidationScope     ValidationScope
 }
+
+// ValidationScope selects the accepted-state guarantee established during
+// acquisition. The zero value preserves the original full-history behavior
+// for standalone clone and reuse callers.
+type ValidationScope string
+
+const (
+	ValidationScopeCurrent ValidationScope = "current"
+	ValidationScopeHistory ValidationScope = "history"
+)
 
 type Result struct {
 	Root            string                     `json:"root"`
@@ -109,6 +120,7 @@ type Result struct {
 	Published       bool                       `json:"published"`
 	Reused          bool                       `json:"reused"`
 	VerifiedCommits int                        `json:"verified_commits"`
+	ValidationScope ValidationScope            `json:"validation_scope"`
 	Launcher        guard.State                `json:"launcher"`
 	Validation      checker.Result             `json:"validation"`
 	Audits          []managedread.HistoryAudit `json:"audits"`
@@ -159,17 +171,23 @@ func (c *Cloner) publish(oldPath, newPath string) (bool, error) {
 }
 
 // Clone obtains location into an unpublished sibling staging directory,
-// configures byte-transparent presentation, audits the complete accepted
-// lineage, installs the owned raw-Git guard, and only then atomically publishes
+// configures byte-transparent presentation, validates the requested accepted
+// scope, installs the owned raw-Git guard, and only then atomically publishes
 // the checkout at its final path.
 func Clone(ctx context.Context, location string, options Options) (Result, error) {
 	return New().Run(ctx, location, options)
 }
 
 // Reuse verifies that destination is an existing clone of the exact location
-// and that its accepted lineage, upstream, guard, and presentation still
-// conform. It performs no network access and never mutates the clone.
+// and that its complete accepted lineage, upstream, guard, and presentation
+// still conform. It performs no network access and never mutates the clone.
 func Reuse(ctx context.Context, location, destination string) (Result, error) {
+	return ReuseWithOptions(ctx, location, destination, Options{})
+}
+
+// ReuseWithOptions verifies an existing clone using the requested validation
+// scope. Destination fields in options are ignored.
+func ReuseWithOptions(ctx context.Context, location, destination string, options Options) (Result, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -196,7 +214,7 @@ func Reuse(ctx context.Context, location, destination string) (Result, error) {
 	if err != nil {
 		return Result{}, typed(ErrorUsage, "select clone destination", err)
 	}
-	return reuse(ctx, location, filepath.Join(filepath.Clean(canonicalParent), filepath.Base(absolute)))
+	return reuse(ctx, location, filepath.Join(filepath.Clean(canonicalParent), filepath.Base(absolute)), options.ValidationScope)
 }
 
 // Run obtains location into the exact token-derived private stage, records a
@@ -209,6 +227,11 @@ func (c *Cloner) Run(ctx context.Context, location string, options Options) (res
 	if err := ctx.Err(); err != nil {
 		return Result{}, typed(ErrorCancelled, "clone", err)
 	}
+	validationScope, err := normalizeValidationScope(options.ValidationScope)
+	if err != nil {
+		return Result{}, typed(ErrorUsage, "select clone validation scope", err)
+	}
+	options.ValidationScope = validationScope
 	if err := transport.ValidateLocation(location); err != nil {
 		return Result{}, typed(ErrorUsage, "validate clone location", err)
 	}
@@ -220,7 +243,7 @@ func (c *Cloner) Run(ctx context.Context, location string, options Options) (res
 		if options.DestinationProvided {
 			return Result{}, typed(ErrorConflict, "select clone destination", errors.New("explicit destination already exists"))
 		}
-		return reuse(ctx, location, destination)
+		return reuse(ctx, location, destination, validationScope)
 	} else if !errors.Is(statErr, os.ErrNotExist) {
 		return Result{}, typed(ErrorIO, "inspect clone destination", statErr)
 	}
@@ -244,7 +267,7 @@ func (c *Cloner) Run(ctx context.Context, location string, options Options) (res
 		if options.DestinationProvided {
 			return Result{}, typed(ErrorConflict, "select clone destination", errors.New("explicit destination already exists"))
 		}
-		return reuse(ctx, location, destination)
+		return reuse(ctx, location, destination, validationScope)
 	} else if !errors.Is(statErr, os.ErrNotExist) {
 		return Result{}, typed(ErrorIO, "inspect clone destination", statErr)
 	}
@@ -301,7 +324,7 @@ func (c *Cloner) Run(ctx context.Context, location string, options Options) (res
 		return Result{}, err
 	}
 	var repository *gitraw.Repository
-	result, repository, err = verify(ctx, checkout)
+	result, repository, err = verify(ctx, checkout, validationScope)
 	if err != nil {
 		return Result{}, err
 	}
@@ -414,12 +437,13 @@ func (c *Cloner) Run(ctx context.Context, location string, options Options) (res
 const maxPublicationPlanBytes = 8 << 20
 
 type publicationPlan struct {
-	Version  int    `json:"version"`
-	Target   string `json:"target"`
-	Location string `json:"location"`
-	Remote   string `json:"remote"`
-	Ref      string `json:"ref"`
-	Commit   string `json:"commit"`
+	Version         int             `json:"version"`
+	Target          string          `json:"target"`
+	Location        string          `json:"location"`
+	Remote          string          `json:"remote"`
+	Ref             string          `json:"ref"`
+	Commit          string          `json:"commit"`
+	ValidationScope ValidationScope `json:"validation_scope,omitempty"`
 }
 
 func makePublicationPlan(result Result, location string) (publicationPlan, error) {
@@ -429,6 +453,7 @@ func makePublicationPlan(result Result, location string) (publicationPlan, error
 	plan := publicationPlan{
 		Version: 1, Target: result.Root, Location: location, Remote: result.Remote,
 		Ref: *result.Accepted.Ref, Commit: *result.Accepted.Commit,
+		ValidationScope: result.ValidationScope,
 	}
 	if err := validatePublicationPlan(plan, result.Root); err != nil {
 		return publicationPlan{}, err
@@ -497,6 +522,9 @@ func validatePublicationPlan(plan publicationPlan, target string) error {
 	}
 	if err := transport.ValidateLocation(plan.Location); err != nil {
 		return errors.New("invalid clone publication location")
+	}
+	if _, err := normalizeValidationScope(plan.ValidationScope); err != nil {
+		return errors.New("invalid clone validation scope")
 	}
 	if !strings.HasPrefix(plan.Ref, "refs/heads/") || strings.TrimPrefix(plan.Ref, "refs/heads/") == "" {
 		return errors.New("invalid clone publication ref")
@@ -970,18 +998,22 @@ func cloneDestination(location string, options Options) (string, error) {
 	return value, nil
 }
 
-func reuse(ctx context.Context, location, destination string) (Result, error) {
+func reuse(ctx context.Context, location, destination string, requestedScope ValidationScope) (Result, error) {
+	validationScope, err := normalizeValidationScope(requestedScope)
+	if err != nil {
+		return Result{}, typed(ErrorUsage, "select clone validation scope", err)
+	}
 	if _, _, err := lifecycle.Read(destination, lifecycle.Acquisition); err == nil {
 		return Result{}, typed(ErrorConflict, "reuse clone", errors.New("existing clone has active or recoverable acquisition state"))
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return Result{}, typed(ErrorConflict, "reuse clone", errors.New("existing clone acquisition state is inconsistent"))
 	}
-	result, repository, err := verify(ctx, destination)
+	result, repository, err := verify(ctx, destination, validationScope)
 	if err != nil {
 		return Result{}, typed(ErrorConflict, "reuse clone", err)
 	}
 	if result.Validation.Status != checker.StatusComplete || result.Validation.HasErrors() {
-		return Result{}, typed(ErrorConflict, "reuse clone", errors.New("existing clone no longer has a conforming accepted lineage"))
+		return Result{}, typed(ErrorConflict, "reuse clone", errors.New("existing clone no longer conforms for the requested validation scope"))
 	}
 	if err := verifyOriginAndUpstream(ctx, destination, location, repository.HeadRef); err != nil {
 		return Result{}, typed(ErrorConflict, "reuse clone", err)
@@ -1003,26 +1035,58 @@ func reuse(ctx context.Context, location, destination string) (Result, error) {
 	return result, nil
 }
 
-func verify(ctx context.Context, root string) (Result, *gitraw.Repository, error) {
+func verify(ctx context.Context, root string, requestedScope ValidationScope) (Result, *gitraw.Repository, error) {
+	validationScope, err := normalizeValidationScope(requestedScope)
+	if err != nil {
+		return Result{}, nil, typed(ErrorUsage, "select clone validation scope", err)
+	}
 	store, err := managedread.Open(ctx, root)
 	if err != nil {
 		return Result{}, nil, typed(ErrorRepository, "open cloned managed store", err)
 	}
-	audit, err := store.AuditAccepted(ctx)
-	if err != nil {
-		return Result{}, nil, typed(ErrorRepository, "audit cloned managed store", err)
-	}
 	repository := store.Repository()
+	var validation checker.Result
+	var audits []managedread.HistoryAudit
+	verifiedCommits := 0
+	if validationScope == ValidationScopeHistory {
+		audit, err := store.AuditAccepted(ctx)
+		if err != nil {
+			return Result{}, nil, typed(ErrorRepository, "audit cloned managed store", err)
+		}
+		validation = audit.Validation
+		audits = append([]managedread.HistoryAudit(nil), audit.Audits...)
+		verifiedCommits = len(audit.Audits)
+	} else {
+		validation, err = store.CheckAcceptedState(ctx)
+		if err != nil {
+			return Result{}, nil, typed(ErrorRepository, "check cloned managed state", err)
+		}
+		audits = []managedread.HistoryAudit{}
+		if repository.Head != nil {
+			verifiedCommits = 1
+		}
+	}
 	accepted := managedread.GitState{Ref: stringPtr(repository.HeadRef)}
 	if repository.Head != nil {
 		accepted.Commit = stringPtr(repository.Head.String())
 	}
 	result := Result{
 		Root: repository.Root, Remote: "origin", Accepted: accepted,
-		VerifiedCommits: len(audit.Audits), Validation: audit.Validation,
-		Audits: append([]managedread.HistoryAudit(nil), audit.Audits...),
+		VerifiedCommits: verifiedCommits, ValidationScope: validationScope,
+		Validation: validation, Audits: audits,
 	}
 	return result, repository, nil
+}
+
+func normalizeValidationScope(scope ValidationScope) (ValidationScope, error) {
+	switch scope {
+	case "", ValidationScopeHistory:
+		return ValidationScopeHistory, nil
+	case ValidationScopeCurrent:
+		return ValidationScopeCurrent, nil
+	default:
+		return "", fmt.Errorf("unsupported validation scope %q", scope)
+	}
 }
 
 func runClone(ctx context.Context, location, destination string) error {
@@ -1080,7 +1144,7 @@ func verifyOriginAndUpstream(ctx context.Context, root, location, headRef string
 }
 
 func verifyPublished(ctx context.Context, root string, plan publicationPlan) (*managedread.GitState, error) {
-	result, repository, err := verifyPublishedStore(ctx, root)
+	result, repository, err := verifyPublishedStoreWithScope(ctx, root, plan.ValidationScope)
 	if err != nil {
 		return nil, err
 	}
@@ -1095,12 +1159,16 @@ func verifyPublished(ctx context.Context, root string, plan publicationPlan) (*m
 }
 
 func verifyPublishedStore(ctx context.Context, root string) (Result, *gitraw.Repository, error) {
-	result, repository, err := verify(ctx, root)
+	return verifyPublishedStoreWithScope(ctx, root, ValidationScopeHistory)
+}
+
+func verifyPublishedStoreWithScope(ctx context.Context, root string, validationScope ValidationScope) (Result, *gitraw.Repository, error) {
+	result, repository, err := verify(ctx, root, validationScope)
 	if err != nil {
 		return Result{}, nil, err
 	}
 	if result.Validation.Status != checker.StatusComplete || result.Validation.HasErrors() || result.Accepted.Ref == nil || result.Accepted.Commit == nil {
-		return Result{}, nil, errors.New("published clone accepted history is not definitively valid")
+		return Result{}, nil, errors.New("published clone accepted state is not definitively valid for the requested validation scope")
 	}
 	if _, err := hooks.ResolveStoreIdentity(root); err != nil {
 		return Result{}, nil, errors.Join(err, errors.New("published clone identity cannot be proven"))

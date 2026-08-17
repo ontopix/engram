@@ -323,12 +323,16 @@ func validateAdd(invocation *Invocation) *ProtocolError {
 
 func validateCheck(invocation *Invocation) *ProtocolError {
 	accepted := invocation.Options.Has("accepted")
+	history := invocation.Options.Has("history")
 	staged := invocation.Options.Has("staged")
 	base := invocation.Options.Has("base")
 	candidate := invocation.Options.Has("candidate")
 
 	selected := 0
 	if accepted {
+		selected++
+	}
+	if history {
 		selected++
 	}
 	if staged {

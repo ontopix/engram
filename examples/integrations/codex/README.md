@@ -17,8 +17,9 @@ attachments:
     url: git@github.com:example/project-memory.git
 ```
 
-Then run `engram setup` from that project. The verified checkout is materialized
-below ignored `.memory/project` and registered in `MEMORY.md`.
+Then run `engram setup` from that project. The current-state-validated checkout
+is materialized below ignored `.memory/project` and registered in `MEMORY.md`.
+Use `engram setup --check-history` to require a complete accepted-lineage audit.
 
 ## Imperative local attachment
 
