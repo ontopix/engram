@@ -4,6 +4,11 @@
 
 ### Standard
 
+- Added a bounded managed-state conformance target for the current accepted
+  commit, raw-tree projection, snapshot, and writable presentation, distinct
+  from complete managed-store conformance over every accepted snapshot and
+  transition. Managed writers and synchronizers retain their existing complete
+  lineage obligations.
 - Added the normative routine-declarations annex: each optional routine is a
   Markdown file in a local `.engram/routines/` directory with a closed UTC
   five-field cron profile and instructions in its body. Declarations are
@@ -44,6 +49,10 @@
 
 ### Reference implementation
 
+- Changed `check --accepted` and default declarative `setup` acquisition to
+  validate only the current managed state. Added `check --history` and
+  `setup --check-history` for explicit complete lineage audits, and report
+  `validation_scope` on clone results and each setup attachment.
 - Added static validation and managed Git projection for routine declarations,
   including E309, the closed UTC cron profile, and the routine annex in the
   reported and audited normative rule-set identity. The CLI still does not
@@ -53,7 +62,8 @@
   `engram.yaml`. Configuration remains separate from explicit `setup`: these
   commands never acquire stores, reconcile attachments, or install skills.
 - Extended `setup` to read strict project-root `engram.yaml`, acquire missing
-  verified stores below `.memory/<name>`, maintain the root ignore rule,
+  current-state-validated stores below `.memory/<name>`, maintain the root
+  ignore rule,
   reconcile only declarative attachments, and install the selected harness in
   one idempotent flow. Existing clones are verified without fetching, CLI
   `--harness` overrides the manifest without editing it, and removed entries

@@ -17,10 +17,10 @@ import (
 // reusing an audit after its rule-set identity changes. A repository test binds
 // every value to the authoritative checked-in documents.
 const (
-	acceptedAuditCoreRevision     = "2026-08-13"
-	acceptedAuditCoreSHA256       = "8b2433ded56d2f2e30231a9a7f0559f5676efd03d85c07c06b04f82312231914"
-	acceptedAuditGitRevision      = "2026-08-13"
-	acceptedAuditGitSHA256        = "ca935a39075039d9613d4cf512ff28adf59c7b8e17dae329e10bac1522dc3430"
+	acceptedAuditCoreRevision     = "2026-08-18"
+	acceptedAuditCoreSHA256       = "2bcd3858b3bdf508d4cf2e832cd5ac2ec13381b407286a2bb4486784226d75f3"
+	acceptedAuditGitRevision      = "2026-08-18"
+	acceptedAuditGitSHA256        = "b85d7ee0c9df6971fcca08bc5d53f2a92c6515cf5a14d99b160dde0eb24bc254"
 	acceptedAuditRoutinesRevision = "2026-08-13"
 	acceptedAuditRoutinesSHA256   = "812421a50a82cdfe509ee5cd443d767f32a9a0f97d43ec30d759821ec17f60ad"
 

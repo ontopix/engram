@@ -45,8 +45,13 @@ func TestManagedStatusDiffCheckAndLogJSON(t *testing.T) {
 
 	accepted := runManagedJSON(t, "--store", root, "check", "--accepted", "--format", "json")
 	assertEnvelope(t, accepted, "check", cli.OutcomeOK, 0)
-	if result := decodeObject(t, accepted.Result); result["target"] != "managed-store" || result["status"] != "complete" {
+	if result := decodeObject(t, accepted.Result); result["target"] != "managed-state" || result["status"] != "complete" {
 		t.Fatalf("accepted check = %#v", result)
+	}
+	history := runManagedJSON(t, "--store", root, "check", "--history", "--format", "json")
+	assertEnvelope(t, history, "check", cli.OutcomeOK, 0)
+	if result := decodeObject(t, history.Result); result["target"] != "managed-store" || result["status"] != "complete" {
+		t.Fatalf("history check = %#v", result)
 	}
 	staged := runManagedJSON(t, "--store", root, "check", "--staged", "--format", "json")
 	assertEnvelope(t, staged, "check", cli.OutcomeOK, 0)
@@ -111,6 +116,111 @@ func TestManagedLogAndCheckReportMergeBoundary(t *testing.T) {
 	}
 }
 
+func TestManagedAcceptedCheckDoesNotAuditAncestors(t *testing.T) {
+	root := managedFixture(t)
+	managedGit(t, root, "checkout", "-b", "side")
+	appendFile(t, filepath.Join(root, "topics", "why-files.md"), "\nSide.\n")
+	managedGit(t, root, "add", "topics/why-files.md")
+	managedGit(t, root, "commit", "--no-verify", "-m", "side")
+	managedGit(t, root, "checkout", "main")
+	appendFile(t, filepath.Join(root, "topics", "derived-state.md"), "\nMain.\n")
+	managedGit(t, root, "add", "topics/derived-state.md")
+	managedGit(t, root, "commit", "--no-verify", "-m", "main")
+	managedGit(t, root, "merge", "--no-verify", "--no-ff", "side", "-m", "merge")
+	appendFile(t, filepath.Join(root, "topics", "why-files.md"), "\nCurrent tip.\n")
+	managedGit(t, root, "add", "topics/why-files.md")
+	managedGit(t, root, "commit", "--no-verify", "-m", "after merge")
+
+	accepted := runManagedJSON(t, "--store", root, "check", "--accepted", "--format", "json")
+	assertEnvelope(t, accepted, "check", cli.OutcomeOK, 0)
+	acceptedResult := decodeObject(t, accepted.Result)
+	if acceptedResult["target"] != "managed-state" || len(acceptedResult["findings"].([]any)) != 0 {
+		t.Fatalf("accepted state check = %#v", acceptedResult)
+	}
+
+	history := runManagedJSON(t, "--store", root, "check", "--history", "--format", "json")
+	assertEnvelope(t, history, "check", cli.OutcomeIssues, 1)
+	historyResult := decodeObject(t, history.Result)
+	findings := historyResult["findings"].([]any)
+	if historyResult["target"] != "managed-store" || len(findings) != 1 || findings[0].(map[string]any)["code"] != "E602" {
+		t.Fatalf("history check = %#v", historyResult)
+	}
+}
+
+func TestManagedAcceptedCheckDoesNotRequireParentObject(t *testing.T) {
+	root := managedFixture(t)
+	parent := strings.TrimSpace(managedGit(t, root, "rev-parse", "HEAD"))
+	appendFile(t, filepath.Join(root, "topics", "why-files.md"), "\nCurrent tip.\n")
+	managedGit(t, root, "add", "topics/why-files.md")
+	managedGit(t, root, "commit", "--no-verify", "-m", "current tip")
+
+	parentObject := filepath.Join(root, ".git", "objects", parent[:2], parent[2:])
+	if err := os.Remove(parentObject); err != nil {
+		t.Fatalf("remove parent commit object: %v", err)
+	}
+
+	store, err := managedread.Open(context.Background(), root)
+	if err != nil {
+		t.Fatalf("open store without parent object: %v", err)
+	}
+	state, err := store.CheckAcceptedState(context.Background())
+	if err != nil || state.Target != "managed-state" || state.Status != "complete" || state.HasErrors() {
+		t.Fatalf("CheckAcceptedState = %#v, %v", state, err)
+	}
+
+	accepted := runManagedJSON(t, "--store", root, "check", "--accepted", "--format", "json")
+	assertEnvelope(t, accepted, "check", cli.OutcomeOK, 0)
+	if result := decodeObject(t, accepted.Result); result["target"] != "managed-state" || len(result["findings"].([]any)) != 0 {
+		t.Fatalf("accepted state check = %#v", result)
+	}
+
+	history := runManagedJSON(t, "--store", root, "check", "--history", "--format", "json")
+	assertEnvelope(t, history, "check", cli.OutcomeError, 2)
+	if history.Error == nil || history.Error.Kind != cli.ErrorCapability {
+		t.Fatalf("history error = %#v", history.Error)
+	}
+}
+
+func TestManagedAcceptedCheckReportsTipRawPaths(t *testing.T) {
+	root := managedFixture(t)
+	if err := os.WriteFile(filepath.Join(root, ".private"), []byte("hidden\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	managedGit(t, root, "add", ".private")
+	managedGit(t, root, "commit", "--no-verify", "-m", "hidden raw path")
+
+	accepted := runManagedJSON(t, "--store", root, "check", "--accepted", "--format", "json")
+	assertEnvelope(t, accepted, "check", cli.OutcomeIssues, 1)
+	result := decodeObject(t, accepted.Result)
+	findings := result["findings"].([]any)
+	if result["target"] != "managed-state" || len(findings) != 1 || findings[0].(map[string]any)["code"] != "E603" {
+		t.Fatalf("accepted state check = %#v", result)
+	}
+}
+
+func TestManagedAcceptedChecksRejectUnbornRepository(t *testing.T) {
+	root := t.TempDir()
+	managedGit(t, root, "init", "--initial-branch=main")
+
+	for _, mode := range []struct {
+		flag   string
+		target string
+	}{
+		{flag: "--accepted", target: "managed-state"},
+		{flag: "--history", target: "managed-store"},
+	} {
+		t.Run(mode.flag, func(t *testing.T) {
+			envelope := runManagedJSON(t, "--store", root, "check", mode.flag, "--format", "json")
+			assertEnvelope(t, envelope, "check", cli.OutcomeIssues, 1)
+			result := decodeObject(t, envelope.Result)
+			findings := result["findings"].([]any)
+			if result["target"] != mode.target || len(findings) != 1 || findings[0].(map[string]any)["code"] != "E601" {
+				t.Fatalf("unborn %s check = %#v", mode.flag, result)
+			}
+		})
+	}
+}
+
 func TestManagedAcceptedCheckAttributesInvalidTopologyToE601(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -163,7 +273,7 @@ func TestManagedAcceptedCheckAttributesInvalidTopologyToE601(t *testing.T) {
 			envelope := runManagedJSON(t, "--store", target, "check", "--accepted", "--format", "json")
 			assertEnvelope(t, envelope, "check", cli.OutcomeIssues, 1)
 			result := decodeObject(t, envelope.Result)
-			if result["target"] != "managed-store" || result["status"] != "complete" {
+			if result["target"] != "managed-state" || result["status"] != "complete" {
 				t.Fatalf("validation = %#v", result)
 			}
 			findings := result["findings"].([]any)

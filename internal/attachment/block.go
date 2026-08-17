@@ -1,6 +1,6 @@
 // Package attachment owns the versioned project memory manifest used by the
 // attach and detach workflows. It deliberately knows nothing about Git or
-// managed-store validation; callers must audit a store before Attach.
+// managed-store validation; callers must validate a store before Attach.
 package attachment
 
 import (
@@ -222,14 +222,15 @@ func Detach(project, memoryFile, store string) (Result, error) {
 
 // PlanManaged reports whether replacing the attachments below managedRoot
 // with stores would change the registry. Missing desired stores are accepted
-// for planning; callers remain responsible for acquiring and auditing them.
+// for planning; callers remain responsible for acquiring and validating them.
 func PlanManaged(project, memoryFile, managedRoot string, stores []string) (ManagedResult, error) {
 	return NewUpdater().reconcileManaged(project, memoryFile, managedRoot, stores, false)
 }
 
 // ReconcileManaged atomically replaces only attachments below managedRoot.
 // It preserves attachments outside that namespace and never deletes stores.
-// Callers must acquire and completely audit every desired store first.
+// Callers must acquire and validate every desired store at their declared
+// validation scope first.
 func ReconcileManaged(project, memoryFile, managedRoot string, stores []string) (ManagedResult, error) {
 	return NewUpdater().reconcileManaged(project, memoryFile, managedRoot, stores, true)
 }

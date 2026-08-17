@@ -14,8 +14,8 @@ import (
 )
 
 // RegisterManagedReads installs the M2 read-only managed-store handlers. It
-// preserves the already registered portable check forms and adds only the
-// accepted and staged variants.
+// preserves the already registered portable check forms and adds the accepted
+// state, staged candidate, and complete-history variants.
 func RegisterManagedReads(app *cli.App) {
 	if app == nil {
 		return
@@ -25,7 +25,7 @@ func RegisterManagedReads(app *cli.App) {
 	}
 	portableCheck := app.Handlers[cli.CommandCheck]
 	app.Handlers[cli.CommandCheck] = cli.HandlerFunc(func(ctx context.Context, invocation *cli.Invocation) cli.Result {
-		if invocation != nil && (invocation.Options.Has("accepted") || invocation.Options.Has("staged")) {
+		if invocation != nil && (invocation.Options.Has("accepted") || invocation.Options.Has("staged") || invocation.Options.Has("history")) {
 			return runManagedCheck(ctx, invocation)
 		}
 		if portableCheck == nil {
@@ -47,7 +47,18 @@ func runManagedCheck(ctx context.Context, invocation *cli.Invocation) cli.Result
 		if err != nil {
 			return failure(err, cli.ErrorRepository, "select managed check target")
 		}
-		validation, err := managedread.CheckAccepted(ctx, target)
+		validation, err := managedread.CheckAcceptedState(ctx, target)
+		if err != nil {
+			return managedFailure(err, "check accepted state")
+		}
+		return validationResult(validation)
+	}
+	if invocation.Options.Has("history") {
+		target, err := selectedAcceptedCheckTarget(invocation)
+		if err != nil {
+			return failure(err, cli.ErrorRepository, "select managed check target")
+		}
+		validation, err := managedread.CheckAcceptedHistory(ctx, target)
 		if err != nil {
 			return managedFailure(err, "audit accepted history")
 		}

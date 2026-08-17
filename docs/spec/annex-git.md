@@ -2,7 +2,7 @@
 
 **Version:** v1
 **Status:** Draft
-**Revision:** 2026-08-13
+**Revision:** 2026-08-18
 **Normative status:** Normative
 
 This annex binds the core standard's portable snapshots and changesets to Git-managed writable
@@ -34,9 +34,15 @@ The core state model has this single Git representation:
 A changeset remains the core §8.1 net difference between base and candidate. A transaction remains
 the bounded acceptance attempt, not a changeset, editing session, or public handle.
 
-Managed-store conformance covers repository shape, accepted history, and the applicable rules of
-this annex. Every accepted snapshot and transition MUST also conform to the core. A tool claim
-additionally covers each procedural role—managed writer or synchronizer—that it performs.
+Managed-state conformance is a bounded claim about repository shape, the accepted commit currently
+named by the accepted ref, its raw-tree projection and snapshot, and current writable presentation.
+It MUST validate the applicable E601–E603 conditions at that current commit, but MUST NOT require
+dereferencing a parent object ID and makes no claim about an ancestor snapshot or transition.
+
+Managed-store conformance additionally covers the complete accepted history and the applicable
+rules of this annex. Every accepted snapshot and transition MUST also conform to the core. A
+managed-state result MUST NOT be described as managed-store conformance. A tool claim additionally
+covers each procedural role—managed writer or synchronizer—that it performs.
 
 ## 2. Repository identity and presentation
 
@@ -50,6 +56,9 @@ locking and compare-and-swap. A violation produces E601.
 
 A newly initialized repository MAY have an unborn symbolic `HEAD`; it is not yet accepted state.
 Its first accepted transaction MUST create a parentless commit with a conforming snapshot.
+A managed-state or managed-store conformance check against that unborn branch MUST emit E601
+because no accepted state exists. This does not prohibit using the admitted unborn branch as the
+explicitly empty base of its initialization transaction.
 
 ### 2.2 Logical projection
 
@@ -319,8 +328,10 @@ Managed findings E601–E603 are defined once in the
 [core Appendix B catalog](README.md#e6xx--managed-git-store). They use the
 store-root path `.`.
 
-Each audited accepted snapshot emits ordinary core findings at its logical
-paths. Historical transition auditing emits applicable E5xx findings for each
+Managed-state validation emits ordinary core findings for the current accepted
+snapshot at their logical paths, plus any applicable E601–E603 finding at the
+current commit. Complete managed-store auditing additionally emits snapshot
+findings for accepted ancestors and applicable E5xx findings for each
 parent/candidate pair. Repeated `(code, path)` identities are aggregated under
 core §9.1; optional non-normative detail MAY name affected object IDs.
 

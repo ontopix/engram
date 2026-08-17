@@ -12,10 +12,11 @@ import (
 )
 
 const (
-	operationStatus      = "status"
-	operationDiff        = "diff"
-	operationCheckStaged = "check-staged"
-	operationAudit       = "audit-accepted"
+	operationStatus             = "status"
+	operationDiff               = "diff"
+	operationCheckAcceptedState = "check-accepted-state"
+	operationCheckStaged        = "check-staged"
+	operationAudit              = "audit-accepted"
 )
 
 type operationInputs struct {

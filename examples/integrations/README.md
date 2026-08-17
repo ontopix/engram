@@ -24,8 +24,9 @@ All three keep the same boundaries:
 
 Codex and Claude Code projects may either attach an existing local store
 imperatively or commit an `engram.yaml` and let `engram setup` acquire missing
-verified stores under ignored `.memory/`. The runtime-facing registry remains
-`MEMORY.md` in both cases.
+current-state-validated stores under ignored `.memory/`. Add `--check-history`
+when setup must also audit the complete accepted lineage. The runtime-facing
+registry remains `MEMORY.md` in both cases.
 
 Start with a trusted engram source checkout and a managed store. To create the
 latter from the bundled snapshot:

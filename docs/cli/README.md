@@ -2,7 +2,7 @@
 
 **Version:** v1
 **Status:** Draft
-**Revision:** 2026-08-13
+**Revision:** 2026-08-18
 **Normative status:** Non-normative with respect to the engram standard
 
 This document defines the observable contract of the reference `engram`
@@ -277,9 +277,11 @@ A validation result is:
 }
 ```
 
-`target` is `snapshot`, `changeset`, or `managed-store`. `status` is
-`complete` or `indeterminate`; snapshots are always `complete`. Findings use
-the normative aggregation and ordering from
+`target` is `snapshot`, `changeset`, `managed-state`, or `managed-store`.
+`status` is `complete` or `indeterminate`; `complete` means that all inputs for
+the named target were evaluated, not that accepted history was checked for a
+different target. Snapshots are always `complete`. Findings use the normative
+aggregation and ordering from
 [core §9](../spec/README.md#9-validation).
 
 A Git state is:
@@ -409,10 +411,10 @@ flags do not change JSON shape.
 | Command | `result` members |
 |---|---|
 | `init` | `dry_run` boolean, `root` host path, `accepted` Git state, nullable `files` logical changes, `launcher` (`planned`, `installed`, `unchanged`), `validation` changeset result |
-| `clone` | `root` host path, `remote` string, `accepted` Git state, `published` and `reused` booleans, `verified_commits` integer, `launcher`, managed-store `validation`, root-to-tip `audits` |
+| `clone` | `root` host path, `remote` string, `accepted` Git state, `published` and `reused` booleans, `verified_commits` integer, `validation_scope` equal to `history`, `launcher`, managed-store `validation`, root-to-tip `audits` |
 | `attach` | `project`, `store`, `memory_file` host paths; `changed`; managed-store `validation`; root-to-tip `audits` |
 | `detach` | `project`, `store`, `memory_file` host paths; `changed` |
-| `setup` | `project`, nullable `config_file`, nullable `memory_dir`, `memory_file`, `entrypoint`, and `skills_dir` host paths; `harness`; `dry_run`; `changed`; ordered configured `attachments` with `name`, exact `url`, `store`, `action` (`clone`, `cloned`, `reuse`, `reused`, `rejected`), nullable managed-store `validation`, and root-to-tip `audits`; ordered `files` with project-relative `path` and `action` (`created`, `updated`) |
+| `setup` | `project`, nullable `config_file`, nullable `memory_dir`, `memory_file`, `entrypoint`, and `skills_dir` host paths; `harness`; `dry_run`; `changed`; ordered configured `attachments` with `name`, exact `url`, `store`, `action` (`clone`, `cloned`, `reuse`, `reused`, `rejected`), `validation_scope` (`current` or `history`), nullable validation for that scope, and root-to-tip `audits` only for `history`; ordered `files` with project-relative `path` and `action` (`created`, `updated`) |
 | `config.attachment.add`, `config.attachment.remove`, `config.harness`, `config.show` | `project` and `config_file` host paths; `changed`; `config` with integer `version`, optional `harness`, and ordered `attachments` containing exact `name` and `url` |
 | `status` | `mode` (`normal`, `pull-replay`), `accepted`, `candidate_base`, `staged`, `unstaged`, nullable `replay` |
 | `diff` | `from`, `to` state selectors, logical `changes`, and `stat` with `added`, `modified`, `deleted` counts |
@@ -610,7 +612,7 @@ project's attachment.
 ### 4.5 `setup`
 
 ```text
-engram setup [--harness HARNESS] [--project PATH] [--memory-file FILE] [--dry-run]
+engram setup [--harness HARNESS] [--project PATH] [--memory-file FILE] [--check-history] [--dry-run]
 ```
 
 Converges declarative project memories and installs a project-scoped agent
@@ -647,12 +649,18 @@ the established imperative form remains available through an explicit
 
 Declarative attachments materialize at `.memory/<name>`. Setup reserves that
 directory for manifest-owned stores and maintains a root `/.memory/` exclusion
-in `.gitignore`; a non-directory or symlink at that path is a conflict. A
-missing store is acquired through the same complete lineage audit, guarded
-publication, and recovery protocol as `clone`. An existing destination is
-network-silently reused only when its exact URL, upstream, accepted lineage,
-store identity, guard, presentation, and cache exclusion still match. Setup
-never fetches or pulls an existing store.
+in `.gitignore`; a non-directory or symlink at that path is a conflict. By
+default, a missing store is acquired through guarded publication and recovery
+after validating its current accepted managed state; an existing destination
+is network-silently reused only when its exact URL, upstream, current accepted
+state, store identity, guard, presentation, and cache exclusion still match.
+Setup never fetches or pulls an existing store.
+
+`--check-history` additionally requires a complete root-to-tip managed-store
+audit for every acquired or reused attachment. The default current-state check
+does not dereference accepted ancestors and makes no claim about their snapshots
+or transitions. Validation scope is independent of Git clone depth: setup does
+not implicitly make a shallow clone.
 
 Only attachments below `.memory/` are reconciled from the manifest. Existing
 imperative attachments outside that namespace are preserved. Removing a
@@ -663,9 +671,10 @@ therefore reuse it. Deleting orphaned clones is outside this command.
 Setup preflights the complete manifest, ignore file, attachment registry, and
 harness-owned paths before mutation. It writes the ignore rule before acquiring
 stores, acquires missing stores one at a time, and publishes the reconciled
-attachment block only after every desired store is definitively valid. A later
-failure may therefore leave a verified ignored clone for an idempotent retry,
-but never attaches an invalid or only partly acquired store.
+attachment block only after every desired store is definitively valid for the
+requested validation scope. A later failure may therefore leave a validated
+ignored clone for an idempotent retry, but never attaches a store that failed
+or only partly completed that validation.
 
 Setup verifies the complete canonical skill manifest embedded in the running
 binary, materializes every listed `SKILL.md`, records their trusted installed
@@ -790,6 +799,7 @@ semantics.
 ```text
 engram check [PATH]
 engram check --accepted
+engram check --history
 engram check --staged
 engram check --base BASE --candidate CANDIDATE
 ```
@@ -799,8 +809,11 @@ The forms are mutually exclusive:
 - `check [PATH]` validates one portable snapshot. An explicit path is resolved
   from the current directory and requires no Git. Without it, ordinary
   discovery or `--store` applies.
-- `--accepted` checks managed repository conformance and the complete accepted
-  lineage under the Git annex.
+- `--accepted` validates the current accepted managed state: repository shape,
+  the raw tip projection and snapshot, and current presentation. It does not
+  dereference parent object IDs or claim that accepted history conforms.
+- `--history` audits complete managed-store conformance root to tip under the
+  Git annex.
 - `--staged` evaluates accepted `HEAD` against the index-declared initial
   candidate without running preparation hooks. Unstaged bytes do not affect it.
 - `--base` and `--candidate` together evaluate two explicit snapshot

@@ -133,7 +133,7 @@ func TestCheckSnapshotPairCompleteAndIndeterminate(t *testing.T) {
 }
 
 func TestCheckManagedFormsAreTypedCapabilities(t *testing.T) {
-	for _, option := range []string{"--accepted", "--staged"} {
+	for _, option := range []string{"--accepted", "--history", "--staged"} {
 		envelope := runJSON(t, context.Background(), "check", option, "--format", "json")
 		assertEnvelope(t, envelope, "check", cli.OutcomeError, 2)
 		if envelope.Error == nil || envelope.Error.Kind != cli.ErrorCapability {

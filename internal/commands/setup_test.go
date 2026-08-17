@@ -60,6 +60,11 @@ func TestSetupFromManifestClonesReusesAndDetaches(t *testing.T) {
 	if len(attachments) != 1 || attachments[0].(map[string]any)["action"] != "cloned" {
 		t.Fatalf("first attachments=%#v", attachments)
 	}
+	firstAttachment := attachments[0].(map[string]any)
+	assertExactKeys(t, firstAttachment, "name", "url", "store", "action", "validation_scope", "validation", "audits")
+	if firstAttachment["validation_scope"] != "current" || firstAttachment["validation"].(map[string]any)["target"] != "managed-state" || len(firstAttachment["audits"].([]any)) != 0 {
+		t.Fatalf("first attachment validation=%#v", firstAttachment)
+	}
 	for _, name := range []string{".gitignore", "MEMORY.md", "AGENTS.md", filepath.Join(".agents", "skills", "using-engram", "SKILL.md"), filepath.Join(".memory", "primary", "README.md")} {
 		if _, err := os.Stat(filepath.Join(project, name)); err != nil {
 			t.Fatalf("setup did not materialize %s: %v", name, err)
@@ -69,12 +74,16 @@ func TestSetupFromManifestClonesReusesAndDetaches(t *testing.T) {
 	if err := os.Rename(remote, remote+".offline"); err != nil {
 		t.Fatal(err)
 	}
-	second := runSetupAppJSON(t, app, "setup", "--project", project, "--format", "json")
+	second := runSetupAppJSON(t, app, "setup", "--project", project, "--check-history", "--format", "json")
 	assertEnvelope(t, second, "setup", cli.OutcomeOK, 0)
 	secondResult := decodeObject(t, second.Result)
 	attachments = secondResult["attachments"].([]any)
 	if secondResult["changed"] != false || len(attachments) != 1 || attachments[0].(map[string]any)["action"] != "reused" {
 		t.Fatalf("second result=%#v", secondResult)
+	}
+	secondAttachment := attachments[0].(map[string]any)
+	if secondAttachment["validation_scope"] != "history" || secondAttachment["validation"].(map[string]any)["target"] != "managed-store" || len(secondAttachment["audits"].([]any)) == 0 {
+		t.Fatalf("second attachment validation=%#v", secondAttachment)
 	}
 
 	if err := os.WriteFile(filepath.Join(project, "engram.yaml"), []byte("version: 1\nharness: codex\nattachments: []\n"), 0o644); err != nil {

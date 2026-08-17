@@ -124,10 +124,12 @@ engram setup
 ```
 
 Setup adds the root `.memory/` exclusion to `.gitignore`, acquires missing
-stores at `.memory/<name>`, audits them before publication, reconciles
-`MEMORY.md`, installs the embedded canonical skills, and points `AGENTS.md` or
-`CLAUDE.md` at the registry. A command-line `--harness codex|claude-code`
-overrides the manifest for that invocation without editing it.
+stores at `.memory/<name>`, validates their current accepted state before
+publication, reconciles `MEMORY.md`, installs the embedded canonical skills,
+and points `AGENTS.md` or `CLAUDE.md` at the registry. Add `--check-history` to
+require a complete root-to-tip audit. A command-line
+`--harness codex|claude-code` overrides the manifest for that invocation
+without editing it.
 
 Repeating setup verifies and reuses an exact existing clone without fetching.
 Use `engram pull` explicitly inside a selected store when synchronization is
@@ -251,7 +253,7 @@ should normally be re-established rather than copied to another host.
 After restore or physical relocation:
 
 1. run `engram doctor`;
-2. audit with `engram check --accepted`;
+2. audit with `engram check --history`;
 3. inspect and re-authorize the exact hook set if execution is desired; and
 4. verify remote URL/upstream configuration before pull or push.
 

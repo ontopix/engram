@@ -1,7 +1,7 @@
 # engram reference CLI — implementation plan
 
 **Status:** Implemented; release-ready `v1.0.0-rc.1` baseline
-**Revision:** 2026-08-13
+**Revision:** 2026-08-18
 **Normative status:** Non-normative
 
 This plan records how the v1 specification was implemented as the reference
@@ -152,10 +152,11 @@ cannot crash or escape/prune-follow.
 **Depends on:** M1 snapshots and the M0 Git object proof.
 
 **Deliver:** deterministic snapshot differences; transition rules and
-complete/indeterminate status; raw Git discovery/projection; accepted-lineage
-audit; read-only `status`, `diff`, `log`, `check --accepted`, `check --staged`,
-and explicit snapshot-pair checking; safe in-process audit reuse keyed by exact
-tip and normative rule-set identity.
+complete/indeterminate status; raw Git discovery/projection; bounded accepted
+state validation; accepted-lineage audit; read-only `status`, `diff`, `log`,
+`check --accepted`, `check --history`, `check --staged`, and explicit
+snapshot-pair checking; safe in-process audit reuse keyed by exact tip and
+normative rule-set identity.
 
 **Gate:** managed fixtures cover both object formats, root and linear history,
 linked worktrees, merge/malformed boundaries, unavailable objects without

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -83,13 +84,19 @@ func TestRunConvergesReusesAndDetachesWithoutDeleting(t *testing.T) {
 	reuseCount := 0
 	clone := func(_ context.Context, _ string, options acquire.Options) (acquire.Result, error) {
 		cloneCount++
+		if options.ValidationScope != acquire.ValidationScopeCurrent {
+			return acquire.Result{}, fmt.Errorf("clone validation scope = %q", options.ValidationScope)
+		}
 		if err := os.Mkdir(options.Destination, 0o755); err != nil {
 			return acquire.Result{}, err
 		}
 		return validAcquisition(options.Destination, true), nil
 	}
-	reuse := func(_ context.Context, _ string, destination string) (acquire.Result, error) {
+	reuse := func(_ context.Context, _ string, destination string, options acquire.Options) (acquire.Result, error) {
 		reuseCount++
+		if options.ValidationScope != acquire.ValidationScopeCurrent {
+			return acquire.Result{}, fmt.Errorf("reuse validation scope = %q", options.ValidationScope)
+		}
 		return validAcquisition(destination, false), nil
 	}
 	first, err := Run(context.Background(), Options{Project: project, AcquireClone: clone, AcquireReuse: reuse})
@@ -133,6 +140,37 @@ func TestRunConvergesReusesAndDetachesWithoutDeleting(t *testing.T) {
 	}
 }
 
+func TestRunPropagatesHistoryValidationScope(t *testing.T) {
+	project := t.TempDir()
+	writeConfig(t, project, "version: 1\nharness: codex\nattachments:\n  - name: primary\n    url: git@example.test:memory.git\n")
+	cloneCalled := false
+	result, err := Run(context.Background(), Options{
+		Project: project, ValidationScope: acquire.ValidationScopeHistory,
+		AcquireClone: func(_ context.Context, _ string, options acquire.Options) (acquire.Result, error) {
+			cloneCalled = true
+			if options.ValidationScope != acquire.ValidationScopeHistory {
+				return acquire.Result{}, fmt.Errorf("clone validation scope = %q", options.ValidationScope)
+			}
+			if err := os.Mkdir(options.Destination, 0o755); err != nil {
+				return acquire.Result{}, err
+			}
+			return acquire.Result{
+				Root: options.Destination, Published: true,
+				ValidationScope: acquire.ValidationScopeHistory,
+				Validation:      checker.Result{Target: checker.TargetManagedStore, Status: checker.StatusComplete, Findings: []checker.Finding{}},
+				Audits:          []managedread.HistoryAudit{},
+			}, nil
+		},
+	})
+	if err != nil || !cloneCalled || len(result.Attachments) != 1 {
+		t.Fatalf("result = %#v, clone=%v, error=%v", result, cloneCalled, err)
+	}
+	attachment := result.Attachments[0]
+	if attachment.ValidationScope != acquire.ValidationScopeHistory || attachment.Validation == nil || attachment.Validation.Target != checker.TargetManagedStore {
+		t.Fatalf("attachment = %#v", attachment)
+	}
+}
+
 func TestRunHarnessOptionOverridesManifest(t *testing.T) {
 	project := t.TempDir()
 	writeConfig(t, project, "version: 1\nharness: claude-code\nattachments: []\n")
@@ -167,8 +205,9 @@ func writeConfig(t *testing.T, project, data string) {
 func validAcquisition(root string, published bool) acquire.Result {
 	return acquire.Result{
 		Root: root, Published: published, Reused: !published,
-		Validation: checker.Result{Target: checker.TargetManagedStore, Status: checker.StatusComplete, Findings: []checker.Finding{}},
-		Audits:     []managedread.HistoryAudit{},
+		ValidationScope: acquire.ValidationScopeCurrent,
+		Validation:      checker.Result{Target: checker.TargetManagedState, Status: checker.StatusComplete, Findings: []checker.Finding{}},
+		Audits:          []managedread.HistoryAudit{},
 	}
 }
 
