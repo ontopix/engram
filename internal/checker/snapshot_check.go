@@ -12,6 +12,7 @@ import (
 	"github.com/ontopix/engram/internal/documentprofile"
 	"github.com/ontopix/engram/internal/schemaprofile"
 	"github.com/ontopix/engram/internal/snapshot"
+	"github.com/ontopix/engram/internal/typeref"
 	"github.com/ontopix/engram/internal/yamlprofile"
 )
 
@@ -33,6 +34,7 @@ func CheckSource(source snapshot.Source) (*Snapshot, error) {
 	}
 	analysis := &snapshotAnalysis{
 		tree:      tree,
+		families:  schemaFamilies(tree),
 		findings:  make(findingSet),
 		validText: make(map[string]bool),
 		records:   make(map[string]*Record),
@@ -43,10 +45,11 @@ func CheckSource(source snapshot.Source) (*Snapshot, error) {
 		return nil, err
 	}
 	result := Result{Target: TargetSnapshot, Status: StatusComplete, Findings: analysis.findings.sorted()}
-	return &Snapshot{Tree: tree, Validation: result, Records: analysis.records, Maps: analysis.maps, Schemas: analysis.schemas}, nil
+	return &Snapshot{Tree: tree, Validation: result, Records: analysis.records, Maps: analysis.maps, Schemas: analysis.schemas, families: analysis.families}, nil
 }
 
 type snapshotAnalysis struct {
+	families  map[string]map[string]struct{}
 	tree      *snapshot.Tree
 	findings  findingSet
 	validText map[string]bool
@@ -210,10 +213,12 @@ func (a *snapshotAnalysis) parseRecord(file snapshot.File) {
 	}
 	if value, err := documentprofile.RequiredString(document.YAML.Root, "type"); err != nil {
 		a.findings.add("E202", file.Path, err.Error())
-	} else if !documentprofile.ValidTypeSlug(value) {
-		a.findings.add("E203", file.Path, "type is outside the v1 slug grammar")
+	} else if !typeref.Valid(value) {
+		a.findings.add("E203", file.Path, "type must be an exact name@vN reference")
 	} else {
 		record.Type = value
+		ref, _ := typeref.Parse(value)
+		record.LogicalType, record.SchemaVersion = ref.Name, ref.Version
 	}
 	if description, err := documentprofile.Description(document.YAML.Root); err != nil {
 		a.findings.add("E204", file.Path, err.Error())
@@ -256,8 +261,9 @@ func (a *snapshotAnalysis) parseSchema(file snapshot.File) {
 		a.findings.add("E303", file.Path, "unknown schema-file frontmatter key")
 		valid = false
 	}
-	typeName, err := documentprofile.Type(root)
-	if err != nil || typeName != strings.TrimSuffix(path.Base(file.Path), ".md") {
+	fileRef, _ := typeref.Filename(path.Base(file.Path))
+	typeName, err := documentprofile.SchemaType(root)
+	if err != nil || typeName != fileRef.Name {
 		a.findings.add("E303", file.Path, "invalid or mismatched schema type")
 		valid = false
 	} else {
@@ -269,6 +275,12 @@ func (a *snapshotAnalysis) parseSchema(file snapshot.File) {
 		valid = false
 	} else {
 		definition.Version = version.Number
+		filenameVersion, _ := yamlprofile.Parse([]byte("version: " + fileRef.Version + "\n"))
+		expected, _ := filenameVersion.Root.Lookup("version")
+		if version.Number.Cmp(expected.Number) != 0 {
+			a.findings.add("E303", file.Path, "schema version differs from filename")
+			valid = false
+		}
 	}
 	if description, err := documentprofile.Description(root); err != nil {
 		a.findings.add("E303", file.Path, err.Error())
@@ -282,6 +294,11 @@ func (a *snapshotAnalysis) parseSchema(file snapshot.File) {
 		valid = false
 	} else {
 		definition.RawSchema, _ = schemaNode.JSONValue().(map[string]any)
+		properties, _ := definition.RawSchema["properties"].(map[string]any)
+		if !mapExactly(properties["type"], map[string]any{"const": fileRef.String()}) {
+			a.findings.add("E303", file.Path, "schema requires exact direct type constant matching filename")
+			valid = false
+		}
 	}
 	if bodyNode, exists := root.Lookup("body"); exists {
 		definition.RawBody = bodyNode.JSONValue()
@@ -338,19 +355,18 @@ func (a *snapshotAnalysis) compileSchemas() {
 }
 
 func (a *snapshotAnalysis) checkShadowing() {
-	for name, file := range a.tree.Files {
-		if file.Role != snapshot.RoleSchema {
+	for name := range a.tree.Boundaries {
+		ref, ok := typeref.Filename(path.Base(name))
+		if !ok || path.Base(path.Dir(name)) != "schemas" || path.Base(path.Dir(path.Dir(name))) != ".engram" {
 			continue
 		}
 		scope := schemaScope(name)
 		if scope == "." {
 			continue
 		}
-		filename := path.Base(name)
 		for ancestor := parentScope(scope); ; ancestor = parentScope(ancestor) {
-			candidate := joinScope(ancestor, ".engram/schemas/"+filename)
-			if file, ok := a.tree.Files[candidate]; ok && file.Role == snapshot.RoleSchema {
-				a.findings.add("E304", name, "schema type shadows an ancestor definition")
+			if _, exists := a.families[joinScope(ancestor, ".engram/schemas")][ref.Name]; exists {
+				a.findings.add("E304", name, "schema family shadows an ancestor family")
 				break
 			}
 			if ancestor == "." {
@@ -366,12 +382,18 @@ func (a *snapshotAnalysis) resolveRecords() {
 		if record.Type == "" {
 			continue
 		}
-		definition, found, available := a.resolveSchema(path.Dir(name), record.Type)
-		if !found && available {
-			a.findings.add("E203", name, "type resolves to no visible schema")
+		selected, family, available := resolveSchemaPath(a.tree, a.families, path.Dir(name), record.Type)
+		definition, found := a.schemas[selected]
+		_, boundary := a.tree.Boundaries[selected]
+		if !boundary && available {
+			code := "E203"
+			if family {
+				code = "E310"
+			}
+			a.findings.add(code, name, "type resolves to no exact schema revision")
 			continue
 		}
-		if !available || definition == nil {
+		if !available || !found || definition == nil {
 			continue
 		}
 		record.SchemaPath = definition.Path
@@ -386,37 +408,16 @@ func (a *snapshotAnalysis) resolveRecords() {
 	}
 }
 
-func (a *snapshotAnalysis) resolveSchema(directory, typeName string) (*Schema, bool, bool) {
-	for scope := directory; ; scope = parentScope(scope) {
-		config := joinScope(scope, ".engram")
-		if kind, exists := a.tree.Boundaries[config]; exists {
-			if kind != snapshot.KindDirectory {
-				return nil, false, false
-			}
-			schemaDirectory := joinScope(scope, ".engram/schemas")
-			if schemaKind, exists := a.tree.Boundaries[schemaDirectory]; exists {
-				if schemaKind != snapshot.KindDirectory {
-					return nil, false, false
-				}
-				candidate := joinScope(scope, ".engram/schemas/"+typeName+".md")
-				if _, exists := a.tree.Boundaries[candidate]; exists {
-					definition, parsed := a.schemas[candidate]
-					return definition, true, parsed
-				}
-			}
-		}
-		if scope == "." {
-			break
-		}
-	}
-	return nil, false, true
-}
-
 func (a *snapshotAnalysis) checkNoteBaseline() {
-	const notePath = ".engram/schemas/note.md"
-	definition, exists := a.schemas[notePath]
-	if !exists || !definition.SchemaValid || !noteBaseline(definition) {
-		a.findings.add("E307", notePath, "root note schema does not satisfy the baseline normal form")
+	const notePath = ".engram/schemas/note@v1.md"
+	if definition, exists := a.schemas[notePath]; !exists || !definition.SchemaValid || !noteBaseline(definition) {
+		a.findings.add("E307", notePath, "root note baseline unavailable")
+	}
+	for name, definition := range a.schemas {
+		ref, _ := typeref.Filename(path.Base(name))
+		if ref.Name == "note" && (!definition.SchemaValid || !noteBaseline(definition)) {
+			a.findings.add("E307", name, "note revision violates baseline normal form")
+		}
 	}
 }
 
@@ -581,7 +582,7 @@ func noteBaseline(definition *Schema) bool {
 	if !ok {
 		return false
 	}
-	if !mapExactly(properties["type"], map[string]any{"const": "note"}) ||
+	if !mapExactly(properties["type"], map[string]any{"const": strings.TrimSuffix(path.Base(definition.Path), ".md")}) ||
 		!mapExactly(properties["description"], map[string]any{"type": "string", "minLength": integerJSON(1), "maxLength": integerJSON(200)}) ||
 		!mapExactly(properties["pinned"], map[string]any{"type": "boolean"}) {
 		return false

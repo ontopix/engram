@@ -5,7 +5,7 @@ description: "Schema carrying an unassigned reserved engram keyword."
 schema:
   type: object
   properties:
-    type: {const: unknown-extension}
+    type: {const: unknown-extension@v1}
     description: {type: string, minLength: 1, maxLength: 200}
   x-engram-computed: true
 ---

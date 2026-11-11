@@ -17,7 +17,7 @@
         "operations": [
           {
             "operation": "write_text",
-            "path": ".engram/schemas/dated-event.md",
+            "path": ".engram/schemas/dated-event@v1.md",
             "source": "testdata/conformance/files/date-schema.md"
           },
           {
@@ -130,14 +130,14 @@
         "operations": [
           {
             "operation": "write_text",
-            "path": ".engram/schemas/unknown-extension.md",
+            "path": ".engram/schemas/unknown-extension@v1.md",
             "source": "testdata/conformance/files/unknown-x-engram-schema.md"
           }
         ]
       },
       "expected": {
         "findings": [
-          {"code": "E303", "path": ".engram/schemas/unknown-extension.md"}
+          {"code": "E303", "path": ".engram/schemas/unknown-extension@v1.md"}
         ]
       }
     },
@@ -149,14 +149,14 @@
         "operations": [
           {
             "operation": "write_text",
-            "path": ".engram/schemas/note.md",
+            "path": ".engram/schemas/note@v1.md",
             "source": "testdata/conformance/files/note-minlength-50.md"
           }
         ]
       },
       "expected": {
         "findings": [
-          {"code": "E307", "path": ".engram/schemas/note.md"}
+          {"code": "E307", "path": ".engram/schemas/note@v1.md"}
         ]
       }
     },
@@ -213,7 +213,7 @@
         "operations": [
           {
             "operation": "write_text",
-            "path": ".engram/schemas/fixed.md",
+            "path": ".engram/schemas/fixed@v1.md",
             "source": "testdata/conformance/files/immutable-schema.md"
           },
           {
@@ -227,7 +227,7 @@
         "operations": [
           {
             "operation": "write_text",
-            "path": ".engram/schemas/fixed.md",
+            "path": ".engram/schemas/fixed@v1.md",
             "source": "testdata/conformance/files/immutable-schema.md"
           }
         ]
@@ -247,7 +247,7 @@
         "operations": [
           {
             "operation": "write_text",
-            "path": ".engram/schemas/append-log.md",
+            "path": ".engram/schemas/append-log@v1.md",
             "source": "testdata/conformance/files/append-only-schema.md"
           },
           {
@@ -261,7 +261,7 @@
         "operations": [
           {
             "operation": "write_text",
-            "path": ".engram/schemas/append-log.md",
+            "path": ".engram/schemas/append-log@v1.md",
             "source": "testdata/conformance/files/append-only-schema.md"
           },
           {
@@ -309,7 +309,7 @@
         "operations": [
           {
             "operation": "write_text",
-            "path": ".engram/schemas/evolving.md",
+            "path": ".engram/schemas/evolving@v1.md",
             "source": "testdata/conformance/files/invalid-record.md"
           }
         ]
@@ -318,7 +318,7 @@
         "operations": [
           {
             "operation": "write_text",
-            "path": ".engram/schemas/evolving.md",
+            "path": ".engram/schemas/evolving@v1.md",
             "source": "testdata/conformance/files/schema-version-candidate.md"
           }
         ]
@@ -326,7 +326,7 @@
       "expected": {
         "status": "indeterminate",
         "findings": [
-          {"code": "E303", "path": ".engram/schemas/evolving.md"}
+          {"code": "E303", "path": ".engram/schemas/evolving@v1.md"}
         ]
       }
     },
@@ -338,7 +338,7 @@
         "operations": [
           {
             "operation": "write_text",
-            "path": ".engram/schemas/fixed.md",
+            "path": ".engram/schemas/fixed@v1.md",
             "source": "testdata/conformance/files/invalid-record.md"
           },
           {
@@ -354,7 +354,8 @@
       "expected": {
         "status": "indeterminate",
         "findings": [
-          {"code": "E303", "path": ".engram/schemas/fixed.md"}
+          {"code": "E303", "path": ".engram/schemas/fixed@v1.md"},
+          {"code": "E505", "path": ".engram/schemas/fixed@v1.md"}
         ]
       }
     },
@@ -383,7 +384,10 @@
       "expected": {
         "status": "complete",
         "findings": [],
-        "not_findings": ["E204", "E301"]
+        "not_findings": [
+          "E204",
+          "E301"
+        ]
       }
     },
     {
@@ -476,7 +480,7 @@
         "operations": [
           {
             "operation": "write_text",
-            "path": "cafe\u0301.md",
+            "path": "café.md",
             "source": "testdata/conformance/files/nfd-record.md"
           }
         ]
@@ -500,7 +504,7 @@
           },
           {
             "operation": "write_text",
-            "path": "stra\u00dfe.md",
+            "path": "straße.md",
             "source": "testdata/conformance/files/casefold-sharp-s.md"
           }
         ]
@@ -509,7 +513,7 @@
         "findings": [
           {"code": "E106", "path": "."},
           {"code": "W901", "path": "STRASSE.md"},
-          {"code": "W901", "path": "stra\u00dfe.md"}
+          {"code": "W901", "path": "straße.md"}
         ]
       }
     },
@@ -835,7 +839,7 @@
         "operations": [
           {
             "operation": "write_text",
-            "path": ".engram/schemas/loose.md",
+            "path": ".engram/schemas/loose@v1.md",
             "source": "testdata/conformance/files/loose-schema.md"
           },
           {
@@ -859,7 +863,7 @@
         "operations": [
           {
             "operation": "write_text",
-            "path": ".engram/schemas/decision.md",
+            "path": ".engram/schemas/decision@v1.md",
             "source": "testdata/conformance/files/required-section-schema.md"
           },
           {
@@ -888,14 +892,14 @@
           },
           {
             "operation": "write_text",
-            "path": "area/.engram/schemas/note.md",
-            "source": "examples/minimal/.engram/schemas/note.md"
+            "path": "area/.engram/schemas/note@v1.md",
+            "source": "examples/minimal/.engram/schemas/note@v1.md"
           }
         ]
       },
       "expected": {
         "findings": [
-          {"code": "E304", "path": "area/.engram/schemas/note.md"}
+          {"code": "E304", "path": "area/.engram/schemas/note@v1.md"}
         ]
       }
     },
@@ -912,15 +916,15 @@
           },
           {
             "operation": "write_text",
-            "path": "area/.engram/schemas/note.md",
+            "path": "area/.engram/schemas/note@v1.md",
             "source": "testdata/conformance/files/invalid-record.md"
           }
         ]
       },
       "expected": {
         "findings": [
-          {"code": "E303", "path": "area/.engram/schemas/note.md"},
-          {"code": "E304", "path": "area/.engram/schemas/note.md"}
+          {"code": "E303", "path": "area/.engram/schemas/note@v1.md"},
+          {"code": "E304", "path": "area/.engram/schemas/note@v1.md"}
         ]
       }
     },
@@ -937,15 +941,15 @@
           },
           {
             "operation": "write_base64",
-            "path": "area/.engram/schemas/note.md",
+            "path": "area/.engram/schemas/note@v1.md",
             "content": "/w=="
           }
         ]
       },
       "expected": {
         "findings": [
-          {"code": "E108", "path": "area/.engram/schemas/note.md"},
-          {"code": "E304", "path": "area/.engram/schemas/note.md"}
+          {"code": "E108", "path": "area/.engram/schemas/note@v1.md"},
+          {"code": "E304", "path": "area/.engram/schemas/note@v1.md"}
         ]
       }
     },
@@ -962,16 +966,18 @@
           },
           {
             "operation": "write_text",
-            "path": "area/.engram/schemas/broken.md",
+            "path": "area/.engram/schemas/broken@v1.md",
             "source": "testdata/conformance/files/invalid-record.md"
           }
         ]
       },
       "expected": {
         "findings": [
-          {"code": "E303", "path": "area/.engram/schemas/broken.md"}
+          {"code": "E303", "path": "area/.engram/schemas/broken@v1.md"}
         ],
-        "not_findings": ["E304"]
+        "not_findings": [
+          "E304"
+        ]
       }
     },
     {
@@ -982,14 +988,14 @@
         "operations": [
           {
             "operation": "write_text",
-            "path": ".engram/schemas/closed.md",
+            "path": ".engram/schemas/closed@v1.md",
             "source": "testdata/conformance/files/closed-schema.md"
           }
         ]
       },
       "expected": {
         "findings": [
-          {"code": "E305", "path": ".engram/schemas/closed.md"}
+          {"code": "E305", "path": ".engram/schemas/closed@v1.md"}
         ]
       }
     },
@@ -1001,14 +1007,14 @@
         "operations": [
           {
             "operation": "write_text",
-            "path": ".engram/schemas/conflicted.md",
+            "path": ".engram/schemas/conflicted@v1.md",
             "source": "testdata/conformance/files/conflicting-policy-schema.md"
           }
         ]
       },
       "expected": {
         "findings": [
-          {"code": "E306", "path": ".engram/schemas/conflicted.md"}
+          {"code": "E306", "path": ".engram/schemas/conflicted@v1.md"}
         ]
       }
     },
@@ -1094,7 +1100,7 @@
         "operations": [
           {
             "operation": "write_text",
-            "path": ".engram/schemas/typed-link.md",
+            "path": ".engram/schemas/typed-link@v1.md",
             "source": "testdata/conformance/files/typed-link-schema.md"
           },
           {
@@ -1171,13 +1177,13 @@
     },
     {
       "id": "schema-version-not-increased",
-      "description": "Changing a schema assertion without a strict version increase produces E504.",
+      "description": "Published semantic components cannot be changed in place.",
       "kind": "changeset",
       "base": {
         "operations": [
           {
             "operation": "write_text",
-            "path": ".engram/schemas/evolving.md",
+            "path": ".engram/schemas/evolving@v1.md",
             "source": "testdata/conformance/files/schema-version-base.md"
           }
         ]
@@ -1186,7 +1192,7 @@
         "operations": [
           {
             "operation": "write_text",
-            "path": ".engram/schemas/evolving.md",
+            "path": ".engram/schemas/evolving@v1.md",
             "source": "testdata/conformance/files/schema-version-candidate.md"
           }
         ]
@@ -1194,7 +1200,7 @@
       "expected": {
         "status": "complete",
         "findings": [
-          {"code": "E504", "path": ".engram/schemas/evolving.md"}
+          {"code": "E504", "path": ".engram/schemas/evolving@v1.md"}
         ]
       }
     },
@@ -1282,14 +1288,14 @@
         "operations": [
           {
             "operation": "write_text",
-            "path": ".engram/schemas/vendor.md",
+            "path": ".engram/schemas/vendor@v1.md",
             "source": "testdata/conformance/files/vendor-schema.md"
           }
         ]
       },
       "expected": {
         "findings": [
-          {"code": "W904", "path": ".engram/schemas/vendor.md"}
+          {"code": "W904", "path": ".engram/schemas/vendor@v1.md"}
         ]
       }
     },
@@ -1302,7 +1308,117 @@
       },
       "expected": {
         "findings": [],
-        "not_findings": ["W902"]
+        "not_findings": [
+          "W902"
+        ]
+      }
+    },
+    {
+      "id": "schema-revision-unavailable",
+      "description": "Exact references never fall back to another revision.",
+      "kind": "snapshot",
+      "snapshot": {
+        "operations": [
+          {
+            "operation": "write_text",
+            "path": "missing-revision.md",
+            "source": "testdata/conformance/files/missing-schema-revision.md"
+          }
+        ]
+      },
+      "expected": {
+        "findings": [
+          {"code": "E310", "path": "missing-revision.md"}
+        ]
+      }
+    },
+    {
+      "id": "schema-revision-retained",
+      "description": "Published definitions cannot be removed.",
+      "kind": "changeset",
+      "base": {
+        "operations": [
+          {
+            "operation": "write_text",
+            "path": ".engram/schemas/evolving@v1.md",
+            "source": "testdata/conformance/files/schema-version-base.md"
+          }
+        ]
+      },
+      "candidate": {
+        "operations": []
+      },
+      "expected": {
+        "status": "complete",
+        "findings": [
+          {"code": "E505", "path": ".engram/schemas/evolving@v1.md"}
+        ]
+      }
+    },
+    {
+      "id": "schema-revision-order",
+      "description": "New revisions exceed the published maximum.",
+      "kind": "changeset",
+      "base": {
+        "operations": [
+          {
+            "operation": "write_text",
+            "path": ".engram/schemas/evolving@v3.md",
+            "source": "testdata/conformance/files/schema-version-3.md"
+          }
+        ]
+      },
+      "candidate": {
+        "operations": [
+          {
+            "operation": "write_text",
+            "path": ".engram/schemas/evolving@v2.md",
+            "source": "testdata/conformance/files/schema-version-2.md"
+          },
+          {
+            "operation": "write_text",
+            "path": ".engram/schemas/evolving@v3.md",
+            "source": "testdata/conformance/files/schema-version-3.md"
+          }
+        ]
+      },
+      "expected": {
+        "status": "complete",
+        "findings": [
+          {"code": "E506", "path": ".engram/schemas/evolving@v2.md"}
+        ]
+      }
+    },
+    {
+      "id": "schema-revision-publication",
+      "description": "A newer definition coexists with the retained original.",
+      "kind": "changeset",
+      "base": {
+        "operations": [
+          {
+            "operation": "write_text",
+            "path": ".engram/schemas/evolving@v1.md",
+            "source": "testdata/conformance/files/schema-version-base.md"
+          }
+        ]
+      },
+      "candidate": {
+        "operations": [
+          {
+            "operation": "write_text",
+            "path": ".engram/schemas/evolving@v1.md",
+            "source": "testdata/conformance/files/schema-version-base.md"
+          },
+          {
+            "operation": "write_text",
+            "path": ".engram/schemas/evolving@v2.md",
+            "source": "testdata/conformance/files/schema-version-2.md"
+          }
+        ]
+      },
+      "expected": {
+        "status": "complete",
+        "findings": []
       }
     }
   ]

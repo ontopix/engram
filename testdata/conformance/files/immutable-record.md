@@ -1,5 +1,5 @@
 ---
-type: fixed
+type: fixed@v1
 description: "Immutable transition fixture record."
 ---
 # Fixed

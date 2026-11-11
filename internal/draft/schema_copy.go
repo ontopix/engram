@@ -1,15 +1,16 @@
 package draft
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"path"
 	"sort"
+	"strings"
 
 	"github.com/ontopix/engram/internal/checker"
 	"github.com/ontopix/engram/internal/snapshot"
+	"github.com/ontopix/engram/internal/typeref"
 	"github.com/ontopix/engram/schemas"
 )
 
@@ -18,7 +19,7 @@ import (
 // only the final scope-local .engram/schemas configuration chain.
 func PlanSchemaCopy(ctx context.Context, root, typeName string, options SchemaCopyOptions) (*Plan, SchemaCopyResult, error) {
 	const operation = "schema.copy"
-	if !snapshot.ValidTypeSlug(typeName) {
+	if !typeref.Valid(typeName) {
 		return nil, SchemaCopyResult{}, typed(ErrorUsage, operation, "", fmt.Errorf("invalid schema type %q", typeName))
 	}
 	if options.ScopeProvided && options.Scope == "" {
@@ -171,7 +172,7 @@ func inventoryEntry(typeName string) (schemas.Entry, error) {
 		return schemas.Entry{}, typed(ErrorInternal, "schema.copy", "", fmt.Errorf("load embedded schema inventory: %w", err))
 	}
 	for _, entry := range entries {
-		if entry.Type == typeName {
+		if fmt.Sprintf("%s@v%d", entry.Type, entry.Version) == typeName {
 			return entry, nil
 		}
 	}
@@ -179,30 +180,23 @@ func inventoryEntry(typeName string) (schemas.Entry, error) {
 }
 
 func schemaNameConflict(tree *snapshot.Tree, scope, typeName, destination string) string {
-	filename := typeName + ".md"
-	for ancestor := scope; ; ancestor = parentLogical(ancestor) {
-		candidate := joinLogical(joinLogical(ancestor, ".engram/schemas"), filename)
-		if candidate != destination {
-			if _, exists := tree.Boundaries[candidate]; exists {
-				return candidate
-			}
-		}
-		if ancestor == "." {
-			break
-		}
-	}
-	candidates := make([]string, 0)
+	ref, _ := typeref.Parse(typeName)
+	candidates := []string{}
 	for candidate := range tree.Boundaries {
-		if path.Base(candidate) != filename || candidate == destination {
+		r, ok := typeref.Filename(path.Base(candidate))
+		if !ok || r.Name != ref.Name || candidate == destination || path.Base(path.Dir(candidate)) != "schemas" || path.Base(path.Dir(path.Dir(candidate))) != ".engram" {
 			continue
 		}
-		candidateScope := path.Dir(path.Dir(path.Dir(candidate)))
-		if scope == "." || candidateScope != scope && len(candidateScope) > len(scope) && candidateScope[:len(scope)] == scope && candidateScope[len(scope)] == '/' {
+		owner := path.Dir(path.Dir(path.Dir(candidate)))
+		if owner == scope {
+			continue
+		}
+		if owner == "." || scope == "." || strings.HasPrefix(scope, owner+"/") || strings.HasPrefix(owner, scope+"/") {
 			candidates = append(candidates, candidate)
 		}
 	}
-	sort.Slice(candidates, func(i, j int) bool { return bytes.Compare([]byte(candidates[i]), []byte(candidates[j])) < 0 })
-	if len(candidates) != 0 {
+	sort.Strings(candidates)
+	if len(candidates) > 0 {
 		return candidates[0]
 	}
 	return ""

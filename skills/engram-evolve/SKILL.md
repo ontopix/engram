@@ -1,6 +1,6 @@
 ---
 name: engram-evolve
-description: Add, change, narrow, or deprecate an engram record type or schema. Use for schema evolution that must choose scope, avoid shadowing, bump versions, migrate affected records in the same candidate, and preserve local explanatory guidance.
+description: Publish a new engram schema revision, preserve existing contracts, and explicitly migrate eligible records under their base policies.
 ---
 
 # Evolve engram schemas
@@ -35,14 +35,20 @@ apply using-engram before this workflow.
 
 ## Evolve the schema
 
-1. Enter the target area through its maps and pinned context. Keep schema edits
-   and record migration in the same candidate.
-2. Classify the change. Bump version even for widening. For narrowing, also
-   migrate every affected record. Enumerate records by resolved type before
-   editing.
-3. Define a new type at the deepest directory covering every intended use,
-   avoid shadowing, and update placement guidance so writers can find it.
-4. Deprecate a type by removing placement guidance and migrating or closing
-   remaining records. Remove the schema only when no record resolves to it.
-5. Treat a copied curated schema as local once installed. Evolve its version,
-   records, and explanatory prose like any other local schema.
+1. Enter through maps and pinned context. Resolve the logical family and its
+   exact revision files in one scope; do not distribute revisions across
+   ancestor and descendant scopes.
+2. For a semantic change, add a new `name@vN.md` definition with a numeric
+   revision above the published maximum. Keep metadata and the direct
+   `schema.properties.type` constant consistent with that filename.
+3. Preserve every published definition and its semantic components. Editorial
+   descriptions and Markdown may change; retired or unused revisions remain.
+4. Existing records retain their exact declared contracts. Migrate only when
+   explicitly intended, in one candidate satisfying both the base lifecycle
+   policy and destination contract. Never rewrite append-only or immutable
+   frontmatter to change its revision.
+5. Update guidance and templates for new records. Protocol P4 selects the
+   highest available revision when the authorized task specifies none, and
+   permits an explicitly requested older revision. Never downgrade to evade
+   missing data or validation. Copied curated schemas are ordinary local
+   definitions with the same publication guarantees.

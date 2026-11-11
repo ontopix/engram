@@ -2,7 +2,7 @@
 
 **Version:** v1
 **Status:** Draft
-**Revision:** 2026-08-18
+**Revision:** 2026-11-11
 **Normative status:** Normative
 
 This annex binds the core standard's portable snapshots and changesets to Git-managed writable
@@ -103,7 +103,10 @@ the base, the commit's snapshot the final candidate, and their core §8.1 differ
 A complete managed audit MUST inspect the available accepted lineage root-to-tip. Every snapshot
 MUST conform; the empty-base/root pair and every later parent/candidate pair MUST produce a
 `complete` transition with no `E` finding. Historical hooks are not rerun: their recorded trees are
-the evidence. Findings aggregate under core §9.1; Appendix A defines raw parsing and suppression.
+the evidence. Each historical snapshot MUST resolve its exact type references
+against its own schema files. The current tip's definitions MUST NOT reinterpret
+ancestor records. Core E504–E506 publication checks apply to each transition;
+replay MUST NOT silently renumber references or merge differing definitions. Findings aggregate under core §9.1; Appendix A defines raw parsing and suppression.
 
 Accepted refs, parents, and trees MUST come from raw Git ref and object data; replacement refs,
 grafts, and environment overlays MUST NOT alter them. Author, committer, message, timestamp,

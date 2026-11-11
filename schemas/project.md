@@ -7,7 +7,7 @@ schema:
   required: [type, description, name, status]
   additionalProperties: false
   properties:
-    type: {const: project}
+    type: {const: project@v1}
     description: {type: string, minLength: 1, maxLength: 200}
     pinned: {type: boolean}
     name:
@@ -52,7 +52,7 @@ version must already contain a useful status.
 
 ```markdown
 ---
-type: project
+type: project@v1
 description: "<what is at stake, one line>"
 name: <kebab-case>
 status: active

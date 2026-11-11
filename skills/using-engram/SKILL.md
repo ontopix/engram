@@ -44,3 +44,12 @@ obligations; if it differs from the core, follow the core.
 | Retrieve or verify | engram-find |
 | Repair or curate | engram-maintain |
 | Change schemas or types | engram-evolve |
+
+## Exact schema references
+
+Records declare `type: name@vN`; resolve that exact revision in the record's
+scope. Preserve it during reading and ordinary edits. For new work with no
+specified revision, follow core P4 and choose the highest available numeric
+revision, then store the exact reference. An explicit older revision is
+allowed. Never downgrade to evade missing fields, and never change a protected
+record's type to bypass its base policy. Published definitions remain intact.

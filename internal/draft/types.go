@@ -237,7 +237,7 @@ type SchemaCopyResult struct {
 
 func inventoryDescription(typeName, description string, version int64) checker.SchemaDescription {
 	return checker.SchemaDescription{
-		Type: typeName, Source: "inventory", Path: nil,
+		Reference: fmt.Sprintf("%s@v%d", typeName, version), Type: typeName, Source: "inventory", Path: nil,
 		Version: json.Number(fmt.Sprintf("%d", version)), Description: description,
 	}
 }

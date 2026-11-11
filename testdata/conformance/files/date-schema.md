@@ -7,7 +7,7 @@ schema:
   required: [type, description, date]
   additionalProperties: false
   properties:
-    type: {const: dated-event}
+    type: {const: dated-event@v1}
     description: {type: string, minLength: 1, maxLength: 200}
     date: {type: string, format: date}
 ---

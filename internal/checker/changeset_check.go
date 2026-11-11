@@ -10,6 +10,7 @@ import (
 	"github.com/ontopix/engram/internal/changeset"
 	"github.com/ontopix/engram/internal/documentprofile"
 	"github.com/ontopix/engram/internal/snapshot"
+	"github.com/ontopix/engram/internal/typeref"
 )
 
 // CheckTransition validates candidate as a snapshot and applies every E5xx
@@ -105,7 +106,14 @@ func CheckTransition(base, candidate *Snapshot, initialization bool) (Result, []
 
 	for name, baseFile := range base.Tree.Files {
 		candidateFile, exists := candidate.Tree.Files[name]
-		if !exists || baseFile.Role != snapshot.RoleSchema || candidateFile.Role != snapshot.RoleSchema || bytes.Equal(baseFile.Data, candidateFile.Data) {
+		if baseFile.Role != snapshot.RoleSchema {
+			continue
+		}
+		if !exists || candidateFile.Role != snapshot.RoleSchema {
+			findings.add("E505", name, "published schema revision was removed")
+			continue
+		}
+		if bytes.Equal(baseFile.Data, candidateFile.Data) {
 			continue
 		}
 		baseSchema, baseOK := base.Schemas[name]
@@ -121,8 +129,34 @@ func CheckTransition(base, candidate *Snapshot, initialization bool) (Result, []
 		componentsChanged := !jsonValuesEqual(baseSchema.RawSchema, candidateSchema.RawSchema) ||
 			!jsonValuesEqual(baseSchema.RawBody, candidateSchema.RawBody) ||
 			!jsonValuesEqual(baseSchema.RawPolicy, candidateSchema.RawPolicy)
-		if versionOrder < 0 || componentsChanged && versionOrder <= 0 {
-			findings.add("E504", name, "schema version does not advance its semantic components")
+		if versionOrder != 0 || baseSchema.Type != candidateSchema.Type || componentsChanged {
+			findings.add("E504", name, "published schema semantic components changed in place")
+		}
+	}
+
+	// Revision identities come from canonical filenames, without numeric narrowing.
+	maxima := make(map[string]string)
+	for name, file := range base.Tree.Files {
+		if file.Role != snapshot.RoleSchema {
+			continue
+		}
+		ref, _ := typeref.Filename(path.Base(name))
+		key := path.Dir(name) + "/" + ref.Name
+		if typeref.CompareVersions(ref.Version, maxima[key]) > 0 {
+			maxima[key] = ref.Version
+		}
+	}
+	for name, file := range candidate.Tree.Files {
+		if file.Role != snapshot.RoleSchema {
+			continue
+		}
+		if _, existed := base.Tree.Files[name]; existed {
+			continue
+		}
+		ref, _ := typeref.Filename(path.Base(name))
+		maximum := maxima[path.Dir(name)+"/"+ref.Name]
+		if maximum != "" && typeref.CompareVersions(ref.Version, maximum) <= 0 {
+			findings.add("E506", name, "new schema revision does not exceed the published maximum")
 		}
 	}
 
@@ -157,7 +191,7 @@ func addFindingsAt(findings findingSet, available []Finding, name string, causal
 
 func isRecordInputFinding(code string) bool {
 	switch code {
-	case "E108", "E201", "E202", "E203":
+	case "E108", "E201", "E202", "E203", "E310":
 		return true
 	default:
 		return false
@@ -173,27 +207,8 @@ func isSchemaInputFinding(code string) bool {
 // has already proved the traversed configuration boundaries when this helper
 // is used by transition validation.
 func selectedSchemaCandidate(tree *snapshot.Tree, directory, typeName string) string {
-	for scope := directory; ; scope = parentScope(scope) {
-		config := joinScope(scope, ".engram")
-		if kind, exists := tree.Boundaries[config]; exists {
-			if kind != snapshot.KindDirectory {
-				return ""
-			}
-			schemaDirectory := joinScope(scope, ".engram/schemas")
-			if schemaKind, exists := tree.Boundaries[schemaDirectory]; exists {
-				if schemaKind != snapshot.KindDirectory {
-					return ""
-				}
-				candidate := joinScope(scope, ".engram/schemas/"+typeName+".md")
-				if _, exists := tree.Boundaries[candidate]; exists {
-					return candidate
-				}
-			}
-		}
-		if scope == "." {
-			return ""
-		}
-	}
+	selected, _, _ := resolveSchemaPath(tree, schemaFamilies(tree), directory, typeName)
+	return selected
 }
 
 func requiredWikilinkTargets(candidate *Snapshot) map[string]struct{} {

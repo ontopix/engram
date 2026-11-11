@@ -7,7 +7,7 @@ schema:
   required: [type, description, date]
   additionalProperties: false
   properties:
-    type: {const: journal-entry}
+    type: {const: journal-entry@v1}
     description: {type: string, minLength: 1, maxLength: 200}
     date: {type: string, format: date}
 policy:
@@ -39,7 +39,7 @@ by name, so a long generated list may add little navigation value.
 
 ```markdown
 ---
-type: journal-entry
+type: journal-entry@v1
 description: "Daily journal, 2026-08-04."
 date: 2026-08-04
 ---

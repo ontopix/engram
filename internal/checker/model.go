@@ -13,6 +13,7 @@ import (
 // history, changeset policy checks, schema queries, and authoring helpers all
 // consume this same immutable view.
 type Snapshot struct {
+	families   map[string]map[string]struct{}
 	Tree       *snapshot.Tree
 	Validation Result
 	Records    map[string]*Record
@@ -21,17 +22,19 @@ type Snapshot struct {
 }
 
 type Record struct {
-	Path        string
-	Bytes       []byte
-	Frontmatter *yamlprofile.Node
-	Body        []byte
-	Markdown    markdownprofile.Document
-	Type        string
-	Description *string
-	Pinned      bool
-	PinnedValid bool
-	SchemaPath  string
-	Policy      Policy
+	Path          string
+	Bytes         []byte
+	Frontmatter   *yamlprofile.Node
+	Body          []byte
+	Markdown      markdownprofile.Document
+	Type          string
+	LogicalType   string
+	SchemaVersion string
+	Description   *string
+	Pinned        bool
+	PinnedValid   bool
+	SchemaPath    string
+	Policy        Policy
 }
 
 type Map struct {

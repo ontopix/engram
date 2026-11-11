@@ -21,8 +21,8 @@ func TestLoadRepositoryManifest(t *testing.T) {
 	}
 
 	ids := manifest.SortedCaseIDs()
-	if len(ids) != 58 || !sort.StringsAreSorted(ids) {
-		t.Fatalf("case IDs = %q, want 58 sorted IDs", ids)
+	if len(ids) != 62 || !sort.StringsAreSorted(ids) {
+		t.Fatalf("case IDs = %q, want 62 sorted IDs", ids)
 	}
 
 	var snapshots, changesets, managed int
@@ -36,8 +36,8 @@ func TestLoadRepositoryManifest(t *testing.T) {
 			managed++
 		}
 	}
-	if snapshots != 42 || changesets != 13 || managed != 3 {
-		t.Fatalf("kind counts = snapshot:%d changeset:%d managed:%d, want 42, 13, and 3", snapshots, changesets, managed)
+	if snapshots != 43 || changesets != 16 || managed != 3 {
+		t.Fatalf("kind counts = snapshot:%d changeset:%d managed:%d, want 43, 16, and 3", snapshots, changesets, managed)
 	}
 }
 
@@ -52,9 +52,9 @@ func TestManifestCoversEveryEmittableFindingAndRetiredW902(t *testing.T) {
 	want := []string{
 		"E101", "E102", "E103", "E104", "E105", "E106", "E107", "E108", "E109", "E110",
 		"E201", "E202", "E203", "E204", "E205", "E206", "E207", "E208", "E209",
-		"E301", "E302", "E303", "E304", "E305", "E306", "E307", "E308", "E309",
+		"E301", "E302", "E303", "E304", "E305", "E306", "E307", "E308", "E309", "E310",
 		"E401", "E402", "E403", "E404", "E405",
-		"E501", "E502", "E503", "E504",
+		"E501", "E502", "E503", "E504", "E505", "E506",
 		"E601", "E602", "E603",
 		"W901", "W903", "W904",
 	}

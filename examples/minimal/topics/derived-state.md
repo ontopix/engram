@@ -1,5 +1,5 @@
 ---
-type: note
+type: note@v1
 description: "Indexes and caches are rebuildable projections; the files stay the truth."
 ---
 # Derived state

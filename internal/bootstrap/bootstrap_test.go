@@ -10,7 +10,7 @@ import (
 
 func TestBuildAbsentTargetIsValidAndReadOnly(t *testing.T) {
 	target := filepath.Join(t.TempDir(), "memory")
-	plan, err := Build(context.Background(), target, []string{"note", "note"})
+	plan, err := Build(context.Background(), target, []string{"note@v1", "note@v1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -22,7 +22,7 @@ func TestBuildAbsentTargetIsValidAndReadOnly(t *testing.T) {
 	if plan.RootExists || plan.Root != wantRoot || plan.Validation.HasErrors() || len(plan.Files) != 3 || len(plan.Changes) != 3 {
 		t.Fatalf("plan = %#v, validation = %#v", plan, plan.Validation)
 	}
-	for _, name := range []string{"README.md", ".engram/root.yaml", ".engram/schemas/note.md"} {
+	for _, name := range []string{"README.md", ".engram/root.yaml", ".engram/schemas/note@v1.md"} {
 		if len(plan.Files[name]) == 0 {
 			t.Errorf("missing bootstrap %s", name)
 		}
@@ -42,11 +42,11 @@ func TestBuildExistingSnapshotPreservesBytesAndAddsRequestedSchema(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan, err := Build(context.Background(), root, []string{"person", "person"})
+	plan, err := Build(context.Background(), root, []string{"person@v1", "person@v1"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !plan.RootExists || plan.Validation.HasErrors() || len(plan.Files) != 1 || len(plan.Files[".engram/schemas/person.md"]) == 0 {
+	if !plan.RootExists || plan.Validation.HasErrors() || len(plan.Files) != 1 || len(plan.Files[".engram/schemas/person@v1.md"]) == 0 {
 		t.Fatalf("plan = %#v, validation = %#v", plan, plan.Validation)
 	}
 	after, err := os.ReadFile(filepath.Join(root, "README.md"))
@@ -81,10 +81,10 @@ func TestBuildRejectsRequestedSchemaConflictAndGitOwner(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(root, ".engram", "schemas"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, ".engram", "schemas", "person.md"), []byte("different\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(root, ".engram", "schemas", "person@v1.md"), []byte("different\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Build(context.Background(), root, []string{"person"}); !errors.Is(err, ErrConflict) {
+	if _, err := Build(context.Background(), root, []string{"person@v1"}); !errors.Is(err, ErrConflict) {
 		t.Fatalf("schema conflict error = %v", err)
 	}
 	if err := os.Mkdir(filepath.Join(root, ".git"), 0o755); err != nil {

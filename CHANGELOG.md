@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.0.0-rc.3 — 2026-11-11
+
+### Explicit schema revisions (breaking draft format)
+
+- Records select an exact contract with `type: name@vN`; installed definitions
+  use `.engram/schemas/name@vN.md` with matching logical name, numeric version,
+  and direct JSON Schema type constant. Bare names have no implicit revision.
+- Several revisions coexist in one scoped family. Resolution never falls back
+  to another revision or an ancestor family; missing revisions produce E310.
+- Published schema semantics stay fixed (E504), definitions remain present
+  (E505), and added revisions exceed the family maximum (E506). Record
+  migrations still obey the base immutable or append-only policy.
+- Typed links accept logical names across revisions or exact references.
+  Agent workflows choose the highest numeric revision for new records unless
+  explicitly instructed otherwise; ordinary edits retain the selected revision.
+- CLI schema queries report reference and scope; `init --schema`, `new`,
+  `schema show`, and `schema copy` require exact references. All bundled
+  schemas, templates, skills, fixtures, and examples use the new format.
+- Added a three-revision journal example and conformance and integration
+  coverage for publication, retention, numeric ordering, and lifecycle rules.
+- Fixed initialization of populated stores with asserted date formats: plan
+  stability compares source trees instead of compiled validator functions.
+- Existing draft stores require explicit conversion into a new managed
+  lineage. There is no legacy mode or waiver of historical record policies.
+
 ## 1.0.0-rc.2 — 2026-11-11
 
 ### Unattended agent memory

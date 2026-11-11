@@ -67,7 +67,7 @@ func TestTraversalPrecedenceAndPruning(t *testing.T) {
 		".engram":                         {kind: KindDirectory},
 		".engram/root.yaml":               {kind: KindRegular, data: []byte("engram: 1\n")},
 		".engram/schemas":                 {kind: KindDirectory},
-		".engram/schemas/note.md":         {kind: KindRegular, data: []byte("schema\n")},
+		".engram/schemas/note@v1.md":      {kind: KindRegular, data: []byte("schema\n")},
 		".engram/schemas/BAD.md":          {kind: KindSymlink},
 		".engram/hooks":                   {kind: KindDirectory},
 		".engram/hooks/prepare-changeset": {kind: KindDirectory},

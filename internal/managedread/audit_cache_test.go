@@ -95,7 +95,7 @@ func TestAuditAcceptedCacheResultsDoNotAliasProtocolContainers(t *testing.T) {
 	const recordPath = "topics/why-files.md"
 	record := snapshot.Records[recordPath]
 	directoryMap := snapshot.Maps["README.md"]
-	schema := snapshot.Schemas[".engram/schemas/note.md"]
+	schema := snapshot.Schemas[".engram/schemas/note@v1.md"]
 	if record == nil || directoryMap == nil || schema == nil || record.Description == nil || directoryMap.Description == nil || len(record.Bytes) == 0 || len(record.Body) == 0 || len(record.Markdown.Headings) == 0 || len(directoryMap.Body) == 0 || len(schema.Documentation) == 0 || len(schema.Markdown.Headings) == 0 || schema.Validator == nil || schema.Version == nil {
 		t.Fatalf("minimal cached snapshot lacks expected parsed data: %#v", snapshot)
 	}
@@ -147,7 +147,7 @@ func TestAuditAcceptedCacheResultsDoNotAliasProtocolContainers(t *testing.T) {
 	snapshot.Tree.Files[recordPath] = treeFile
 	delete(snapshot.Records, recordPath)
 	delete(snapshot.Maps, "README.md")
-	delete(snapshot.Schemas, ".engram/schemas/note.md")
+	delete(snapshot.Schemas, ".engram/schemas/note@v1.md")
 
 	second, err := store.AuditAccepted(t.Context())
 	if err != nil {
@@ -165,7 +165,7 @@ func TestAuditAcceptedCacheResultsDoNotAliasProtocolContainers(t *testing.T) {
 	}
 	secondRecord := secondSnapshot.Records[recordPath]
 	secondMap := secondSnapshot.Maps["README.md"]
-	secondSchema := secondSnapshot.Schemas[".engram/schemas/note.md"]
+	secondSchema := secondSnapshot.Schemas[".engram/schemas/note@v1.md"]
 	if secondRecord == nil || secondMap == nil || secondSchema == nil || secondRecord.Description == nil || secondMap.Description == nil {
 		t.Fatal("caller map-entry mutation contaminated the cache")
 	}

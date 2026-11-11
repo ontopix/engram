@@ -5,7 +5,7 @@ description: "Invalidly restrictive note baseline fixture."
 schema:
   type: object
   properties:
-    type: {const: note}
+    type: {const: note@v1}
     description: {type: string, minLength: 50, maxLength: 200}
     pinned: {type: boolean}
   additionalProperties: true

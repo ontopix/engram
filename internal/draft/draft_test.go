@@ -227,7 +227,7 @@ func TestNewDeterministicRecordAndCatalog(t *testing.T) {
 		Fields:      []byte("tags: [alpha, beta]\npinned: true\n"),
 		Title:       "Fresh Topic",
 	}
-	result, err := New(context.Background(), store, "note", "topics/fresh-topic.md", options)
+	result, err := New(context.Background(), store, "note@v1", "topics/fresh-topic.md", options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -235,7 +235,7 @@ func TestNewDeterministicRecordAndCatalog(t *testing.T) {
 		t.Fatalf("result = %#v", result)
 	}
 	want := "---\n" +
-		"type: note\n" +
+		"type: note@v1\n" +
 		"description: \"A newly captured topic.\"\n" +
 		"pinned: true\n" +
 		"tags: [\"alpha\",\"beta\"]\n" +
@@ -259,7 +259,7 @@ func TestNewDeterministicRecordAndCatalog(t *testing.T) {
 func TestNewDryRunAndCollisionDoNotWrite(t *testing.T) {
 	store := minimalStore(t)
 	options := NewOptions{Description: "Dry-run topic.", DryRun: true}
-	result, err := New(context.Background(), store, "note", "topics/dry-run.md", options)
+	result, err := New(context.Background(), store, "note@v1", "topics/dry-run.md", options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -272,14 +272,14 @@ func TestNewDryRunAndCollisionDoNotWrite(t *testing.T) {
 
 	existing := filepath.Join(store, "topics", "why-files.md")
 	before := readFile(t, existing)
-	_, err = New(context.Background(), store, "note", "topics/why-files.md", NewOptions{Description: "Collision."})
+	_, err = New(context.Background(), store, "note@v1", "topics/why-files.md", NewOptions{Description: "Collision."})
 	if KindOf(err) != ErrorConflict {
 		t.Fatalf("collision error = %v, kind %q", err, KindOf(err))
 	}
 	if got := readFile(t, existing); !bytes.Equal(got, before) {
 		t.Fatal("collision overwrote existing record")
 	}
-	_, err = New(context.Background(), store, "note", "topics/WHY-FILES.md", NewOptions{Description: "Case collision."})
+	_, err = New(context.Background(), store, "note@v1", "topics/WHY-FILES.md", NewOptions{Description: "Case collision."})
 	if KindOf(err) != ErrorConflict {
 		t.Fatalf("case collision error = %v, kind %q", err, KindOf(err))
 	}
@@ -288,7 +288,7 @@ func TestNewDryRunAndCollisionDoNotWrite(t *testing.T) {
 func TestNewCopiesExplicitBodyBytesExactly(t *testing.T) {
 	store := minimalStore(t)
 	body := []byte("# Supplied body\n\nEvery supplied body byte remains exact.\n")
-	_, err := New(context.Background(), store, "note", "topics/supplied.md", NewOptions{
+	_, err := New(context.Background(), store, "note@v1", "topics/supplied.md", NewOptions{
 		Description: "A record with a supplied body.", Body: body,
 	})
 	if err != nil {
@@ -315,7 +315,7 @@ func TestNewInDirsCatalogModeDoesNotRewriteCatalog(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := readFile(t, name)
-	result, err := New(context.Background(), store, "note", "topics/not-listed.md", NewOptions{Description: "Not listed in dirs mode."})
+	result, err := New(context.Background(), store, "note@v1", "topics/not-listed.md", NewOptions{Description: "Not listed in dirs mode."})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -336,7 +336,7 @@ func TestNewValidatesFieldsBodiesAndPaths(t *testing.T) {
 		options NewOptions
 	}{
 		{"invalid path", ErrorUsage, "topics/README.md", NewOptions{Description: "Description."}},
-		{"override type", ErrorUsage, "topics/a.md", NewOptions{Description: "Description.", Fields: []byte("type: note\n")}},
+		{"override type", ErrorUsage, "topics/a.md", NewOptions{Description: "Description.", Fields: []byte("type: note@v1\n")}},
 		{"reserved field", ErrorUsage, "topics/a.md", NewOptions{Description: "Description.", Fields: []byte("engram-owner: x\n")}},
 		{"schema violation", ErrorUsage, "topics/a.md", NewOptions{Description: "Description.", Fields: []byte("pinned: nope\n")}},
 		{"body and title", ErrorUsage, "topics/a.md", NewOptions{Description: "Description.", Body: []byte("# A\n"), Title: "A"}},
@@ -346,7 +346,7 @@ func TestNewValidatesFieldsBodiesAndPaths(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			_, _, err := PlanNew(context.Background(), store, "note", test.path, test.options)
+			_, _, err := PlanNew(context.Background(), store, "note@v1", test.path, test.options)
 			if KindOf(err) != test.kind {
 				t.Fatalf("error = %v, kind %q, want %q", err, KindOf(err), test.kind)
 			}
@@ -356,11 +356,11 @@ func TestNewValidatesFieldsBodiesAndPaths(t *testing.T) {
 
 func TestNewEmitsRequiredHeadingsAndRejectsInvalidExplicitBody(t *testing.T) {
 	store := minimalStore(t)
-	if _, err := SchemaCopy(context.Background(), store, "project", SchemaCopyOptions{}); err != nil {
+	if _, err := SchemaCopy(context.Background(), store, "project@v1", SchemaCopyOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	fields := []byte("name: launch\nstatus: active\npeople: []\n")
-	result, err := New(context.Background(), store, "project", "topics/launch.md", NewOptions{
+	result, err := New(context.Background(), store, "project@v1", "topics/launch.md", NewOptions{
 		Description: "Launch work and its current state.", Fields: fields, Title: "Launch",
 	})
 	if err != nil {
@@ -374,7 +374,7 @@ func TestNewEmitsRequiredHeadingsAndRejectsInvalidExplicitBody(t *testing.T) {
 		t.Fatalf("generated body does not contain exact required headings:\n%s", content)
 	}
 
-	_, _, err = PlanNew(context.Background(), store, "project", "topics/bad-body.md", NewOptions{
+	_, _, err = PlanNew(context.Background(), store, "project@v1", "topics/bad-body.md", NewOptions{
 		Description: "Project with incomplete supplied body.", Fields: fields,
 		Body: []byte("# Bad body\n\n## Status\n"),
 	})
@@ -385,13 +385,13 @@ func TestNewEmitsRequiredHeadingsAndRejectsInvalidExplicitBody(t *testing.T) {
 
 func TestNewChecksTypedLinksAgainstVisibleSchema(t *testing.T) {
 	store := minimalStore(t)
-	if _, err := SchemaCopy(context.Background(), store, "project", SchemaCopyOptions{}); err != nil {
+	if _, err := SchemaCopy(context.Background(), store, "project@v1", SchemaCopyOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := SchemaCopy(context.Background(), store, "person", SchemaCopyOptions{}); err != nil {
+	if _, err := SchemaCopy(context.Background(), store, "person@v1", SchemaCopyOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	_, _, err := PlanNew(context.Background(), store, "person", "topics/ada.md", NewOptions{
+	_, _, err := PlanNew(context.Background(), store, "person@v1", "topics/ada.md", NewOptions{
 		Description: "Ada, linked to one missing project.",
 		Fields:      []byte("name: Ada\nprojects: [\"[[topics/missing]]\"]\n"),
 		Body:        []byte("# Ada\n\n## Facts\n"),
@@ -403,34 +403,34 @@ func TestNewChecksTypedLinksAgainstVisibleSchema(t *testing.T) {
 
 func TestSchemaCopyRootAndNestedAreByteExact(t *testing.T) {
 	store := minimalStore(t)
-	dry, err := SchemaCopy(context.Background(), store, "fact", SchemaCopyOptions{DryRun: true})
+	dry, err := SchemaCopy(context.Background(), store, "fact@v2", SchemaCopyOptions{DryRun: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !dry.DryRun || !dry.Changed || dry.Path != ".engram/schemas/fact.md" || dry.Schema.Source != "inventory" || dry.Schema.Path != nil {
+	if !dry.DryRun || !dry.Changed || dry.Path != ".engram/schemas/fact@v2.md" || dry.Schema.Source != "inventory" || dry.Schema.Path != nil {
 		t.Fatalf("dry result = %#v", dry)
 	}
-	if _, err := os.Lstat(filepath.Join(store, ".engram", "schemas", "fact.md")); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Lstat(filepath.Join(store, ".engram", "schemas", "fact@v2.md")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("dry-run destination stat = %v", err)
 	}
 
-	result, err := SchemaCopy(context.Background(), store, "fact", SchemaCopyOptions{})
+	result, err := SchemaCopy(context.Background(), store, "fact@v2", SchemaCopyOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.DryRun || result.Path != ".engram/schemas/fact.md" {
+	if result.DryRun || result.Path != ".engram/schemas/fact@v2.md" {
 		t.Fatalf("result = %#v", result)
 	}
-	assertInventoryBytes(t, "fact", readFile(t, filepath.Join(store, ".engram", "schemas", "fact.md")))
+	assertInventoryBytes(t, "fact", readFile(t, filepath.Join(store, ".engram", "schemas", "fact@v2.md")))
 
-	nested, err := SchemaCopy(context.Background(), store, "person", SchemaCopyOptions{Scope: "topics"})
+	nested, err := SchemaCopy(context.Background(), store, "person@v1", SchemaCopyOptions{Scope: "topics"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if nested.Path != "topics/.engram/schemas/person.md" {
+	if nested.Path != "topics/.engram/schemas/person@v1.md" {
 		t.Fatalf("nested result = %#v", nested)
 	}
-	assertInventoryBytes(t, "person", readFile(t, filepath.Join(store, "topics", ".engram", "schemas", "person.md")))
+	assertInventoryBytes(t, "person", readFile(t, filepath.Join(store, "topics", ".engram", "schemas", "person@v1.md")))
 	checked, err := checker.CheckFS(store)
 	if err != nil {
 		t.Fatal(err)
@@ -442,11 +442,11 @@ func TestSchemaCopyRootAndNestedAreByteExact(t *testing.T) {
 
 func TestSchemaCopyRejectsOverwriteAndBothShadowingDirections(t *testing.T) {
 	store := minimalStore(t)
-	_, err := SchemaCopy(context.Background(), store, "note", SchemaCopyOptions{})
+	_, err := SchemaCopy(context.Background(), store, "note@v1", SchemaCopyOptions{})
 	if KindOf(err) != ErrorConflict {
 		t.Fatalf("overwrite error = %v, kind %q", err, KindOf(err))
 	}
-	_, err = SchemaCopy(context.Background(), store, "note", SchemaCopyOptions{Scope: "topics"})
+	_, err = SchemaCopy(context.Background(), store, "note@v1", SchemaCopyOptions{Scope: "topics"})
 	if KindOf(err) != ErrorConflict {
 		t.Fatalf("ancestor-shadow error = %v, kind %q", err, KindOf(err))
 	}
@@ -455,14 +455,14 @@ func TestSchemaCopyRejectsOverwriteAndBothShadowingDirections(t *testing.T) {
 	}
 
 	descendantStore := minimalStore(t)
-	if _, err := SchemaCopy(context.Background(), descendantStore, "fact", SchemaCopyOptions{Scope: "topics"}); err != nil {
+	if _, err := SchemaCopy(context.Background(), descendantStore, "fact@v2", SchemaCopyOptions{Scope: "topics"}); err != nil {
 		t.Fatal(err)
 	}
-	_, err = SchemaCopy(context.Background(), descendantStore, "fact", SchemaCopyOptions{})
+	_, err = SchemaCopy(context.Background(), descendantStore, "fact@v2", SchemaCopyOptions{})
 	if KindOf(err) != ErrorConflict {
 		t.Fatalf("descendant-shadow error = %v, kind %q", err, KindOf(err))
 	}
-	if _, err := os.Lstat(filepath.Join(descendantStore, ".engram", "schemas", "fact.md")); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Lstat(filepath.Join(descendantStore, ".engram", "schemas", "fact@v2.md")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("rejected root copy created destination: %v", err)
 	}
 }
@@ -475,15 +475,15 @@ func TestSchemaCopyRejectsUnknownTypeAndInvalidScope(t *testing.T) {
 		kind     ErrorKind
 	}{
 		{"unknown", "", ErrorUsage},
-		{"fact", "missing", ErrorRepository},
-		{"fact", "../topics", ErrorUsage},
+		{"fact@v2", "missing", ErrorRepository},
+		{"fact@v2", "../topics", ErrorUsage},
 	} {
 		_, _, err := PlanSchemaCopy(context.Background(), store, test.typeName, SchemaCopyOptions{Scope: test.scope})
 		if KindOf(err) != test.kind {
 			t.Errorf("type %q scope %q error = %v, kind %q", test.typeName, test.scope, err, KindOf(err))
 		}
 	}
-	_, _, err := PlanSchemaCopy(context.Background(), store, "fact", SchemaCopyOptions{ScopeProvided: true})
+	_, _, err := PlanSchemaCopy(context.Background(), store, "fact@v2", SchemaCopyOptions{ScopeProvided: true})
 	if KindOf(err) != ErrorUsage {
 		t.Fatalf("explicit empty scope error = %v, kind %q", err, KindOf(err))
 	}
@@ -492,7 +492,7 @@ func TestSchemaCopyRejectsUnknownTypeAndInvalidScope(t *testing.T) {
 func TestSchemaCopyMayResolveAnExistingInvalidDraftRecord(t *testing.T) {
 	store := minimalStore(t)
 	recordName := filepath.Join(store, "topics", "unresolved-fact.md")
-	writeFile(t, recordName, []byte("---\ntype: fact\ndescription: \"A draft fact that still lacks required domain fields.\"\n---\n# Draft fact\n"), 0o644)
+	writeFile(t, recordName, []byte("---\ntype: fact@v2\ndescription: \"A draft fact that still lacks required domain fields.\"\n---\n# Draft fact\n"), 0o644)
 	if _, err := Fmt(context.Background(), store, FmtOptions{Paths: []string{"topics"}}); err != nil {
 		t.Fatal(err)
 	}
@@ -503,7 +503,7 @@ func TestSchemaCopyMayResolveAnExistingInvalidDraftRecord(t *testing.T) {
 	if !hasFinding(before, "E203", "topics/unresolved-fact.md") {
 		t.Fatalf("fixture does not begin unresolved: %#v", before.Validation.Findings)
 	}
-	if _, err := SchemaCopy(context.Background(), store, "fact", SchemaCopyOptions{}); err != nil {
+	if _, err := SchemaCopy(context.Background(), store, "fact@v2", SchemaCopyOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	after, err := checker.CheckFS(store)
@@ -538,7 +538,7 @@ func TestPublishDetectsConcurrentCapturedChanges(t *testing.T) {
 func TestNewConcurrentCatalogChangePublishesNothing(t *testing.T) {
 	store := minimalStore(t)
 	readmeName := filepath.Join(store, "topics", "README.md")
-	plan, _, err := PlanNew(context.Background(), store, "note", "topics/concurrent.md", NewOptions{Description: "Concurrent plan."})
+	plan, _, err := PlanNew(context.Background(), store, "note@v1", "topics/concurrent.md", NewOptions{Description: "Concurrent plan."})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -558,7 +558,7 @@ func TestNewConcurrentCatalogChangePublishesNothing(t *testing.T) {
 
 func TestNewPreservesUnrelatedConcurrentBytes(t *testing.T) {
 	store := minimalStore(t)
-	plan, _, err := PlanNew(context.Background(), store, "note", "topics/preserved.md", NewOptions{Description: "Unrelated bytes stay untouched."})
+	plan, _, err := PlanNew(context.Background(), store, "note@v1", "topics/preserved.md", NewOptions{Description: "Unrelated bytes stay untouched."})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -578,11 +578,11 @@ func TestNewPreservesUnrelatedConcurrentBytes(t *testing.T) {
 
 func TestNewDetectsConcurrentVisibleSchemaChange(t *testing.T) {
 	store := minimalStore(t)
-	plan, _, err := PlanNew(context.Background(), store, "note", "topics/schema-race.md", NewOptions{Description: "Schema race."})
+	plan, _, err := PlanNew(context.Background(), store, "note@v1", "topics/schema-race.md", NewOptions{Description: "Schema race."})
 	if err != nil {
 		t.Fatal(err)
 	}
-	schemaName := filepath.Join(store, ".engram", "schemas", "note.md")
+	schemaName := filepath.Join(store, ".engram", "schemas", "note@v1.md")
 	concurrent := append(readFile(t, schemaName), []byte("\nConcurrent schema documentation.\n")...)
 	writeFile(t, schemaName, concurrent, 0o644)
 	err = plan.Publish(context.Background())
@@ -598,7 +598,7 @@ func TestNewRollsBackRecordWhenCatalogPublicationFails(t *testing.T) {
 	store := minimalStore(t)
 	readmeName := filepath.Join(store, "topics", "README.md")
 	original := readFile(t, readmeName)
-	plan, _, err := PlanNew(context.Background(), store, "note", "topics/rollback.md", NewOptions{Description: "Rollback test."})
+	plan, _, err := PlanNew(context.Background(), store, "note@v1", "topics/rollback.md", NewOptions{Description: "Rollback test."})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -654,12 +654,12 @@ func TestFmtRollsBackEarlierCatalogWhenLaterPublicationFails(t *testing.T) {
 
 func TestSchemaCopyRollsBackCreatedDirectoriesOnFailure(t *testing.T) {
 	store := minimalStore(t)
-	plan, _, err := PlanSchemaCopy(context.Background(), store, "fact", SchemaCopyOptions{Scope: "topics"})
+	plan, _, err := PlanSchemaCopy(context.Background(), store, "fact@v2", SchemaCopyOptions{Scope: "topics"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	plan.beforeApply = func(index int, logicalPath string) error {
-		if logicalPath == "topics/.engram/schemas/fact.md" {
+		if logicalPath == "topics/.engram/schemas/fact@v2.md" {
 			return errors.New("injected schema publication failure")
 		}
 		return nil
@@ -678,7 +678,7 @@ func TestCancellationDuringPublicationRollsBack(t *testing.T) {
 	store := minimalStore(t)
 	readmeName := filepath.Join(store, "topics", "README.md")
 	original := readFile(t, readmeName)
-	plan, _, err := PlanNew(context.Background(), store, "note", "topics/cancelled.md", NewOptions{Description: "Cancelled publication."})
+	plan, _, err := PlanNew(context.Background(), store, "note@v1", "topics/cancelled.md", NewOptions{Description: "Cancelled publication."})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -783,7 +783,7 @@ func TestDraftRollbackAndCleanupFailuresCarryExactEffects(t *testing.T) {
 
 	t.Run("temporary cleanup fails before publication", func(t *testing.T) {
 		store := minimalStore(t)
-		plan, _, err := PlanNew(context.Background(), store, "note", "topics/cleanup-fault.md", NewOptions{Description: "Cleanup fault."})
+		plan, _, err := PlanNew(context.Background(), store, "note@v1", "topics/cleanup-fault.md", NewOptions{Description: "Cleanup fault."})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -920,7 +920,7 @@ func TestEveryDraftHelperFailsClosedWhenUnlockFails(t *testing.T) {
 			return err
 		}},
 		{name: "new", run: func(t *testing.T) error {
-			_, err := New(context.Background(), minimalStore(t), "note", "topics/unlock.md", NewOptions{Description: "Unlock failure.", Rendezvous: failingLocker{unlockErr: injected}})
+			_, err := New(context.Background(), minimalStore(t), "note@v1", "topics/unlock.md", NewOptions{Description: "Unlock failure.", Rendezvous: failingLocker{unlockErr: injected}})
 			return err
 		}},
 		{name: "mv", run: func(t *testing.T) error {
@@ -928,7 +928,7 @@ func TestEveryDraftHelperFailsClosedWhenUnlockFails(t *testing.T) {
 			return err
 		}},
 		{name: "schema.copy", run: func(t *testing.T) error {
-			_, err := SchemaCopy(context.Background(), minimalStore(t), "person", SchemaCopyOptions{Rendezvous: failingLocker{unlockErr: injected}})
+			_, err := SchemaCopy(context.Background(), minimalStore(t), "person@v1", SchemaCopyOptions{Rendezvous: failingLocker{unlockErr: injected}})
 			return err
 		}},
 	}

@@ -11,21 +11,21 @@ import (
 
 func TestSplitFrontmatterExactRanges(t *testing.T) {
 	t.Parallel()
-	source := []byte("---\ntype: note\ndescription: Example\n---\n# Body\n")
+	source := []byte("---\ntype: note@v1\ndescription: Example\n---\n# Body\n")
 	sections, err := SplitFrontmatter(source)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := Sections{
 		OpeningDelimiter: markdownprofile.Span{Start: 0, End: 4},
-		Frontmatter:      markdownprofile.Span{Start: 4, End: 36},
-		ClosingDelimiter: markdownprofile.Span{Start: 36, End: 40},
-		Body:             markdownprofile.Span{Start: 40, End: len(source)},
+		Frontmatter:      markdownprofile.Span{Start: 4, End: 39},
+		ClosingDelimiter: markdownprofile.Span{Start: 39, End: 43},
+		Body:             markdownprofile.Span{Start: 43, End: len(source)},
 	}
 	if !reflect.DeepEqual(sections, want) {
 		t.Fatalf("sections = %#v, want %#v", sections, want)
 	}
-	if got := string(source[sections.Frontmatter.Start:sections.Frontmatter.End]); got != "type: note\ndescription: Example\n" {
+	if got := string(source[sections.Frontmatter.Start:sections.Frontmatter.End]); got != "type: note@v1\ndescription: Example\n" {
 		t.Fatalf("frontmatter = %q", got)
 	}
 	if got := string(source[sections.Body.Start:sections.Body.End]); got != "# Body\n" {
@@ -55,12 +55,12 @@ func TestSplitFrontmatterRejectsDelimiterVariants(t *testing.T) {
 		source  string
 		problem FrontmatterProblem
 	}{
-		{"no opening", "type: note\n---\n", FrontmatterOpening},
-		{"opening spaces", "--- \ntype: note\n---\n", FrontmatterOpening},
-		{"opening comment", "--- # comment\ntype: note\n---\n", FrontmatterOpening},
-		{"closing spaces", "---\ntype: note\n--- \n", FrontmatterClosing},
-		{"closing comment", "---\ntype: note\n--- # comment\n", FrontmatterClosing},
-		{"no closing", "---\ntype: note\n", FrontmatterClosing},
+		{"no opening", "type: note@v1\n---\n", FrontmatterOpening},
+		{"opening spaces", "--- \ntype: note@v1\n---\n", FrontmatterOpening},
+		{"opening comment", "--- # comment\ntype: note@v1\n---\n", FrontmatterOpening},
+		{"closing spaces", "---\ntype: note@v1\n--- \n", FrontmatterClosing},
+		{"closing comment", "---\ntype: note@v1\n--- # comment\n", FrontmatterClosing},
+		{"no closing", "---\ntype: note@v1\n", FrontmatterClosing},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -76,12 +76,12 @@ func TestSplitFrontmatterRejectsDelimiterVariants(t *testing.T) {
 
 func TestParseDocumentComposesYAMLAndMarkdownRanges(t *testing.T) {
 	t.Parallel()
-	source := []byte("---\ntype: note\ndescription: Example\n---\ntext [[target]] and `[[code]]`\n")
+	source := []byte("---\ntype: note@v1\ndescription: Example\n---\ntext [[target]] and `[[code]]`\n")
 	document, err := Parse(source)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := string(document.FrontmatterBytes()); got != "type: note\ndescription: Example\n" {
+	if got := string(document.FrontmatterBytes()); got != "type: note@v1\ndescription: Example\n" {
 		t.Fatalf("frontmatter = %q", got)
 	}
 	if got := string(document.BodyBytes()); got != "text [[target]] and `[[code]]`\n" {

@@ -130,7 +130,7 @@ func TestExecutableRealCommandSurface(t *testing.T) {
 	run("schema.list", "ok", 0,
 		[]string{"--store", store, "schema", "list", "--format", "json"}, "schemas")
 	run("schema.show", "ok", 0,
-		[]string{"--store", store, "schema", "show", "note", "--format", "json"}, "content", "schema")
+		[]string{"--store", store, "schema", "show", "note@v1", "--format", "json"}, "content", "schema")
 	run("check", "ok", 0,
 		[]string{"--store", store, "check", "--accepted", "--format", "json"}, "findings", "status", "target")
 	run("log", "ok", 0,
@@ -174,12 +174,17 @@ func TestExecutableRealCommandSurface(t *testing.T) {
 		[]string{"--store", store, "hooks", "revoke", "--format", "json"},
 		"changed", "revoked_sets")
 
-	run("new", "ok", 0,
-		[]string{"--store", store, "new", "note", "black-box.md", "--description", "Compiled-binary command coverage.", "--title", "Black-box", "--format", "json"},
-		"catalogs", "changed", "dry_run", "record")
 	run("schema.copy", "ok", 0,
-		[]string{"--store", store, "schema", "copy", "person", "--format", "json"},
+		[]string{"--store", store, "schema", "copy", "person@v1", "--format", "json"},
 		"changed", "dry_run", "path", "schema")
+	run("add", "ok", 0,
+		[]string{"--store", store, "add", "--all", "--format", "json"}, "changed", "staged")
+	run("commit", "ok", 0,
+		[]string{"--store", store, "commit", "-m", "Publish person schema revision", "--format", "json"},
+		"changes", "commit", "created", "dry_run", "validation")
+	run("new", "ok", 0,
+		[]string{"--store", store, "new", "note@v1", "black-box.md", "--description", "Compiled-binary command coverage.", "--title", "Black-box", "--format", "json"},
+		"catalogs", "changed", "dry_run", "record")
 	run("mv", "ok", 0,
 		[]string{"--store", store, "mv", "black-box.md", "compiled-binary.md", "--format", "json"},
 		"catalogs", "changed", "dry_run", "from", "paths", "to")

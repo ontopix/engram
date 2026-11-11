@@ -66,7 +66,7 @@ nested:
   pinned: nope
 `)
 
-	if got, err := Type(document.Root); err != nil || got != "decision" {
+	if got, err := SchemaType(document.Root); err != nil || got != "decision" {
 		t.Fatalf("Type = %q, %v", got, err)
 	}
 	if got, err := Description(document.Root); err != nil || got != "Decide how to persist memory" {
@@ -89,11 +89,11 @@ func TestRequiredAndTypedFieldFailuresAreClassified(t *testing.T) {
 		field   string
 		problem FieldProblem
 	}{
-		{"missing type", "other: value\n", func(root *yamlprofile.Node) error { _, err := Type(root); return err }, "type", FieldMissing},
-		{"numeric type", "type: 1\n", func(root *yamlprofile.Node) error { _, err := Type(root); return err }, "type", FieldWrongKind},
-		{"ASCII-empty type", "type: \" \\t\"\n", func(root *yamlprofile.Node) error { _, err := Type(root); return err }, "type", FieldEmpty},
-		{"bad type slug", "type: Bad-Type\n", func(root *yamlprofile.Node) error { _, err := Type(root); return err }, "type", FieldInvalid},
-		{"missing description", "type: note\n", func(root *yamlprofile.Node) error { _, err := Description(root); return err }, "description", FieldMissing},
+		{"missing type", "other: value\n", func(root *yamlprofile.Node) error { _, err := SchemaType(root); return err }, "type", FieldMissing},
+		{"numeric type", "type: 1\n", func(root *yamlprofile.Node) error { _, err := SchemaType(root); return err }, "type", FieldWrongKind},
+		{"ASCII-empty type", "type: \" \\t\"\n", func(root *yamlprofile.Node) error { _, err := SchemaType(root); return err }, "type", FieldEmpty},
+		{"bad type slug", "type: Bad-Type\n", func(root *yamlprofile.Node) error { _, err := SchemaType(root); return err }, "type", FieldInvalid},
+		{"missing description", "type: note@v1\n", func(root *yamlprofile.Node) error { _, err := Description(root); return err }, "description", FieldMissing},
 		{"bad description", "description: \" trailing \"\n", func(root *yamlprofile.Node) error { _, err := Description(root); return err }, "description", FieldInvalid},
 		{"nonboolean pinned", "pinned: yes\n", func(root *yamlprofile.Node) error { _, _, err := Pinned(root); return err }, "pinned", FieldWrongKind},
 		{"nonstring catalog", "catalog: false\n", func(root *yamlprofile.Node) error { _, err := CatalogModeFrom(root); return err }, "catalog", FieldWrongKind},

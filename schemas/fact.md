@@ -7,7 +7,7 @@ schema:
   required: [type, description, source, claim]
   additionalProperties: false
   properties:
-    type: {const: fact}
+    type: {const: fact@v2}
     description: {type: string, minLength: 1, maxLength: 200}
     pinned: {type: boolean}
     valid_from: {type: string, format: date}
@@ -75,7 +75,7 @@ Kebab-case slug of the statement's subject:
 
 ```markdown
 ---
-type: fact
+type: fact@v2
 description: "<the statement, one assertable sentence>"
 source: "<tool-returned permalink | document path | who said it | no-reference>"
 claim: confirmed

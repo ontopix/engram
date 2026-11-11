@@ -9,6 +9,7 @@ import (
 	"github.com/ontopix/engram/internal/documentprofile"
 	"github.com/ontopix/engram/internal/markdownprofile"
 	"github.com/ontopix/engram/internal/snapshot"
+	"github.com/ontopix/engram/internal/typeref"
 )
 
 func (a *snapshotAnalysis) checkBodiesAndLinks() {
@@ -96,7 +97,7 @@ func (a *snapshotAnalysis) checkTypedLink(sourcePath, value string, allowedTypes
 		return
 	}
 	for _, allowed := range allowedTypes {
-		if targetRecord.Type == allowed {
+		if typeref.Matches(allowed, targetRecord.Type) {
 			return
 		}
 	}

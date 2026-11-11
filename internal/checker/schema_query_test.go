@@ -15,10 +15,10 @@ func TestSchemaQueries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(visible) != 1 || visible[0].Type != "note" || visible[0].Path == nil || *visible[0].Path != ".engram/schemas/note.md" {
+	if len(visible) != 1 || visible[0].Type != "note" || visible[0].Path == nil || *visible[0].Path != ".engram/schemas/note@v1.md" {
 		t.Fatalf("visible = %#v", visible)
 	}
-	description, content, err := checked.ShowSchema(".", "note")
+	description, content, err := checked.ShowSchema(".", "note@v1")
 	if err != nil {
 		t.Fatal(err)
 	}

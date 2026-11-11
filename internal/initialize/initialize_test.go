@@ -25,7 +25,7 @@ import (
 
 func TestDryRunPlansAbsentTargetWithoutMutation(t *testing.T) {
 	root := filepath.Join(canonicalTemp(t), "memory")
-	result, err := newInitializer(t).Run(t.Context(), root, Options{Schemas: []string{"person", "person"}, DryRun: true})
+	result, err := newInitializer(t).Run(t.Context(), root, Options{Schemas: []string{"person@v1", "person@v1"}, DryRun: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,7 +40,7 @@ func TestDryRunPlansAbsentTargetWithoutMutation(t *testing.T) {
 
 func TestInitializeAbsentTargetPublishesOneVerifiedRootCommit(t *testing.T) {
 	root := filepath.Join(canonicalTemp(t), "memory")
-	result, err := newInitializer(t).Run(t.Context(), root, Options{Identity: testIdentity(), Schemas: []string{"person"}})
+	result, err := newInitializer(t).Run(t.Context(), root, Options{Identity: testIdentity(), Schemas: []string{"person@v1"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,18 +91,18 @@ func TestInitializeExistingTargetPreservesUnrelatedAndPrunedBytes(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	result, err := newInitializer(t).Run(t.Context(), root, Options{Identity: testIdentity(), Schemas: []string{"person"}})
+	result, err := newInitializer(t).Run(t.Context(), root, Options{Identity: testIdentity(), Schemas: []string{"person@v1"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Accepted.Commit == nil || !hasChange(result.Files, ".engram/schemas/person.md") {
+	if result.Accepted.Commit == nil || !hasChange(result.Files, ".engram/schemas/person@v1.md") {
 		t.Fatalf("result = %#v", result)
 	}
 	assertBytes(t, filepath.Join(root, "README.md"), readmeBefore)
 	assertBytes(t, hidden, []byte("keep hidden\n"))
 	assertBytes(t, cache, []byte{0, 1, 2, 3})
 	tracked := gitOutput(t, root, "ls-tree", "-r", "--name-only", "HEAD")
-	if strings.Contains(tracked, ".private") || strings.Contains(tracked, ".engram/cache/") || !strings.Contains(tracked, ".engram/schemas/person.md") {
+	if strings.Contains(tracked, ".private") || strings.Contains(tracked, ".engram/cache/") || !strings.Contains(tracked, ".engram/schemas/person@v1.md") {
 		t.Fatalf("tracked files = %q", tracked)
 	}
 	assertNoLifecycle(t, root)
@@ -274,9 +274,9 @@ func TestInitializePublicationFailuresCarryExactCheckoutEvidence(t *testing.T) {
 			}
 			return syncDirectory(name)
 		}
-		result, err := initializer.Run(t.Context(), root, Options{Identity: testIdentity(), Schemas: []string{"person"}})
+		result, err := initializer.Run(t.Context(), root, Options{Identity: testIdentity(), Schemas: []string{"person@v1"}})
 		assertInitializationMutation(t, result, err, injected, true)
-		if _, statErr := os.Lstat(filepath.Join(root, ".engram", "schemas", "person.md")); statErr != nil {
+		if _, statErr := os.Lstat(filepath.Join(root, ".engram", "schemas", "person@v1.md")); statErr != nil {
 			t.Fatalf("published schema missing: %v", statErr)
 		}
 		if _, statErr := os.Lstat(filepath.Join(root, ".git")); !errors.Is(statErr, os.ErrNotExist) {
@@ -294,7 +294,7 @@ func TestInitializePublicationFailuresCarryExactCheckoutEvidence(t *testing.T) {
 			}
 			return syncDirectory(name)
 		}
-		result, err := initializer.Run(t.Context(), root, Options{Identity: testIdentity(), Schemas: []string{"person"}})
+		result, err := initializer.Run(t.Context(), root, Options{Identity: testIdentity(), Schemas: []string{"person@v1"}})
 		assertInitializationMutation(t, result, err, injected, true)
 		if _, statErr := os.Lstat(filepath.Join(root, ".git")); statErr != nil {
 			t.Fatalf("renamed repository missing: %v", statErr)
@@ -366,7 +366,7 @@ func TestInitializePublicationFailuresCarryExactCheckoutEvidence(t *testing.T) {
 
 	t.Run("concurrent file before first publication", func(t *testing.T) {
 		root := existingPortableTarget(t)
-		injectedPath := filepath.Join(root, ".engram", "schemas", "person.md")
+		injectedPath := filepath.Join(root, ".engram", "schemas", "person@v1.md")
 		initializer := newInitializer(t)
 		initializer.Fault = func(phase Phase) error {
 			if phase == PhaseCleanupRequired {
@@ -374,7 +374,7 @@ func TestInitializePublicationFailuresCarryExactCheckoutEvidence(t *testing.T) {
 			}
 			return nil
 		}
-		result, err := initializer.Run(t.Context(), root, Options{Identity: testIdentity(), Schemas: []string{"person"}})
+		result, err := initializer.Run(t.Context(), root, Options{Identity: testIdentity(), Schemas: []string{"person@v1"}})
 		if err == nil {
 			t.Fatal("concurrent directory was accepted")
 		}
@@ -418,7 +418,7 @@ func TestRecoverInitializationAtPublicationBoundaries(t *testing.T) {
 		}
 		initializer := newInitializer(t)
 		initializer.Fault = failAt(PhaseFilesPublished)
-		_, err = initializer.Run(t.Context(), root, Options{Identity: testIdentity(), Schemas: []string{"person"}})
+		_, err = initializer.Run(t.Context(), root, Options{Identity: testIdentity(), Schemas: []string{"person@v1"}})
 		assertRecoveryError(t, err)
 		makeLifecycleOwnerDead(t, root)
 		recovered, err := Recover(t.Context(), root)
@@ -457,7 +457,7 @@ func TestRecoverInitializationRollbackRejectsTargetReplacement(t *testing.T) {
 	root := existingPortableTarget(t)
 	initializer := newInitializer(t)
 	initializer.Fault = failAt(PhaseFilesPublished)
-	if _, err := initializer.Run(t.Context(), root, Options{Identity: testIdentity(), Schemas: []string{"person"}}); err == nil {
+	if _, err := initializer.Run(t.Context(), root, Options{Identity: testIdentity(), Schemas: []string{"person@v1"}}); err == nil {
 		t.Fatal("initialization fault did not retain recovery state")
 	}
 	makeLifecycleOwnerDead(t, root)
@@ -525,7 +525,7 @@ func TestRecoverInitializationRollbackSyncUsesAnchoredRoot(t *testing.T) {
 	root := existingPortableTarget(t)
 	initializer := newInitializer(t)
 	initializer.Fault = failAt(PhaseFilesPublished)
-	_, err := initializer.Run(t.Context(), root, Options{Identity: testIdentity(), Schemas: []string{"person"}})
+	_, err := initializer.Run(t.Context(), root, Options{Identity: testIdentity(), Schemas: []string{"person@v1"}})
 	assertRecoveryError(t, err)
 	makeLifecycleOwnerDead(t, root)
 	state, _, err := lifecycle.Read(root, lifecycle.Initialization)
@@ -571,7 +571,7 @@ func TestRecoverInitializationRollbackSyncUsesAnchoredRoot(t *testing.T) {
 			!recovered.CheckoutChanged || recovered.RecoveryRequired || recovered.Accepted != nil {
 			t.Fatalf("sharing-protected rollback recovery = %#v, %v", recovered, recoverErr)
 		}
-		if _, err := os.Lstat(filepath.Join(root, ".engram", "schemas", "person.md")); !errors.Is(err, os.ErrNotExist) {
+		if _, err := os.Lstat(filepath.Join(root, ".engram", "schemas", "person@v1.md")); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("sharing-protected target was not rolled back: %v", err)
 		}
 		if _, err := os.Lstat(displaced); !errors.Is(err, os.ErrNotExist) {
@@ -600,7 +600,7 @@ func TestRecoverInitializationRollbackSyncUsesAnchoredRoot(t *testing.T) {
 		t.Fatalf("anchored rollback recovery = %#v, error = %v, typed = %#v, seam = %t", recovered, recoverErr, typedError, seamCalled)
 	}
 	assertBytes(t, marker, []byte("preserve replacement exactly\n"))
-	if _, err := os.Lstat(filepath.Join(displaced, ".engram", "schemas", "person.md")); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Lstat(filepath.Join(displaced, ".engram", "schemas", "person@v1.md")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("approved target was not rolled back: %v", err)
 	}
 	displacedRoot, err := os.Lstat(displaced)
@@ -622,7 +622,7 @@ func TestRecoverInitializationRollbackSyncRejectsDirtyParentReplacement(t *testi
 	root := existingPortableTarget(t)
 	initializer := newInitializer(t)
 	initializer.Fault = failAt(PhaseFilesPublished)
-	_, err := initializer.Run(t.Context(), root, Options{Identity: testIdentity(), Schemas: []string{"person"}})
+	_, err := initializer.Run(t.Context(), root, Options{Identity: testIdentity(), Schemas: []string{"person@v1"}})
 	assertRecoveryError(t, err)
 	makeLifecycleOwnerDead(t, root)
 	state, _, err := lifecycle.Read(root, lifecycle.Initialization)
@@ -974,7 +974,7 @@ func TestRecoverExpectedRejectsChangedInitializationPlanWithoutTouchingTarget(t 
 			}
 			initializer := newInitializer(t)
 			initializer.Fault = failAt(PhaseFilesPublished)
-			_, err := initializer.Run(t.Context(), root, Options{Identity: testIdentity(), Schemas: []string{"person"}})
+			_, err := initializer.Run(t.Context(), root, Options{Identity: testIdentity(), Schemas: []string{"person@v1"}})
 			assertRecoveryError(t, err)
 			makeLifecycleOwnerDead(t, root)
 			state, _, err := lifecycle.Read(root, lifecycle.Initialization)

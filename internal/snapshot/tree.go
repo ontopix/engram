@@ -11,6 +11,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/ontopix/engram/internal/typeref"
 	"github.com/ontopix/engram/internal/unicode17"
 )
 
@@ -418,21 +419,11 @@ func validContentName(name string) bool {
 	return true
 }
 
-func validTypeSlug(value string) bool {
-	if len(value) < 1 || len(value) > 64 || value[0] == '-' || value[len(value)-1] == '-' || strings.Contains(value, "--") {
-		return false
-	}
-	for index := 0; index < len(value); index++ {
-		character := value[index]
-		if character != '-' && (character < 'a' || character > 'z') && (character < '0' || character > '9') {
-			return false
-		}
-	}
-	return true
-}
+func validTypeSlug(value string) bool { return typeref.ValidName(value) }
 
 func validSchemaFilename(name string) bool {
-	return strings.HasSuffix(name, ".md") && validTypeSlug(strings.TrimSuffix(name, ".md"))
+	_, ok := typeref.Filename(name)
+	return ok
 }
 
 func validHookFilename(name string) bool {

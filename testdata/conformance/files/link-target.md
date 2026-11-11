@@ -1,5 +1,5 @@
 ---
-type: note
+type: note@v1
 description: "Existing target for local Markdown destination fixtures."
 ---
 # Link target

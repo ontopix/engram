@@ -24,7 +24,7 @@ func (f initializationRunnerFunc) Run(ctx context.Context, target string, option
 func TestInitializeCommandClosedJSONAndRepeatedSchemas(t *testing.T) {
 	app := cli.NewApp()
 	registerInitializationWith(app, initializationRunnerFunc(func(_ context.Context, target string, options initialize.Options) (initialize.Result, error) {
-		if target != "memory" || options.DryRun || len(options.Schemas) != 2 || options.Schemas[0] != "person" || options.Schemas[1] != "project" {
+		if target != "memory" || options.DryRun || len(options.Schemas) != 2 || options.Schemas[0] != "person@v1" || options.Schemas[1] != "project@v1" {
 			t.Fatalf("target/options = %q, %#v", target, options)
 		}
 		ref, commit := "refs/heads/main", "0123456789012345678901234567890123456789"
@@ -35,7 +35,7 @@ func TestInitializeCommandClosedJSONAndRepeatedSchemas(t *testing.T) {
 		}, nil
 	}))
 	var stdout, stderr bytes.Buffer
-	status := app.Run(t.Context(), []string{"init", "memory", "--schema", "person", "--schema", "project", "--format", "json"}, &stdout, &stderr)
+	status := app.Run(t.Context(), []string{"init", "memory", "--schema", "person@v1", "--schema", "project@v1", "--format", "json"}, &stdout, &stderr)
 	if status != 0 || stderr.Len() != 0 {
 		t.Fatalf("status=%d stderr=%q", status, stderr.String())
 	}

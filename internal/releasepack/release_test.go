@@ -124,14 +124,15 @@ func TestReleaseAssetsBindSkillsAndUnicodeProvenance(t *testing.T) {
 		"skills/manifest-v1.json": false,
 		"licenses/go/LICENSE.txt": false,
 		"licenses/go/PATENTS.txt": false,
-		"licenses/third-party/golang-x-text-PATENTS.txt":        false,
-		"licenses/third-party/yaml-v3-NOTICE.txt":               false,
-		"provenance/unicode17/LICENSE.txt":                      false,
-		"provenance/unicode17/README.md":                        false,
-		"docs/spec/README.md":                                   false,
-		"schemas/note.md":                                       false,
-		"examples/minimal/.engram/root.yaml":                    false,
-		"examples/integrations/generic-json/session-context.sh": false,
+		"licenses/third-party/golang-x-text-PATENTS.txt":               false,
+		"licenses/third-party/yaml-v3-NOTICE.txt":                      false,
+		"provenance/unicode17/LICENSE.txt":                             false,
+		"provenance/unicode17/README.md":                               false,
+		"docs/spec/README.md":                                          false,
+		"schemas/note.md":                                              false,
+		"examples/minimal/.engram/root.yaml":                           false,
+		"examples/schema-versions/.engram/schemas/journal-entry@v3.md": false,
+		"examples/integrations/generic-json/session-context.sh":        false,
 	}
 	for _, current := range assets {
 		if _, exists := want[current.name]; exists {

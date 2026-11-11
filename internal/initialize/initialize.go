@@ -1131,8 +1131,12 @@ func resultFromPlan(plan *bootstrap.Plan, dryRun bool) Result {
 }
 
 func samePlan(left, right *bootstrap.Plan) bool {
-	return left != nil && right != nil && left.Root == right.Root && left.RootExists == right.RootExists &&
-		reflect.DeepEqual(left.Files, right.Files) && reflect.DeepEqual(left.Candidate, right.Candidate) &&
+	// Compare the complete source tree and validation, not compiled schema
+	// internals: asserted formats contain non-nil functions, which DeepEqual
+	// considers unequal even when both plans came from identical bytes.
+	return left != nil && right != nil && left.Candidate != nil && right.Candidate != nil &&
+		left.Root == right.Root && left.RootExists == right.RootExists &&
+		reflect.DeepEqual(left.Files, right.Files) && reflect.DeepEqual(left.Candidate.Tree, right.Candidate.Tree) &&
 		reflect.DeepEqual(left.Modes, right.Modes) && reflect.DeepEqual(left.Changes, right.Changes) &&
 		reflect.DeepEqual(left.Validation, right.Validation)
 }

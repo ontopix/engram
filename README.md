@@ -87,7 +87,7 @@ has a `README.md` map, and each record declares a type and a short description:
 
 ```markdown
 ---
-type: note
+type: note@v1
 description: "Why this store keeps durable memory in plain files."
 ---
 # Why files
@@ -179,7 +179,7 @@ before continuing:
 git config --global user.name "Ada"
 git config --global user.email "ada@example.test"
 
-engram init ../my-memory --schema person --schema project
+engram init ../my-memory --schema person@v1 --schema project@v1
 engram --store ../my-memory status
 ```
 

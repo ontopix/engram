@@ -1,5 +1,5 @@
 ---
-type: note
+type: note@v1
 description: "Why this store is plain markdown files instead of a database."
 ---
 # Why files

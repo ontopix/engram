@@ -1,55 +1,53 @@
-# engram 1.0.0-rc.2 release notes
+# engram 1.0.0-rc.3 release notes
 
-These notes describe `1.0.0-rc.2`, the first published prerelease following the
-`rc.1` development baseline. A build is an
-official release only when it comes from the matching GitHub Release and its
-published checksums and provenance have been verified.
+This prerelease implements explicit schema revisions from issue #23. It is a
+breaking change to the draft store format and schema command arguments.
 
-This release improves unattended memory workflows without adding a daemon,
-runtime dependency, configuration format, or CLI command:
+Records now declare an exact reference:
 
-- The generic integration reads a fixed accepted commit, keeping working drafts
-  and caches out of retrieved memory even during concurrent acceptance.
-- Write skills distinguish rejection from acceptance with recovery pending,
-  avoiding blind retries of an operation that may already have been recorded.
-- A shared owner-adopted policy enables bounded unattended capture and local
-  commits without per-write prompts. Setup itself still grants no write authority.
-- Exact record references can be read directly with map context. Discovery,
-  contradictions, superseding, and absence retain broader retrieval checks.
-- Curated `fact` version 2 interprets open-ended validity as no known end, rather
-  than a fresh verification of present truth.
+```yaml
+type: journal-entry@v2
+```
 
-The core Agent Protocol revision is `2026-11-11`; snapshot layouts and CLI JSON
-shapes are unchanged. Re-run `engram setup` to update unchanged installed
-canonical skills. Adopt the unattended policy only through owner-approved host
-instructions. Existing local `fact` schemas are not overwritten; adopting the
-version 2 prose is an explicit local schema evolution with the normal version
-discipline. Existing records need no new fields.
+Its definition is `.engram/schemas/journal-entry@v2.md`, with `type:
+journal-entry`, `version: 2`, and a direct `schema.properties.type` constant
+of `journal-entry@v2`. Multiple revisions coexist; validation uses the
+original complete frontmatter and never guesses or falls back.
 
-The first reference implementation covers the complete v1 draft command
-surface and the M0–M6 delivery gates:
+- Publishing v3 leaves v1 and v2 records valid under their original contracts.
+- Published schema semantics cannot be edited in place or removed. A new
+  revision must exceed the family's previous maximum; gaps are allowed.
+- Append-only and immutable records retain their base protections. Changing
+  their type reference is not a permitted migration.
+- Typed links can accept any revision of a logical type or one exact revision.
+- `schema list` reports every visible revision with its exact reference and
+  scope. `init --schema`, `new`, `schema show`, and `schema copy` require exact
+  references, for example `engram schema show note@v1`.
+- Canonical skills preserve existing references and select the highest numeric
+  revision for new records when no revision was explicitly requested.
+- Initializing a populated store with asserted date formats no longer reports
+  a false concurrent modification from comparing compiled validator functions.
 
-- deterministic portable snapshot, schema, Markdown, link, catalog, finding,
-  and changeset validation;
-- raw managed-Git discovery, projection, lineage audit, status, diff, and log;
-- working-draft, staging, `MEMORY.md` attachment, declarative `engram.yaml`
-  editing and acquisition, verified agent-harness setup, schema, and hook-trust
-  workflows;
-- crash-recoverable managed commit, inverse revert, initialization, and
-  verified clone;
-- conditional push and exact linear pull replay with explicit conflict,
-  continue, abort, and recovery state; and
-- advisory diagnostics, canonical skills, cross-platform CI, reproducible
-  archives, checksums, licenses, provenance, and operator guidance.
+See the [three-revision journal snapshot](../examples/schema-versions/README.md)
+and the [CLI contract](cli/README.md). The new diagnostics are E310 (missing
+revision), E505 (removed definition), and E506 (non-increasing publication);
+E504 now enforces fixed published semantics.
 
-The reference CLI validates static `.engram/routines/` declarations and their
-managed Git projection. It does not bind, schedule, or execute routines;
-those responsibilities remain external to the CLI.
+## Upgrading existing draft stores
 
-The standard and CLI contract remain drafts until the project publishes stable
-`v1.0.0`. Finding identities and protocol v1 shapes are therefore
-release-candidate interfaces, not a retroactive stability promise for older
-draft builds.
+There is no compatibility mode for unversioned records or schema filenames.
+Keep a backup and retain the old store and matching CLI for its historical
+lineage. With owner authorization, prepare a converted snapshot in a separate
+store: rename definitions, update each matching type constant and template,
+and give every record its verified exact reference. Validate that snapshot,
+then accept it as a new managed lineage. Do not relabel protected records in
+place, rewrite the old history, or claim that old snapshots conform to rc.3.
 
-See [the operator guide](operator-guide.md) for installation, trust,
-synchronization, recovery, backup, and upgrade procedures.
+Re-run `engram setup` to update unchanged installed canonical skills. Bundled
+`fact` is `fact@v2`; the other bundled types start at v1. No extra record
+`version` field, family descriptor, or write-version setting is needed.
+
+The standard and CLI contract remain drafts until stable `v1.0.0`. This release
+includes the unattended workflow improvements from rc.2. Obtain official
+archives from the matching GitHub Release and verify its checksums and
+provenance. See the [operator guide](operator-guide.md) for operational details.

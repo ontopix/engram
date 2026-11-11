@@ -22,7 +22,7 @@ type commandGolden struct {
 // the interface gate which makes a command addition, removal, rename, usage
 // change, or store-policy change an explicit protocol review.
 var protocolCommandGoldens = []commandGolden{
-	{CommandInit, []string{"init"}, "engram init [PATH] [--schema TYPE]... [--dry-run]", []string{"init", "--dry-run"}, StoreForbidden},
+	{CommandInit, []string{"init"}, "engram init [PATH] [--schema TYPE_REF]... [--dry-run]", []string{"init", "--dry-run"}, StoreForbidden},
 	{CommandClone, []string{"clone"}, "engram clone URL [PATH]", []string{"clone", "https://example.test/memory.git", "memory"}, StoreForbidden},
 	{CommandAttach, []string{"attach"}, "engram attach STORE [--project PATH] [--memory-file FILE]", []string{"attach", "memory"}, StoreForbidden},
 	{CommandDetach, []string{"detach"}, "engram detach STORE [--project PATH] [--memory-file FILE]", []string{"detach", "memory"}, StoreForbidden},
@@ -37,12 +37,12 @@ var protocolCommandGoldens = []commandGolden{
 	{CommandAdd, []string{"add"}, "engram add PATH...\nengram add --all", []string{"add", "--all"}, StoreAllowed},
 	{CommandCheck, []string{"check"}, "engram check [PATH]\nengram check --accepted\nengram check --history\nengram check --staged\nengram check --base BASE --candidate CANDIDATE", []string{"check"}, StoreConditional},
 	{CommandFmt, []string{"fmt"}, "engram fmt [PATH...] [--check] [--dry-run]", []string{"fmt", "--dry-run"}, StoreAllowed},
-	{CommandNew, []string{"new"}, "engram new TYPE PATH --description TEXT [--fields FILE] [--body FILE|-] [--title TEXT] [--dry-run]", []string{"new", "note", "topics/new.md", "--description", "A note.", "--dry-run"}, StoreAllowed},
+	{CommandNew, []string{"new"}, "engram new TYPE_REF PATH --description TEXT [--fields FILE] [--body FILE|-] [--title TEXT] [--dry-run]", []string{"new", "note@v1", "topics/new.md", "--description", "A note.", "--dry-run"}, StoreAllowed},
 	{CommandMove, []string{"mv"}, "engram mv FROM TO [--dry-run]", []string{"mv", "old.md", "new.md", "--dry-run"}, StoreAllowed},
 	{CommandSchemaInventory, []string{"schema", "inventory"}, "engram schema inventory", []string{"schema", "inventory"}, StoreForbidden},
 	{CommandSchemaList, []string{"schema", "list"}, "engram schema list [--at PATH]", []string{"schema", "list"}, StoreAllowed},
-	{CommandSchemaShow, []string{"schema", "show"}, "engram schema show TYPE [--at PATH]", []string{"schema", "show", "note"}, StoreAllowed},
-	{CommandSchemaCopy, []string{"schema", "copy"}, "engram schema copy TYPE [--to SCOPE] [--dry-run]", []string{"schema", "copy", "note", "--dry-run"}, StoreAllowed},
+	{CommandSchemaShow, []string{"schema", "show"}, "engram schema show TYPE_REF [--at PATH]", []string{"schema", "show", "note@v1"}, StoreAllowed},
+	{CommandSchemaCopy, []string{"schema", "copy"}, "engram schema copy TYPE_REF [--to SCOPE] [--dry-run]", []string{"schema", "copy", "note@v1", "--dry-run"}, StoreAllowed},
 	{CommandCommit, []string{"commit"}, "engram commit -m MESSAGE [--dry-run]\nengram commit --dry-run", []string{"commit", "--dry-run"}, StoreAllowed},
 	{CommandRevert, []string{"revert"}, "engram revert COMMIT [-m MESSAGE] [--dry-run]", []string{"revert", "HEAD", "--dry-run"}, StoreAllowed},
 	{CommandHooksList, []string{"hooks", "list"}, "engram hooks list [--state accepted|working|staged]", []string{"hooks", "list"}, StoreAllowed},

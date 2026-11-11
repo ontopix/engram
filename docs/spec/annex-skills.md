@@ -151,15 +151,20 @@ Route by operation:
 **Trigger:** adding a type or changing, narrowing, or deprecating a
 schema.
 
-1. Enter the target area through its maps and pinned context. Keep schema
-   edits and record migration in the same candidate.
-2. Classify the change. Widening still bumps `version`; narrowing also
-   requires every affected record to migrate. Enumerate records by
-   resolved type before editing.
-3. Define a new type at the deepest directory covering all intended use,
-   avoid shadowing, and update placement guidance so writers can find it.
-4. Deprecate by removing placement guidance and migrating or closing
-   remaining records; remove the schema only when no record resolves to
-   it.
-5. Treat a copied curated schema as local once installed. Evolve its
-   version, records, and explanatory prose like any other local schema.
+1. Enter through maps and pinned context. Resolve the logical family and its
+   exact revision files in one scope; do not distribute revisions across
+   ancestor and descendant scopes.
+2. For a semantic change, add a new `name@vN.md` definition with a numeric
+   revision above the published maximum. Keep metadata and the direct
+   `schema.properties.type` constant consistent with that filename.
+3. Preserve every published definition and its semantic components. Editorial
+   descriptions and Markdown may change; retired or unused revisions remain.
+4. Existing records retain their exact declared contracts. Migrate only when
+   explicitly intended, in one candidate satisfying both the base lifecycle
+   policy and destination contract. Never rewrite append-only or immutable
+   frontmatter to change its revision.
+5. Update guidance and templates for new records. Protocol P4 selects the
+   highest available revision when the authorized task specifies none, and
+   permits an explicitly requested older revision. Never downgrade to evade
+   missing data or validation. Copied curated schemas are ordinary local
+   definitions with the same publication guarantees.

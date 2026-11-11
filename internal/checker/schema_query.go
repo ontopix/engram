@@ -7,9 +7,14 @@ import (
 	"path"
 	"sort"
 	"strings"
+
+	"github.com/ontopix/engram/internal/snapshot"
+	"github.com/ontopix/engram/internal/typeref"
 )
 
 type SchemaDescription struct {
+	Reference   string      `json:"reference"`
+	Scope       *string     `json:"scope"`
 	Type        string      `json:"type"`
 	Source      string      `json:"source"`
 	Path        *string     `json:"path"`
@@ -27,44 +32,56 @@ func (s *Snapshot) VisibleSchemas(at string) ([]SchemaDescription, error) {
 	if err != nil || !containsString(s.Tree.Directories, at) {
 		return nil, fmt.Errorf("schema query path is not a content directory")
 	}
-	winners := make(map[string]*Schema)
+
+	winners := make(map[string]string)
 	for scope := at; ; scope = parentScope(scope) {
-		prefix := joinScope(scope, ".engram/schemas") + "/"
-		for name, definition := range s.Schemas {
-			if path.Dir(name)+"/" != prefix {
-				continue
+		config := joinScope(scope, ".engram")
+		directory := config + "/schemas"
+		for _, boundary := range []string{config, directory} {
+			if kind, exists := s.Tree.Boundaries[boundary]; exists && kind != snapshot.KindDirectory {
+				return nil, fmt.Errorf("unavailable schema boundary %q", boundary)
 			}
-			if _, exists := winners[definition.Type]; !exists && definition.Type != "" {
-				winners[definition.Type] = definition
+		}
+		for _, finding := range s.Validation.Findings {
+			if finding.Path == directory && len(finding.Code) > 0 && finding.Code[0] == 'E' {
+				return nil, fmt.Errorf("invalid schema directory %q", directory)
+			}
+		}
+		for name := range s.families[directory] {
+			if _, exists := winners[name]; !exists {
+				winners[name] = directory
 			}
 		}
 		if scope == "." {
 			break
 		}
 	}
-	result := make([]SchemaDescription, 0, len(winners))
-	for typeName, definition := range winners {
-		if !s.conformingSchema(definition) {
-			return nil, fmt.Errorf("selected schema %q is not conforming", typeName)
+	result := make([]SchemaDescription, 0)
+	for name := range s.Tree.Boundaries {
+		ref, ok := typeref.Filename(path.Base(name))
+		if !ok || winners[ref.Name] != path.Dir(name) {
+			continue
 		}
-		pathValue := definition.Path
-		result = append(result, SchemaDescription{
-			Type: typeName, Source: "local", Path: &pathValue,
-			Version: json.Number(definition.Version.CanonicalJSON()), Description: definition.Description,
-		})
+		definition := s.Schemas[name]
+		if !s.conformingSchema(definition) {
+			return nil, fmt.Errorf("selected schema %q is not conforming", name)
+		}
+		pathValue, scopeValue := definition.Path, definition.Scope
+		result = append(result, SchemaDescription{Type: ref.Name, Reference: ref.String(), Scope: &scopeValue, Source: "local", Path: &pathValue, Version: json.Number(ref.Version), Description: definition.Description})
 	}
 	sort.Slice(result, func(i, j int) bool {
 		if result[i].Type != result[j].Type {
 			return bytes.Compare([]byte(result[i].Type), []byte(result[j].Type)) < 0
 		}
-		return *result[i].Path < *result[j].Path
+		return typeref.CompareVersions(result[i].Version.String(), result[j].Version.String()) < 0
 	})
+
 	return result, nil
 }
 
 // ShowSchema resolves typeName at at and returns its exact UTF-8 source.
 func (s *Snapshot) ShowSchema(at, typeName string) (SchemaDescription, string, error) {
-	if !documentTypeSlug(typeName) {
+	if !typeref.Valid(typeName) {
 		return SchemaDescription{}, "", fmt.Errorf("invalid schema type %q", typeName)
 	}
 	visible, err := s.VisibleSchemas(at)
@@ -72,7 +89,7 @@ func (s *Snapshot) ShowSchema(at, typeName string) (SchemaDescription, string, e
 		return SchemaDescription{}, "", err
 	}
 	for _, description := range visible {
-		if description.Type != typeName {
+		if description.Reference != typeName {
 			continue
 		}
 		file, ok := s.Tree.Files[*description.Path]
@@ -104,17 +121,4 @@ func normalizeDirectory(value string) (string, error) {
 		return "", fmt.Errorf("invalid logical directory")
 	}
 	return value, nil
-}
-
-func documentTypeSlug(value string) bool {
-	if value == "" || value[0] == '-' || value[len(value)-1] == '-' || len(value) > 64 || strings.Contains(value, "--") {
-		return false
-	}
-	for index := range len(value) {
-		character := value[index]
-		if character != '-' && (character < 'a' || character > 'z') && (character < '0' || character > '9') {
-			return false
-		}
-	}
-	return true
 }

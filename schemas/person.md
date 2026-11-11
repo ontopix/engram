@@ -7,7 +7,7 @@ schema:
   required: [type, description, name]
   additionalProperties: false
   properties:
-    type: {const: person}
+    type: {const: person@v1}
     description: {type: string, minLength: 1, maxLength: 200}
     pinned: {type: boolean}
     name: {type: string, minLength: 1}
@@ -56,7 +56,7 @@ history when either changes.
 
 ```markdown
 ---
-type: person
+type: person@v1
 description: "<who they are and why they matter here>"
 name: <Full Name>
 emails: [<address>]

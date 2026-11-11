@@ -5,6 +5,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/ontopix/engram/internal/typeref"
 )
 
 // LinkField describes one valid x-engram-link declaration.
@@ -68,8 +70,8 @@ func (a *analyzer) checkLink(object map[string]any, schemaTokens []string, path 
 	for index, item := range types {
 		location := pointer(child(child(keywordTokens, "types"), strconv.Itoa(index)))
 		typeName, ok := item.(string)
-		if !ok || !validTypeSlug(typeName) {
-			a.add(location, "link type must be a type slug of 1 through 64 ASCII characters")
+		if !ok || (!typeref.ValidName(typeName) && !typeref.Valid(typeName)) {
+			a.add(location, "link type must be a logical type name or exact name@vN reference")
 			valid = false
 			continue
 		}
@@ -104,30 +106,6 @@ func (a *analyzer) checkLink(object map[string]any, schemaTokens []string, path 
 		MustExist:       mustExist,
 		selectors:       appendSelectors(nil, path.selectors...),
 	})
-}
-
-func validTypeSlug(value string) bool {
-	if len(value) == 0 || len(value) > 64 || value[0] == '-' || value[len(value)-1] == '-' {
-		return false
-	}
-	previousHyphen := false
-	for index := 0; index < len(value); index++ {
-		current := value[index]
-		if current == '-' {
-			if previousHyphen {
-				return false
-			}
-			previousHyphen = true
-			continue
-		}
-		if current < 'a' || current > 'z' {
-			if current < '0' || current > '9' {
-				return false
-			}
-		}
-		previousHyphen = false
-	}
-	return true
 }
 
 func appendSelectors(base []linkSelector, additions ...linkSelector) []linkSelector {
