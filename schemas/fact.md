@@ -1,6 +1,6 @@
 ---
 type: fact
-version: 1
+version: 2
 description: "One atomic durable statement, with temporal validity, provenance, and claim level."
 schema:
   type: object
@@ -42,7 +42,12 @@ distilled here and links back to its anchor.
 ## Temporal contract
 
 - `valid_from` and `valid_until` record when the claim held; absent or
-  null `valid_until` means it is current.
+  null `valid_until` means no end of validity is known. It does not establish
+  that the claim has been verified recently or still holds now.
+- Preserve the evidence's observation date in the body when relevant; do not
+  substitute a file-edit or commit date. Before acting on a changeable claim,
+  verify its source when the task depends on present accuracy. If verification
+  is unavailable, report the claim as last known rather than confirmed current.
 - A contradiction closes and supersedes the old fact; it never
   overwrites the old claim. Set `valid_until`, create the replacement
   with `supersedes: ["[[<old>]]"]`, and preserve the former statement.

@@ -171,7 +171,11 @@ func TestSchemaInventoryShapeAndOrdering(t *testing.T) {
 			t.Fatalf("schema %d = %#v", index, item)
 		}
 		assertExactKeys(t, description, "type", "source", "path", "version", "description")
-		if description["source"] != "inventory" || description["path"] != nil || description["version"] != float64(1) || description["description"] == "" {
+		wantVersion := float64(1)
+		if description["type"] == "fact" {
+			wantVersion = 2
+		}
+		if description["source"] != "inventory" || description["path"] != nil || description["version"] != wantVersion || description["description"] == "" {
 			t.Fatalf("schema %d = %#v", index, description)
 		}
 		types = append(types, description["type"].(string))

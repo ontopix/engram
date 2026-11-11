@@ -2,7 +2,7 @@
 
 **Version:** v1
 **Status:** Draft
-**Revision:** 2026-08-18
+**Revision:** 2026-11-11
 **Normative status:** Non-normative
 
 This annex describes optional bindings between engram and agent runtimes. An
@@ -100,6 +100,12 @@ explicit correction and restaging.
 A local commit neither fetches nor pushes. Network synchronization is a
 separately authorized operation under the Git annex's synchronizer profile.
 
+Acceptance and checkout completion are distinct outcomes. A failure after the
+accepted ref advances leaves that commit accepted and blocks subsequent writes
+until recovery. An unattended binding inspects the writer's acceptance and
+recovery evidence before retrying; it does not infer rejection from an error
+exit alone. Unknown acceptance calls for diagnosis, not a duplicate write.
+
 ## 4. Runtime profiles
 
 These profiles differ only in packaging and lifecycle hooks; they use the same
@@ -135,6 +141,15 @@ independently owned store checkout.
   host permissions or mounts. Engram defines no ACL system.
 - Unattended integrations surface validation, hook, and recovery failures on a
   channel a human or controller observes.
+
+An owner can authorize recurring memory capture once in trusted project or host
+instructions, with a named writable store and a bounded task scope. Such a
+policy can ask for useful decisions, corrections, and reusable lessons at
+completed work steps, allow local managed acceptance without another prompt,
+and leave an unchanged store alone when nothing new was learned. This policy
+belongs outside store content and outside setup-owned discovery blocks; setup
+does not install or grant it. The [integration examples](../../examples/integrations/README.md#unattended-capture)
+provide a small owner-adopted policy rather than another runtime component.
 
 ## 6. Normative roles an adapter may assume
 

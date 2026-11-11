@@ -25,9 +25,13 @@ apply using-engram before this workflow.
 5. Let the managed transaction prepare and completely validate the final
    candidate. Accept it as one local commit only on a complete result with no E
    finding.
-6. Treat a dirty, unstaged, rejected, or indeterminate result as an unaccepted
-   working draft. Preserve it for correction and surface the failure. Never
-   infer push authorization from a local commit.
+6. Distinguish acceptance from checkout completion. Rejection before the
+   accepted ref advances leaves the operation as a working draft. A failure
+   after it advances preserves the accepted commit and requires recovery, not
+   another attempt to record the same operation. Inspect acceptance and recovery
+   evidence; if the outcome is unknown, surface it without assuming either
+   success or safe retry. Preserve unrelated draft bytes. A local commit never
+   implies push.
 
 ## Build the content operation
 

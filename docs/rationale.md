@@ -26,8 +26,10 @@ Three important weaknesses shape the standard:
 
 1. **Placement and retrieval degrade with scale.** Directory READMEs
    provide local maps, and deterministic catalogs do so when enabled.
-   Agents combine map descent with reformulated content search while
-   keeping unrelated files out of model context.
+   Agents combine map descent with reformulated content search for discovery,
+   contradictions, superseding, and absence. Exact record references can be
+   read directly after map context without repeating discovery. Unrelated
+   files stay out of model context.
 2. **Claims change over time.** Domain schemas can record validity and
    superseding relations alongside the store's Git history. The curated
    `fact` type demonstrates closing an old claim and linking its

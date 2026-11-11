@@ -18,11 +18,10 @@ its links, and its directory maps cannot be accepted as a partial update.
 > [!IMPORTANT]
 > Engram v1 and the observable CLI interfaces are still release-candidate
 > drafts. The reference implementation is complete through milestone M6 and
-> currently identifies itself as the `1.0.0-rc.1` target, but interfaces may
-> still change before `v1.0.0`. The development tree also contains the
-> unreleased changes listed in the [changelog](CHANGELOG.md), including the
-> routine declarations annex. The reference CLI validates their static format,
-> but does not bind or execute routines.
+> currently identifies itself as `1.0.0-rc.2`, but interfaces may still change
+> before `v1.0.0`. See the [changelog](CHANGELOG.md) for the accepted-state
+> retrieval and unattended capture improvements. The reference CLI validates
+> routine declarations' static format, but does not bind or execute routines.
 
 ## Start here
 

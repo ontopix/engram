@@ -41,3 +41,33 @@ cp -R examples/minimal "$store_root"
 Use a fresh `store_root`, and configure your Git author name and email before
 running `init`. The runtime-specific examples assume the resulting `engram`
 binary is on `PATH`.
+
+## Unattended capture
+
+Setup installs discovery and canonical skills; it does not authorize recurring
+writes. To enable unattended capture, the owner can adopt the following policy
+in trusted project `AGENTS.md`, `CLAUDE.md`, or host instructions, outside the
+setup-owned marker block. Replace `project-memory` with one actual attachment
+and its intended content scope before adopting it. This example assumes one
+automated editor per checkout; concurrent runs use separate worktrees or clones.
+
+```markdown
+For this project's authorized work, you may read the attached project-memory
+store and persist project decisions, corrections, and reusable lessons there,
+including their managed local commits, without asking again for each write.
+At completed work steps, capture only new information useful to future work.
+Check existing memory and update or link it instead of duplicating it; preserve
+observed sources and distinguish facts from inferences. If nothing useful is
+new, leave memory unchanged. Use the canonical write workflow and stage only
+the intended operation. Other stores remain read-only under this policy.
+This grant does not include hook execution, network synchronization, or new
+credentials. Preserve unrelated drafts and report conflicts or failures in the
+run result. If acceptance may already have occurred, inspect acceptance and
+recovery evidence before any retry; do not repeat a possibly accepted write.
+```
+
+This is an example task authorization, not an additional Agent Protocol. The
+host retains control over its scope and can revoke it. Recovery can be
+separately authorized by the host; otherwise a recovery-required result is
+reported to the controller. Scheduled execution, when needed, remains the
+existing host's responsibility.
