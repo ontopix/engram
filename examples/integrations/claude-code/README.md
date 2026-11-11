@@ -44,12 +44,17 @@ the whole store:
 > relevant to derived state. Combine catalog descent with two content-search
 > phrasings, then summarize the answer with the record paths you inspected.
 
-An explicitly authorized write can be requested like this:
+An explicitly authorized supervised write can be requested like this:
 
 > Update the attached store with a durable note about this project's indexing
 > policy. Read the note schema and relevant maps first. Preserve unrelated
 > drafts, stage only the intended record and catalog changes, validate the
 > candidate, and ask before the managed commit. Do not trust hooks implicitly.
+
+For unattended work, the owner can instead adopt the shared
+[unattended capture policy](../README.md#unattended-capture) in `CLAUDE.md`,
+outside the setup-owned block. That policy grants bounded local writes once;
+the supervised example's per-commit prompt is then unnecessary within its scope.
 
 ## Verify or remove the integration
 

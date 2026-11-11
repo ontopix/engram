@@ -9,13 +9,13 @@ import (
 )
 
 var (
-	CLIVersion    = "1.0.0-rc.1"
+	CLIVersion    = "1.0.0-rc.2"
 	BuildRevision = ""
 )
 
 const (
-	coreRevision     = "2026-08-18"
-	coreSHA256       = "2bcd3858b3bdf508d4cf2e832cd5ac2ec13381b407286a2bb4486784226d75f3"
+	coreRevision     = "2026-11-11"
+	coreSHA256       = "05dee5541c2f7932c1b65b5adefcac42e7b5cfca9bd0263c8aa21ab6060546c6"
 	gitRevision      = "2026-08-18"
 	gitSHA256        = "b85d7ee0c9df6971fcca08bc5d53f2a92c6515cf5a14d99b160dde0eb24bc254"
 	routinesRevision = "2026-08-13"

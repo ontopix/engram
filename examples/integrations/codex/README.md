@@ -46,13 +46,18 @@ Open Codex in `project_root` and use a bounded retrieval request such as:
 > about why files are the source of truth. Search both the catalogs and record
 > content, reformulating the query once. Report the paths you used.
 
-For a write, make the authorization explicit:
+For a supervised write, make the authorization explicit:
 
 > In the attached project-memory store, record the decision we just made as a
 > note under `topics/`. Read the applicable schema first, update the catalog,
 > stage only the files you changed, validate the staged candidate, and ask me
 > before accepting it. Do not run hooks or use the network without separate
 > authorization.
+
+For unattended work, the owner can instead adopt the shared
+[unattended capture policy](../README.md#unattended-capture) in `AGENTS.md`,
+outside the setup-owned block. That policy grants bounded local writes once;
+the supervised example's per-commit prompt is then unnecessary within its scope.
 
 ## Verify or remove the integration
 

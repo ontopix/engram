@@ -1,6 +1,6 @@
 # engram reference CLI — implementation plan
 
-**Status:** Implemented; release-ready `v1.0.0-rc.1` baseline
+**Status:** Implemented; M0–M6 baseline, with `v1.0.0-rc.2` refinements in the changelog
 **Revision:** 2026-08-18
 **Normative status:** Non-normative
 

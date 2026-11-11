@@ -1,6 +1,29 @@
 # Changelog
 
-## Unreleased — target 1.0.0-rc.1
+## 1.0.0-rc.2 — 2026-11-11
+
+### Unattended agent memory
+
+- Core Agent Protocol P3 now permits direct reads of exact record references
+  after map and pinned context. Discovery, contradiction/superseding checks,
+  and absence claims retain catalog navigation and reformulated content search.
+  Updated canonical skills, initialization guidance, and the minimal example.
+- The generic session-context example reads maps and search results from one
+  fixed accepted commit, excluding staged/unstaged drafts, untracked content,
+  and caches, even if another writer advances acceptance during retrieval.
+- Mutating skills distinguish pre-acceptance rejection from an accepted commit
+  whose checkout reconciliation needs recovery. Runtime guidance consumes the
+  existing acceptance/recovery evidence before any retry.
+- Added a shared, owner-adopted unattended capture policy for trusted project
+  instructions: bounded local writes without repeated prompts, useful capture
+  at completed work steps, and no write when nothing new was learned. Setup
+  continues to install discovery and skills without granting write authority.
+- Curated `fact` schema version 2 clarifies that an absent or null `valid_until`
+  means no known validity end, not fresh verification. Its prose preserves the
+  evidence date and calls for source verification when current accuracy matters.
+  Existing installed schema copies remain local; adoption is explicit.
+
+## 1.0.0-rc.1 development baseline (not separately published)
 
 ### Standard
 

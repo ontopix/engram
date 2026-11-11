@@ -1,8 +1,30 @@
-# engram 1.0.0-rc.1 release notes
+# engram 1.0.0-rc.2 release notes
 
-These notes describe the source targeted for `1.0.0-rc.1`. A build is an
+These notes describe `1.0.0-rc.2`, the first published prerelease following the
+`rc.1` development baseline. A build is an
 official release only when it comes from the matching GitHub Release and its
 published checksums and provenance have been verified.
+
+This release improves unattended memory workflows without adding a daemon,
+runtime dependency, configuration format, or CLI command:
+
+- The generic integration reads a fixed accepted commit, keeping working drafts
+  and caches out of retrieved memory even during concurrent acceptance.
+- Write skills distinguish rejection from acceptance with recovery pending,
+  avoiding blind retries of an operation that may already have been recorded.
+- A shared owner-adopted policy enables bounded unattended capture and local
+  commits without per-write prompts. Setup itself still grants no write authority.
+- Exact record references can be read directly with map context. Discovery,
+  contradictions, superseding, and absence retain broader retrieval checks.
+- Curated `fact` version 2 interprets open-ended validity as no known end, rather
+  than a fresh verification of present truth.
+
+The core Agent Protocol revision is `2026-11-11`; snapshot layouts and CLI JSON
+shapes are unchanged. Re-run `engram setup` to update unchanged installed
+canonical skills. Adopt the unattended policy only through owner-approved host
+instructions. Existing local `fact` schemas are not overwritten; adopting the
+version 2 prose is an explicit local schema evolution with the normal version
+discipline. Existing records need no new fields.
 
 The first reference implementation covers the complete v1 draft command
 surface and the M0–M6 delivery gates:

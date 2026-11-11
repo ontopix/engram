@@ -6,13 +6,20 @@ and consumes deterministic CLI JSON for validation and state feedback.
 
 ## Read-only session bootstrap
 
-[`session-context.sh`](session-context.sh) performs four bounded operations:
+[`session-context.sh`](session-context.sh) performs four operations:
 
-1. verifies the accepted store without mutation;
-2. emits machine-readable status;
-3. prints the root map; and
+1. captures the accepted commit and validates accepted state without mutation;
+2. checks that acceptance did not move during validation and reports the commit;
+3. prints the root map from that fixed commit; and
 4. searches maps and Markdown content with both an original and a reformulated
-   query, limiting the displayed matches.
+   query in the same commit, limiting the displayed matches.
+
+The script reads Git objects, so staged, unstaged, untracked, and cached draft
+content cannot become retrieval results. It requires system Git and the trusted
+CLI on `PATH`, and accepts two literal search phrasings. Its validation is an
+explicit example check, not a prerequisite for every retrieval. Exact record
+references may be read directly with P1–P2 map context; this script demonstrates
+broader discovery. Output limits are display limits, not evidence of absence.
 
 Run it with two genuinely different search phrasings:
 
@@ -49,5 +56,9 @@ engram --store "$store_root" commit \
 ```
 
 The controller must stage only authorized paths and should inspect the JSON
-result after every step. Hook execution, credentials, pull, and push each need
+result after every step. In a recovery-bearing error, inspect `local_refs` for
+an accepted-ref update and `recovery_required` before retrying. A commit may
+already be accepted even though checkout reconciliation failed; recover that
+state instead of recording the same operation again. An unknown outcome stays
+unknown until diagnosed. Hook execution, credentials, pull, and push each need
 separate authority; a successful local commit implies none of them.
