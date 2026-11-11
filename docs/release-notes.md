@@ -22,7 +22,7 @@ original complete frontmatter and never guesses or falls back.
 - Typed links can accept any revision of a logical type or one exact revision.
 - `schema list` reports every visible revision with its exact reference and
   scope. `init --schema`, `new`, `schema show`, and `schema copy` require exact
-  references, for example `engram new note@v1 topics/example.md`.
+  references, for example `engram schema show note@v1`.
 - Canonical skills preserve existing references and select the highest numeric
   revision for new records when no revision was explicitly requested.
 - Initializing a populated store with asserted date formats no longer reports
