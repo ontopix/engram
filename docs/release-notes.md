@@ -1,7 +1,24 @@
-# engram 1.0.0-rc.3 release notes
+# engram 1.0.0-rc.4 release notes
 
-This prerelease implements explicit schema revisions from issue #23. It is a
-breaking change to the draft store format and schema command arguments.
+This prerelease completes example compatibility after rc.3. The store format
+and command surface are unchanged.
+
+- The quick start and generic agent write handoff now use `new note@v1`.
+  Their documented store and write commands run directly in integration tests.
+- The [complete journal](../examples/journal/README.md) adds 34 daily entries,
+  five linked weekly reviews, and one monthly review. Its records, schema
+  filenames, type constants, and templates all select exact revisions.
+- Every bundled snapshot is validated in CI. The journal, its local review
+  schema, fictional source data, and host-owned routine declaration are
+  included in the archives. The CLI validates but does not execute routines.
+
+These examples also work with the published rc.3 CLI. The inherited rc.3
+format and upgrade notes follow.
+
+## Explicit schema references from rc.3
+
+Release `1.0.0-rc.3` introduced explicit schema revisions from issue #23,
+a breaking change to the draft store format and schema command arguments.
 
 Records now declare an exact reference:
 

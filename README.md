@@ -141,7 +141,7 @@ cp -R examples/minimal "$store_path"
 ./engram check "$store_path"
 ./engram init "$store_path"
 
-./engram --store "$store_path" new note topics/first-memory.md \
+./engram --store "$store_path" new note@v1 topics/first-memory.md \
   --description "The first durable memory created in this store." \
   --title "First memory"
 
@@ -301,6 +301,8 @@ Start with the document that matches what you are trying to do:
 | [Release notes](docs/release-notes.md) | Current release-candidate scope and compatibility status |
 | [Curated schemas](schemas/README.md) | Optional ready-to-copy record types |
 | [Minimal example](examples/minimal/README.md) | A small conforming portable snapshot |
+| [Schema versions](examples/schema-versions/README.md) | Three journal contracts coexisting without rewriting old records |
+| [Journal example](examples/journal/README.md) | Daily evidence, linked weekly and monthly reviews, and a routine declaration |
 | [Agent integrations](examples/integrations/README.md) | Copyable runtime attachment, skill, retrieval, and write workflows |
 
 The core specification and normative annexes define Engram. The Go CLI is a

@@ -9,15 +9,25 @@ import (
 	"github.com/ontopix/engram/internal/conformance"
 )
 
-func TestSeedSnapshotConforms(t *testing.T) {
+func TestExampleSnapshotsConform(t *testing.T) {
 	t.Parallel()
 	repository := repositoryRoot(t)
-	checked, err := CheckFS(filepath.Join(repository, "examples", "minimal"))
-	if err != nil {
-		t.Fatal(err)
+	manifests, err := filepath.Glob(filepath.Join(repository, "examples", "*", ".engram", "root.yaml"))
+	if err != nil || len(manifests) == 0 {
+		t.Fatalf("discover example snapshots: %v (%d found)", err, len(manifests))
 	}
-	if checked.Validation.HasErrors() || len(checked.Validation.Findings) != 0 {
-		t.Fatalf("minimal example findings = %#v", checked.Validation.Findings)
+	for _, manifest := range manifests {
+		root := filepath.Dir(filepath.Dir(manifest))
+		t.Run(filepath.Base(root), func(t *testing.T) {
+			t.Parallel()
+			checked, err := CheckFS(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if checked.Validation.Status != StatusComplete || len(checked.Validation.Findings) != 0 {
+				t.Fatalf("example validation = %#v", checked.Validation)
+			}
+		})
 	}
 }
 

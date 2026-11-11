@@ -186,13 +186,6 @@ func TestVersionedTypedLinks(t *testing.T) {
 	}
 }
 
-func TestSchemaVersionExampleConforms(t *testing.T) {
-	checked := versionCheck(t, filepath.Join(repositoryRoot(t), "examples", "schema-versions"))
-	if checked.Validation.Status != StatusComplete || len(checked.Validation.Findings) != 0 {
-		t.Fatal(checked.Validation)
-	}
-}
-
 func TestVersionDefinitionIdentityAndEditorialChanges(t *testing.T) {
 	root := versionStore(t)
 	name := ".engram/schemas/entry@v1.md"
