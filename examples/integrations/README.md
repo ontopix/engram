@@ -3,7 +3,8 @@
 These examples connect one independently owned managed engram store to three
 agent-runtime styles. They are integration fixtures and documentation, not
 engram snapshots themselves; [`../minimal/`](../minimal/README.md) remains the
-small conforming snapshot used by the examples.
+small conforming snapshot used by the examples. Record creation uses exact
+schema references such as `note@v1`, supported from CLI `1.0.0-rc.3`.
 
 | Runtime | Example | What it demonstrates |
 |---|---|---|

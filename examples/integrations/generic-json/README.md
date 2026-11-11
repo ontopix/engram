@@ -44,7 +44,7 @@ candidate, and accepts it:
 ```sh
 store_root="/absolute/path/to/integration-memory"
 
-engram --store "$store_root" new note topics/agent-observation.md \
+engram --store "$store_root" new note@v1 topics/agent-observation.md \
   --description "A durable observation recorded by the agent." \
   --title "Agent observation" --format json
 

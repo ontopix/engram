@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -8,6 +9,93 @@ import (
 	"strings"
 	"testing"
 )
+
+func TestReadmeQuickStartStoreCommands(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the documented quick start requires a POSIX shell")
+	}
+	binary, root := buildExecutable(t)
+	store := filepath.Join(t.TempDir(), "quickstart with spaces")
+	environment := replaceEnvironment(executableTestEnvironment(t), map[string]string{
+		"PATH":              filepath.Dir(binary) + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"ENGRAM_TEST_STORE": store,
+	})
+	block := documentedShellBlock(t, filepath.Join(root, "README.md"), "## Quick start")
+	// buildExecutable already performs the checkout's build; run the documented
+	// store commands verbatim except for the destination and binary location.
+	_, block, found := strings.Cut(block, "store_path=")
+	if !found {
+		t.Fatal("quick start no longer declares its store destination")
+	}
+	block = strings.Replace("store_path="+block, `store_path="../engram-quickstart"`, `store_path="$ENGRAM_TEST_STORE"`, 1)
+	block = strings.ReplaceAll(block, "./engram ", "engram ")
+	status, stdout, stderr := runExecutableWithEnvironment(t, "sh", root, environment, "-eu", "-c", block)
+	if status != 0 {
+		t.Fatalf("documented quick start: status=%d stdout=%s stderr=%s", status, stdout, stderr)
+	}
+	accepted := runFixtureGit(t, environment, "-C", store, "show", "HEAD:topics/first-memory.md")
+	if !strings.Contains(accepted, "type: note@v1\n") {
+		t.Fatalf("quick start did not accept an exact type reference: %s", accepted)
+	}
+}
+
+func TestGenericJSONDocumentedWriteHandoff(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the integration example requires a POSIX shell")
+	}
+	binary, root := buildExecutable(t)
+	store := filepath.Join(t.TempDir(), "memory with spaces")
+	if err := os.CopyFS(store, os.DirFS(filepath.Join(root, "examples", "minimal"))); err != nil {
+		t.Fatal(err)
+	}
+	environment := replaceEnvironment(executableTestEnvironment(t), map[string]string{
+		"PATH":              filepath.Dir(binary) + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"ENGRAM_TEST_STORE": store,
+	})
+	status, stdout, stderr := runExecutableWithEnvironment(t, binary, root, environment, "init", store)
+	if status != 0 {
+		t.Fatalf("initialize example: status=%d stdout=%s stderr=%s", status, stdout, stderr)
+	}
+	block := documentedShellBlock(t, filepath.Join(root, "examples", "integrations", "generic-json", "README.md"), "## Managed write handoff")
+	block = strings.Replace(block, `store_root="/absolute/path/to/integration-memory"`, `store_root="$ENGRAM_TEST_STORE"`, 1)
+	status, stdout, stderr = runExecutableWithEnvironment(t, "sh", root, environment, "-eu", "-c", block)
+	if status != 0 {
+		t.Fatalf("documented write: status=%d stdout=%s stderr=%s", status, stdout, stderr)
+	}
+	for _, line := range strings.Split(strings.TrimSpace(stdout), "\n") {
+		var envelope struct {
+			Outcome string `json:"outcome"`
+		}
+		if err := json.Unmarshal([]byte(line), &envelope); err != nil || envelope.Outcome != "ok" {
+			t.Fatalf("documented command outcome: %s (%v)", line, err)
+		}
+	}
+	accepted := runFixtureGit(t, environment, "-C", store, "show", "HEAD:topics/agent-observation.md")
+	if !strings.Contains(accepted, "type: note@v1\n") {
+		t.Fatalf("documented write did not accept an exact type reference: %s", accepted)
+	}
+}
+
+func documentedShellBlock(t *testing.T, filename, heading string) string {
+	t.Helper()
+	readme, err := os.ReadFile(filename)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, section, found := strings.Cut(string(readme), heading)
+	if !found {
+		t.Fatalf("documented section %q is missing", heading)
+	}
+	_, block, found := strings.Cut(section, "```sh\n")
+	if !found {
+		t.Fatal("documented shell block is missing")
+	}
+	block, _, found = strings.Cut(block, "\n```")
+	if !found {
+		t.Fatal("documented shell block is unclosed")
+	}
+	return block
+}
 
 func TestSessionContextReadsOneAcceptedCommit(t *testing.T) {
 	if runtime.GOOS == "windows" {

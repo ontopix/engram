@@ -9,7 +9,7 @@ import (
 )
 
 var (
-	CLIVersion    = "1.0.0-rc.3"
+	CLIVersion    = "1.0.0-rc.4"
 	BuildRevision = ""
 )
 

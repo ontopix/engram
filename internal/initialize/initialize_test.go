@@ -108,6 +108,36 @@ func TestInitializeExistingTargetPreservesUnrelatedAndPrunedBytes(t *testing.T) 
 	assertNoLifecycle(t, root)
 }
 
+func TestInitializeJournalExamplePreservesSnapshot(t *testing.T) {
+	root := filepath.Join(canonicalTemp(t), "memory")
+	if err := os.CopyFS(root, os.DirFS(filepath.Join(repositoryRoot(t), "examples", "journal"))); err != nil {
+		t.Fatal(err)
+	}
+	before, err := checker.CheckFS(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := newInitializer(t).Run(t.Context(), root, Options{Identity: testIdentity()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Accepted.Commit == nil || result.Validation.Status != checker.StatusComplete || len(result.Validation.Findings) != 0 {
+		t.Fatalf("result = %#v", result)
+	}
+	for name, file := range before.Tree.Files {
+		assertBytes(t, filepath.Join(root, filepath.FromSlash(name)), file.Data)
+	}
+	store, err := managedread.Open(t.Context(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	audit, err := store.AuditAccepted(t.Context())
+	if err != nil || audit.Validation.Status != checker.StatusComplete || len(audit.Validation.Findings) != 0 || audit.Tip != *result.Accepted.Commit {
+		t.Fatalf("audit = %#v, %v", audit, err)
+	}
+	assertNoLifecycle(t, root)
+}
+
 func TestInitializeRejectionAndInvalidIdentityLeaveTargetUnchanged(t *testing.T) {
 	for _, test := range []struct {
 		name     string

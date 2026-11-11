@@ -693,6 +693,7 @@ func releaseAssets(ctx context.Context, root string, tracked map[string]struct{}
 		{root: "schemas", extensions: map[string]bool{".md": true}},
 		{root: "examples/minimal", extensions: map[string]bool{".md": true, ".yaml": true}},
 		{root: "examples/schema-versions", extensions: map[string]bool{".md": true, ".yaml": true}},
+		{root: "examples/journal", extensions: map[string]bool{".md": true, ".yaml": true, ".txt": true}},
 		{root: "examples/integrations", extensions: map[string]bool{".md": true, ".sh": true}},
 	} {
 		treeNames := releaseTreeNames(tracked, tree.root, tree.extensions)

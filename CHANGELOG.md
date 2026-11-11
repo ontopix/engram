@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.0.0-rc.4 — 2026-11-11
+
+- Corrected the quick start and generic agent write example to use `note@v1`;
+  their documented store and write commands now run in integration tests.
+- Updated the sample directory layout and curated-schema copy guidance to
+  distinguish inventory source names from versioned installed filenames.
+- Added the complete English journal snapshot with 34 daily entries, five
+  weekly reviews, one monthly review, a shared local review schema, and one
+  host-owned routine declaration. All record references, definitions, and
+  templates use the explicit version format supported by rc.3.
+- Validate every bundled snapshot in CI, verify journal initialization without
+  rewriting its records, and include the journal and fictional source fixtures
+  in release archives. No store-format or CLI-command change is introduced.
+
 ## 1.0.0-rc.3 — 2026-11-11
 
 ### Explicit schema revisions (breaking draft format)

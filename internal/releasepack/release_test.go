@@ -133,6 +133,10 @@ func TestReleaseAssetsBindSkillsAndUnicodeProvenance(t *testing.T) {
 		"examples/minimal/.engram/root.yaml":                           false,
 		"examples/schema-versions/.engram/schemas/journal-entry@v3.md": false,
 		"examples/integrations/generic-json/session-context.sh":        false,
+		"examples/journal/.engram/schemas/period-review@v1.md":         false,
+		"examples/journal/.engram/routines/journal-cycle.md":           false,
+		"examples/journal/fixture-sources.txt":                         false,
+		"examples/journal/monthly/2026/2026-10.md":                     false,
 	}
 	for _, current := range assets {
 		if _, exists := want[current.name]; exists {

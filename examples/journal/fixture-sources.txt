@@ -1,0 +1,123 @@
+ATLAS JOURNAL FIXTURE SOURCES
+
+Everything in this file is fictional, authored solely for this example.
+Identifiers below refer to these exact local fixture entries, not real systems.
+Times use Europe/Madrid. The listed date is when the evidence became available.
+Statements can describe an earlier event; the October 20 trace concerns October 15.
+
+ATLAS-20260928-01 | Available 2026-09-28 09:30 | DECISION
+Approve an Atlas import pilot for two teams only, with manual review of rejected records.
+
+ATLAS-20260929-01 | Available 2026-09-29 10:00 | FACT
+The pilot team rehearsed a rollback and restored the previous import configuration.
+
+ATLAS-20260930-01 | Available 2026-09-30 15:10 | FACT
+A rehearsal batch contained 120 records: 114 passed and six were held for review. This was a rehearsal, not a production rollout.
+
+ATLAS-20261001-01 | Available 2026-10-01 09:00 | FACT
+The two-team Atlas pilot started. Rejected records remained in a manual review queue.
+
+ATLAS-20261002-01 | Available 2026-10-02 14:00 | FACT
+The first pilot review found 12 held records with missing customer identifiers.
+
+ATLAS-20261002-02 | Available 2026-10-02 14:20 | HYPOTHESIS
+The missing identifiers may originate in one export path; the export path has not yet been established.
+
+ATLAS-20261003-01 | Available 2026-10-03 10:30 | FACT
+A weekend inspection confirmed that the held records were isolated from accepted imports; no automatic repair had been applied.
+
+ATLAS-20261004-01 | Available 2026-10-04 16:00 | DECISION
+Keep the pilot at two teams until rejection causes are understood. A low rejection count alone is not approval to expand.
+
+ATLAS-20261005-01 | Available 2026-10-05 11:20 | FACT
+The investigation added separate labels for missing identifiers and malformed identifiers so the two causes can be reviewed independently.
+
+ATLAS-20261006-01 | Available 2026-10-06 10:15 | FACT
+The import report listed 23 rejection events. The number of unique affected records was not yet reconciled.
+
+ATLAS-20261006-02 | Available 2026-10-06 11:00 | DECISION
+Review those events manually before continuing; do not repair values without evidence of the intended identifier.
+
+ATLAS-20261007-01 | Available 2026-10-07 13:00 | HYPOTHESIS
+A locale conversion may explain the reported rejections. This is an investigation lead, not a confirmed cause.
+
+ATLAS-20261008-01 | Available 2026-10-08 15:00 | FACT
+All eight inspected examples lacked customer identifiers. The inspection did not establish a locale-conversion defect.
+
+ATLAS-20261008-02 | Available 2026-10-08 15:30 | DECISION
+Do not enable automatic identifier repair. Continue source reconciliation because the intended values are unknown.
+
+ATLAS-20261009-01 | Available 2026-10-09 09:20 | FACT
+Reconciliation of the October 6 report found 21 unique held records and two duplicate rejection events. The report's 23 events were not 23 unique records.
+
+ATLAS-20261010-01 | Available 2026-10-10 12:00 | FACT
+Reviewers completed dispositions for 12 of the 21 unique held records; nine still required source confirmation.
+
+ATLAS-20261011-01 | Available 2026-10-11 17:00 | DECISION
+Keep the pilot at two teams while the nine remaining dispositions are confirmed. Approve investigation of a narrow validation fix only.
+
+ATLAS-20261012-01 | Available 2026-10-12 11:00 | FACT
+The final nine dispositions were confirmed, completing review of the 21 unique records from the October 6 batch. This resolves that batch, not every possible import issue.
+
+ATLAS-20261013-01 | Available 2026-10-13 14:00 | FACT
+A controlled test of the narrow validation change processed 200 fixture records without a new rejection. This is test evidence, not proof of unrestricted rollout readiness.
+
+ATLAS-20261014-01 | Available 2026-10-14 10:00 | DECISION
+Plan expansion from two to five teams on October 19, conditional on a completed trace review and verification of retry behavior.
+
+ATLAS-20261015-01 | Available 2026-10-15 14:10 | FACT
+An import attempt timed out. The detailed upstream trace had not arrived, so its acceptance and retry outcome were not established.
+
+ATLAS-20261016-01 | Available 2026-10-16 09:30 | DECISION
+Reverse the October 14 expansion plan and postpone the October 19 expansion. The trace is still missing and retry behavior remains unverified.
+
+ATLAS-20261017-01 | Available 2026-10-17 10:00 | FACT
+A weekend audit found the pilot still limited to the two authorized teams. No additional team had been enabled.
+
+ATLAS-20261019-01 | Available 2026-10-19 09:00 | FACT
+The upstream export service reported its October 18 source archive unavailable. The journal cannot establish what happened that day.
+
+ATLAS-20261019-02 | Available 2026-10-19 11:00 | DECISION
+Retain the two-team limit while the timeout investigation remains open.
+
+ATLAS-20261020-01 | Available 2026-10-20 09:00 | FACT
+A trace received today establishes that the October 15 timeout was followed by one duplicate staging submission. The trace does not establish a duplicate accepted customer record.
+
+ATLAS-20261020-02 | Available 2026-10-20 11:00 | DECISION
+Require an idempotency key and bounded retries before reconsidering expansion. This decision was made today, not on October 15.
+
+ATLAS-20261021-01 | Available 2026-10-21 15:00 | FACT
+The revised retry implementation passed a controlled duplicate-submission test using an idempotency key.
+
+ATLAS-20261022-01 | Available 2026-10-22 16:00 | FACT
+The candidate passed the agreed timeout and retry regression cases. It had not yet been enabled for additional teams.
+
+ATLAS-20261023-01 | Available 2026-10-23 10:00 | DECISION
+Approve expansion to five teams on October 26 after reviewing the retry evidence and the rollback plan.
+
+ATLAS-20261024-01 | Available 2026-10-24 11:00 | FACT
+The two existing teams completed the weekend check with zero unreviewed rejection events in the inspected queue snapshot.
+
+ATLAS-20261025-01 | Available 2026-10-25 12:00 | FACT
+The expansion checklist confirmed named reviewers and a tested rollback path for the three additional teams.
+
+ATLAS-20261026-01 | Available 2026-10-26 09:00 | FACT
+The approved expansion completed: five teams were enabled for the Atlas pilot.
+
+ATLAS-20261027-01 | Available 2026-10-27 14:00 | FACT
+One newly enabled team's export exposed a sender-mapping mismatch; the affected item was held for manual review.
+
+ATLAS-20261028-01 | Available 2026-10-28 15:00 | FACT
+A targeted sender-mapping change passed its fixture test. It was not yet an accepted production change.
+
+ATLAS-20261029-01 | Available 2026-10-29 10:00 | DECISION
+Approve the targeted sender-mapping correction after review; retain manual review for unknown mapping cases.
+
+ATLAS-20261030-01 | Available 2026-10-30 16:00 | FACT
+The mapping correction was applied and the held item was resolved. The five-team pilot was accepted; broader rollout remained unauthorized.
+
+ATLAS-20261031-01 | Available 2026-10-31 17:00 | FACT
+The month-end inspection recorded five enabled teams and zero unreviewed items in the inspected queue. It does not fill the missing October 18 evidence.
+
+ATLAS-20261101-01 | Available 2026-11-01 11:00 | DECISION
+Request a separate review of adding a sixth team. This is a November request, not an October outcome or authorization to expand.
