@@ -4,7 +4,7 @@ import "testing"
 
 func TestNormedTextAndFrontmatter(t *testing.T) {
 	t.Parallel()
-	valid := []byte("---\ntype: note\ndescription: ok\n---\nbody\n")
+	valid := []byte("---\ntype: note@v1\ndescription: ok\n---\nbody\n")
 	if !normedText(valid) {
 		t.Fatal("valid text rejected")
 	}
@@ -12,7 +12,7 @@ func TestNormedTextAndFrontmatter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if value, _ := stringField(document.Root, "type"); value != "note" || string(body) != "body\n" {
+	if value, _ := stringField(document.Root, "type"); value != "note@v1" || string(body) != "body\n" {
 		t.Fatalf("unexpected parse: type=%q body=%q", value, body)
 	}
 	for _, invalid := range [][]byte{

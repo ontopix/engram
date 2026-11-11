@@ -2,7 +2,7 @@
 
 **Version:** v1
 **Status:** Draft
-**Revision:** 2026-08-18
+**Revision:** 2026-11-11
 **Normative status:** Non-normative with respect to the engram standard
 
 This document defines the observable contract of the reference `engram`
@@ -339,14 +339,19 @@ A schema description is:
 ```json
 {
   "type": "note",
+  "reference": "note@v1",
+  "scope": ".",
   "source": "local",
-  "path": ".engram/schemas/note.md",
+  "path": ".engram/schemas/note@v1.md",
   "version": 1,
   "description": "..."
 }
 ```
 
-`source` is `local` or `inventory`; inventory entries have `path: null`.
+`type` is the logical name; `reference` is its exact `name@vN` spelling.
+`scope` is the logical schema scope. `source` is `local` or `inventory`;
+inventory entries have `path: null` and `scope: null`. Revision numbers retain
+exact precision and arrays sort them numerically.
 
 A supported-specification descriptor is:
 
@@ -454,8 +459,7 @@ Nested objects are closed in protocol v1:
 
 For read-only modes, `changed` means “would change”; otherwise it means the
 effect was published. Path arrays contain byte-changing outputs, are
-deduplicated, and use UTF-8 byte order. Schema arrays order by `type` then
-nullable `path`; specification descriptors order by `id` then `version`.
+deduplicated, and use UTF-8 byte order. Schema arrays order by `type` then numeric `version`; specification descriptors order by `id` then `version`.
 
 `commit` and `revert` use `created: false` and `commit: null` for dry-run,
 no-op, or validation rejection. A no-op has `changes: []` and
@@ -468,7 +472,7 @@ candidate even when acceptance is rejected.
 ### 4.1 `init`
 
 ```text
-engram init [PATH] [--schema TYPE]... [--dry-run]
+engram init [PATH] [--schema TYPE_REF]... [--dry-run]
 ```
 
 Creates a managed store and its initial accepted commit. Omitted `PATH` means
@@ -482,10 +486,11 @@ canonical bootstrap files:
 ```text
 README.md
 .engram/root.yaml
-.engram/schemas/note.md
+.engram/schemas/note@v1.md
 ```
 
-Requested `--schema` values copy additional bundled inventory schemas.
+Requested `--schema` values are exact references such as `person@v1` and
+copy additional bundled inventory revisions. Bare names are usage errors.
 Duplicates collapse. Existing files are never rewritten: a requested
 destination must be absent or already byte-identical. Existing pruned or
 non-logical bytes remain outside the initial commit.
@@ -877,7 +882,7 @@ create missing maps, repair marker grammar, stage, or commit. A valid
 ### 6.3 `new`
 
 ```text
-engram new TYPE PATH
+engram new TYPE_REF PATH
   --description TEXT
   [--fields FILE]
   [--body FILE|-]
@@ -888,7 +893,9 @@ engram new TYPE PATH
 Creates one record and updates its containing catalog as one helper operation.
 `PATH` is a new store-relative `.md` record below an existing real content
 directory; it cannot be `README.md`, reserved state, or a schema/config file.
-`TYPE` is resolved lexically at that destination.
+`TYPE_REF` is an exact reference such as `note@v1`, resolved at that
+destination. Bare names are usage errors. The command does not select a
+revision automatically and permits explicitly requested older revisions.
 
 `--fields` supplies a YAML mapping of additional frontmatter fields and cannot
 override `type`, `description`, or use reserved `engram-` keys. `--body FILE`
@@ -928,20 +935,25 @@ same arrays without writing. Rename integrity follows
 ```text
 engram schema inventory
 engram schema list [--at PATH]
-engram schema show TYPE [--at PATH]
-engram schema copy TYPE [--to SCOPE] [--dry-run]
+engram schema show TYPE_REF [--at PATH]
+engram schema copy TYPE_REF [--to SCOPE] [--dry-run]
 ```
 
 - `inventory` lists the non-normative schemas bundled with the CLI.
-- `list` reports schemas lexically visible at `--at` and their winning paths.
-- `show` returns the resolved conforming local schema and exact content.
-- `copy` copies one bundled schema into `SCOPE/.engram/schemas/`.
+- `list` reports every revision in each family visible at `--at`, including
+  exact reference, logical name, numeric version, scope, and path.
+- `show` requires an exact reference and returns its conforming local
+  definition and byte-exact content. It never falls back to another revision.
+- `copy` requires an exact inventory reference and installs it as
+  `SCOPE/.engram/schemas/<name>@v<N>.md`. Curated source artifact names are
+  internal package details, not destination paths.
 
 `PATH` and `SCOPE` are logical content directories and default to the root.
 Discovery is all-or-nothing: invalid selected schema state is a repository
 error, not a partial list or ancestor fallback. `copy` may create only the
 final `.engram/schemas/` directory, rejects an existing destination or
-shadowing, and never creates an update relationship. The result is an ordinary
+logical-family shadowing across scopes, including different revision numbers,
+and never creates an update relationship. The result is an ordinary
 local schema governed by [core §6](../spec/README.md#6-types-and-schemas).
 
 ## 7. Acceptance

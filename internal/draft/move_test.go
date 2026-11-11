@@ -29,7 +29,7 @@ func TestMoveAcrossDirectoriesRewritesEverySupportedLinkAndCatalog(t *testing.T)
 	inbound = append(inbound,
 		[]byte("\n[[topics/why-files|Why files]] and [inline](why-files.md?q=1#frag \"Keep title\") and [encoded](why-files&#x2e;md?raw=&amp;#frag) and [reference][why].\n\n[why]: <why-files.md?q=2#two> 'Reference title'\n")...)
 	writeFile(t, inboundName, inbound, 0o644)
-	schemaName := filepath.Join(store, ".engram", "schemas", "note.md")
+	schemaName := filepath.Join(store, ".engram", "schemas", "note@v1.md")
 	writeFile(t, schemaName, append(readFile(t, schemaName), []byte("\nSee [[topics/why-files|Why]].\n")...), 0o644)
 	rootMapName := filepath.Join(store, "README.md")
 	writeFile(t, rootMapName, append(readFile(t, rootMapName), []byte("\nRead [why files](topics/why-files.md \"Root title\").\n")...), 0o644)
@@ -41,7 +41,7 @@ func TestMoveAcrossDirectoriesRewritesEverySupportedLinkAndCatalog(t *testing.T)
 	if result.DryRun || !result.Changed || result.From != "topics/why-files.md" || result.To != "archive/renamed.md" {
 		t.Fatalf("result = %#v", result)
 	}
-	if !reflect.DeepEqual(result.Paths, []string{".engram/schemas/note.md", "README.md", "archive/renamed.md", "topics/derived-state.md"}) {
+	if !reflect.DeepEqual(result.Paths, []string{".engram/schemas/note@v1.md", "README.md", "archive/renamed.md", "topics/derived-state.md"}) {
 		t.Fatalf("paths = %#v", result.Paths)
 	}
 	if !reflect.DeepEqual(result.Catalogs, []string{"archive/README.md", "topics/README.md"}) {

@@ -7,7 +7,7 @@ schema:
   required: [type, description]
   additionalProperties: false
   properties:
-    type: {const: decision}
+    type: {const: decision@v1}
     description: {type: string, minLength: 1, maxLength: 200}
 body:
   required-sections: [Outcome]

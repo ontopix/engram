@@ -5,7 +5,7 @@ description: "Free-form note; the universal low-ceremony baseline type."
 schema:
   type: object
   properties:
-    type: {const: note}
+    type: {const: note@v1}
     description: {type: string, minLength: 1, maxLength: 200}
     pinned: {type: boolean}
     tags:
@@ -36,7 +36,7 @@ links to records over tags when the target deserves existence.
 
 ```markdown
 ---
-type: note
+type: note@v1
 description: "<one line for the catalog>"
 ---
 # <Title>

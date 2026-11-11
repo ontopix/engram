@@ -43,7 +43,7 @@ func TestDraftCommandsJSONAndStandardInput(t *testing.T) {
 	}
 
 	body := "# Standard input\n\nRemembered exactly.\n"
-	created := runDraftJSON(t, root, strings.NewReader(body), "new", "note", "topics/stdin.md",
+	created := runDraftJSON(t, root, strings.NewReader(body), "new", "note@v1", "topics/stdin.md",
 		"--description", "A record read from standard input.", "--body", "-", "--format", "json")
 	assertEnvelope(t, created, "new", cli.OutcomeOK, 0)
 	newResult := decodeObject(t, created.Result)
@@ -56,11 +56,11 @@ func TestDraftCommandsJSONAndStandardInput(t *testing.T) {
 		t.Fatalf("created bytes: %v %q", err, createdBytes)
 	}
 
-	copied := runDraftJSON(t, root, nil, "schema", "copy", "person", "--format", "json")
+	copied := runDraftJSON(t, root, nil, "schema", "copy", "person@v1", "--format", "json")
 	assertEnvelope(t, copied, "schema.copy", cli.OutcomeOK, 0)
 	copyResult := decodeObject(t, copied.Result)
 	assertExactKeys(t, copyResult, "dry_run", "changed", "schema", "path")
-	if copyResult["path"] != ".engram/schemas/person.md" {
+	if copyResult["path"] != ".engram/schemas/person@v1.md" {
 		t.Fatalf("copy = %#v", copyResult)
 	}
 

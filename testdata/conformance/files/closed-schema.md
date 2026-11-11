@@ -5,7 +5,7 @@ description: "Closed fixture omitting one universal property declaration."
 schema:
   type: object
   properties:
-    type: {const: closed}
+    type: {const: closed@v1}
   additionalProperties: false
 ---
 # closed

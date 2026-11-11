@@ -86,7 +86,7 @@ func Build(ctx context.Context, target string, requested []string) (*Plan, error
 		// Explicit --schema destinations are exact inventory copies. The three
 		// baseline files may already contain any bytes; candidate validation
 		// decides whether those preserved bytes conform.
-		if strings.HasPrefix(logicalPath, ".engram/schemas/") && logicalPath != ".engram/schemas/note.md" {
+		if strings.HasPrefix(logicalPath, ".engram/schemas/") && logicalPath != ".engram/schemas/note@v1.md" {
 			existingBytes, readErr := readStable(filepath.Join(root, filepath.FromSlash(logicalPath)))
 			if readErr != nil {
 				return nil, readErr
@@ -162,9 +162,9 @@ func inventoryFiles(requested []string) (map[string][]byte, error) {
 	}
 	byType := make(map[string]schemas.Entry, len(entries))
 	for _, entry := range entries {
-		byType[entry.Type] = entry
+		byType[fmt.Sprintf("%s@v%d", entry.Type, entry.Version)] = entry
 	}
-	wanted := map[string]struct{}{"note": {}}
+	wanted := map[string]struct{}{"note@v1": {}}
 	for _, typeName := range requested {
 		if _, exists := byType[typeName]; !exists {
 			return nil, fmt.Errorf("%w: unknown inventory schema %q", ErrTarget, typeName)
@@ -371,6 +371,10 @@ the root.
   store. Regenerate affected catalogs, declare only the intended changes as
   the initial candidate, and use one managed transaction to prepare, validate,
   and accept the final candidate as one commit.
+- Records name exact schema revisions (name@vN). For new work without a
+  specified revision, choose the highest available revision; preserve the
+  declared revision during ordinary reads and edits. Never downgrade to evade
+  missing data or validation.
 - Never silently overwrite a contradicted record; supersede or surface.
 - Never invent a reference. A provenance field holds an exact source observed
   during authorized work, or an explicit absence.

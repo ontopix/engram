@@ -40,6 +40,10 @@ when it recurs, its own type.
   affected catalogs, declare only the intended changes as the initial
   candidate, and use one managed transaction to prepare, validate, and
   accept the final candidate as one commit.
+- Records name exact schema revisions (name@vN). For new work without a
+  specified revision, choose the highest available revision; preserve the
+  declared revision during ordinary reads and edits. Never downgrade to evade
+  missing data or validation.
 - Never silently overwrite a contradicted record; supersede or surface.
 - Never invent a reference. A provenance field holds an exact source
   observed during authorized work — identifier, permalink, path, or

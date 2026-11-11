@@ -7,7 +7,7 @@ schema:
   required: [type, description]
   additionalProperties: false
   properties:
-    type: {const: fixed}
+    type: {const: fixed@v1}
     description: {type: string, minLength: 1, maxLength: 200}
 policy:
   immutable: true

@@ -1,5 +1,5 @@
 ---
-type: note
+type: note@v1
 description: "Record with a well-formed local link to an absent asset."
 ---
 # Missing local destination

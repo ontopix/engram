@@ -1,5 +1,5 @@
 ---
-type: note
+type: note@v1
 description: "Valid local Markdown destinations with components and escapes."
 ---
 # Valid destinations

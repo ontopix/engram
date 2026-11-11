@@ -528,57 +528,52 @@ described file — and the map cannot drift from the territory without
 
 ### 6.1 Resolution
 
-The `type` of a record resolves by ascending search: first
-`.engram/schemas/` of the record's own directory, then of each ancestor
-up to and including the store root. The first direct entry boundary
-named `<type>.md` is the selected definition candidate and stops the
-search even when its kind or contents are invalid; resolution never
-falls through a broken nearer candidate to an ancestor. A missing
-direct `.engram` entry, or a missing `schemas` entry in an inspectable
-`.engram` directory, contributes no candidate and search continues. An
-existing ancestor `.engram` boundary that cannot be inspected because
-of E103, E104, or E107, or an existing searched schema-directory
-boundary whose own kind is invalid, makes resolution unavailable and
-stops the search at that ancestor.
+Every record `type` MUST be an exact reference `<name>@v<N>`. The logical
+name is 1–64 lowercase ASCII characters from `[a-z0-9-]`, with no leading,
+trailing, or doubled hyphen. The literal separator is lowercase `@v`; the
+revision spelling MUST match `[1-9][0-9]*`. Bare names, leading zeroes,
+ranges, moving aliases, and SemVer spellings are forbidden. A missing,
+non-string, or empty value produces E202; another invalid reference produces
+E203. Consumers MUST preserve exact integer precision.
 
-Before lookup, a non-empty string `type` MUST itself use the type-slug
-syntax of §6.4: it is 1–64 lowercase ASCII characters from `[a-z0-9-]`,
-with no leading, trailing, or doubled hyphen. A non-empty string outside
-that grammar produces E203. A missing, non-string, or empty value stops
-under E202. Lookup treats a valid value as one opaque filename stem and
-MUST NOT interpret separators, dot segments, percent escapes, or host
-path syntax.
+A family is the set of revisions of one logical type in one schema scope.
+Resolution ascends from the record's directory to the root. The first
+`.engram/schemas/` directory containing any canonically named
+`<name>@v<K>.md` boundary owns the selected family, regardless of that
+boundary's kind or content validity. Within that directory the consumer MUST
+select exactly `<name>@v<N>.md`. A completed search with no family produces
+E203; a selected family without that revision produces E310 at the record.
+Consumers MUST NOT fall back to another revision or an ancestor family.
 
-Consequently a conforming type defined at depth *d* is visible in the
-whole subtree of *d*, and a conforming type defined at the root is
-visible everywhere. A completed search with no candidate produces E203.
-An invalid selected candidate instead emits every applicable causal
-finding, including E103, E108, or E303, and suppresses E203; it is never
-silently replaced by an ancestor definition. Schema-dependent record
-findings then follow the component-by-component evaluability and
-suppression rules of [§9.1](#91-check): a defect in one schema
-component does not suppress a check whose required schema components
-remain available.
+Missing `.engram` or `schemas` entries contribute no family. An existing
+uninspectable or wrong-kind configuration boundary stops resolution; the
+causal boundary finding is emitted and dependent checks are unavailable.
+A malformed selected file produces its causal findings, not E203 or E310.
+Component evaluability follows §9.1. Lookup treats each parsed component as
+an opaque name and MUST NOT interpret escapes, separators, or host paths.
+
+The resolved schema identity is `(scope, logical name, revision)`. Reading
+MUST use only definitions in that snapshot; history, timestamps, external
+registries, caches, and record-shape inference MUST NOT select a revision.
 
 ### 6.2 Shadowing forbidden
 
-A direct regular schema file with a valid `<type>.md` name MUST NOT reuse
-that filename when another direct regular candidate with the same name
-exists in an ancestor `.engram/schemas/`, irrespective of either candidate's
-content validity (E304 at the nearer file). If `project` means something
-in a subtree, it means exactly that everywhere in the subtree: a name
-that changed meaning with depth would silently corrupt every
-cross-cutting query. Scoped vocabularies choose new names instead
-(`meeting-note`, not a second `note`).
+Canonically named schema boundaries for one logical name MUST NOT occur in
+both ancestor and descendant schema scopes (E304 at each nearer boundary),
+even when revision numbers differ or a boundary's kind or content is invalid.
+A subtree cannot add revisions to an ancestor family. Independent sibling
+scopes MAY define the same logical name; equal names and revision numbers
+in independent scopes do not establish identical contracts.
 
 ### 6.3 The note baseline
 
-The store root MUST define the type `note`: a minimal, low-ceremony
+The store root MUST define `note@v1`: a minimal, low-ceremony
 record type whose only required frontmatter is the universal labels.
 The canonical definition appears in
-[Appendix A.3](#a3-engramschemasnotemd); a store MAY extend it but MUST
-NOT make `note` more demanding than the universal labels plus OPTIONAL
-fields.
+[Appendix A.3](#a3-engramschemasnotev1md). A store MAY publish further
+`note@vN` revisions, but every note revision MUST satisfy the normal form
+below and MUST NOT require more than the universal labels plus OPTIONAL
+fields. Published revisions follow §8.1.
 
 This requirement is checked syntactically, not by attempting general
 JSON Schema implication. A conforming `note` schema MUST use the
@@ -586,7 +581,7 @@ following **baseline normal form**:
 
 - the top-level `schema` contains `type: object` and a `properties`
   mapping;
-- `properties.type` is exactly `{const: note}`,
+- `properties.type` is exactly `{const: note@vN}` for its own revision N,
   `properties.description` is exactly
   `{type: string, minLength: 1, maxLength: 200}`, and
   `properties.pinned` is exactly `{type: boolean}`;
@@ -612,9 +607,9 @@ opt-in per type — never the entry price of remembering something.
 
 ### 6.4 Schema files
 
-A **schema file** is a direct regular file named `<type>.md` under a
-`.engram/schemas/` directory; when conforming, it defines that record
-type. Each `schemas` entry MUST be a real directory containing only such
+A **schema file** is a direct regular file named `<name>@v<N>.md` under a
+`.engram/schemas/` directory; when conforming, it defines that exact record
+contract. Each `schemas` entry MUST be a real directory containing only such
 files, with no subdirectories or other entries. Invalid layout produces
 E303 and is never reinterpreted as tool-specific state. Name, symlink,
 kind, pruning, and path attribution follow the single boundary order in
@@ -625,8 +620,8 @@ fields:
 
 | Field | Requirement | Meaning |
 |---|---|---|
-| `type` | REQUIRED string | The type name; slug syntax (1–64 chars, `[a-z0-9-]`, no leading/trailing/double hyphen); MUST equal the filename minus `.md` |
-| `version` | REQUIRED positive integer | Strictly increased whenever the parsed value of `schema`, `body`, or `policy` changes ([§6.9](#69-schema-evolution)) |
+| `type` | REQUIRED string | The logical name under §6.1; MUST equal the filename portion before `@v` |
+| `version` | REQUIRED positive integer | Exact numeric revision; MUST equal the canonical decimal filename suffix after `@v` and before `.md` |
 | `description` | REQUIRED string | 1–200 code points, with the same edge-space and forbidden control/line-character rules as a record `description` (§4.2): what this type is for |
 | `schema` | REQUIRED mapping | JSON Schema for the record's frontmatter ([§6.5](#65-the-json-schema-profile)) |
 | `body` | OPTIONAL mapping | Body requirements ([§6.6](#66-body-requirements)) |
@@ -634,6 +629,12 @@ fields:
 
 Any other top-level frontmatter field makes the schema file invalid and
 produces E303.
+
+The direct top-level `schema.properties.type` MUST be exactly
+`{const: <name>@v<N>}` for this definition; otherwise E303 applies. The JSON
+Schema validates the original complete record frontmatter without stripping
+or rewriting its type. A filename, metadata, or constant mismatch produces
+E303. Schema directories contain no descriptor files or unversioned schemas.
 
 The markdown body of a schema file is documentation for the writer —
 typically an agent deciding whether and how to create a record. It
@@ -831,15 +832,19 @@ x-engram-link:
 ```
 
 The mapping MUST contain `types`, MAY contain `must-exist`, and MUST NOT
-contain any other key. `types` MUST be a non-empty list of distinct
-type-slug strings under §6.1; `must-exist` MUST be boolean when present.
+contain any other key. `types` MUST be a non-empty list of distinct strings, each either a logical
+name or an exact reference under §6.1; `must-exist` MUST be boolean when present.
 Any violation produces E303.
 
 A string value at that position, after trimming exactly the leading and
 trailing ASCII whitespace defined by §7.2, MUST be one complete wikilink
 (`[[<target>]]`, [§7](#7-links)); a string that is not a valid complete
 wikilink produces E403 rather than E301. Validation then asserts: when
-the target exists, it is a record whose `type` is one of `types`. With
+the target exists, it is a record whose parsed logical name matches a logical
+entry in `types`, or whose exact `type` matches an exact entry. Entries combine
+by union; matching does not resolve a source-scope schema on behalf of the
+target. Logical entries admit all revisions, and exact entries admit only
+the named revision. The target resolves its own contract in its own scope. With
 `must-exist: true`, which is the default, the record MUST exist. With
 `must-exist: false`, an absent target is allowed for a reference that
 may be created later, but an existing target MUST still have an admitted
@@ -853,7 +858,7 @@ looser.
 ### 6.8 Policies
 
 The OPTIONAL `policy` mapping declares lifecycle guarantees for all
-records of the type:
+records selecting that schema revision:
 
 - `immutable: true` — after the changeset that creates it, a record of
   this type MUST NOT be modified, renamed, or deleted.
@@ -869,10 +874,16 @@ can validate this mapping but cannot prove a transition policy.
 
 ### 6.9 Schema evolution
 
-`version` identifies the schema's semantic revision. Its exact
-transition rule, including when a bump is required, is in §8.1.
-Documentation-only changes to the markdown body or `description` do not
-require a bump. Any migration must leave the final candidate conforming.
+Each revision is a separate semantic contract. Publishing another revision
+MUST NOT reinterpret existing records. A schema's parsed semantic components
+are fixed after publication; changes require a new definition as specified
+in §8.1. Description and Markdown-only edits MAY retain their revision.
+
+Every new record MUST name its selected revision explicitly. A conforming
+record MAY select any available revision; publishing a higher revision does
+not prohibit creation under an older one. The default agent authoring choice
+is specified only in Protocol P4. Missing data or validation failures MUST
+NOT trigger substitution of another revision.
 
 ---
 
@@ -1066,14 +1077,27 @@ transition.
   §6.7. A `must-exist: false` typed link is excluded. One finding at the
   removed base path aggregates all source occurrences; rename intent is
   not inferred from the diff.
-- **E504 — schema version.** For a schema present at the same path in
-  both states, `version` MUST NOT decrease. If the parsed `schema`,
-  `body`, or `policy` changes, `version` MUST strictly increase.
-  Changes only to its markdown body or `description` need no bump.
+- **E504 — fixed revision.** For a schema at the same path in both states,
+  its `type`, `version`, and parsed `schema`, `body`, and `policy` MUST remain
+  equal. Description and Markdown-only changes MAY retain the revision.
+  Equality is parsed-value equality, not general schema equivalence.
+- **E505 — retained definition.** Every schema file in the base MUST remain
+  at its path in the final candidate. Deletion and relocation are forbidden,
+  including for currently unreferenced revisions.
+- **E506 — new revision.** A newly added schema revision MUST exceed the
+  maximum numeric revision present in that scoped logical family in the
+  base. Gaps are allowed. Canonical filenames identify those revisions;
+  a new family has no prior maximum. An explicitly empty initialization
+  base publishes all supplied definitions together.
 
-A narrowing schema change MUST migrate every affected record in the same
-final candidate; ordinary E301 and E302 validation decides whether that
-candidate conforms. If an input to any transition rule is unavailable,
+A semantic migration changes a record's exact `type` and required data in
+one candidate and MUST satisfy its base lifecycle policy and its destination
+contract. Editing a published policy first cannot waive that policy. An
+append-only or immutable record cannot change its frontmatter; later evidence
+can use a permitted body append or a separately linked supplement. Existing
+records MAY continue to use their older revision without migration.
+
+If an input to any transition rule is unavailable,
 §9.1 supplies the single evaluability rule. Hooks MAY help prepare a
 conforming candidate but add no private conformance rule. An auditor MAY
 apply these transition rules retroactively over an accepted lineage.
@@ -1218,7 +1242,7 @@ the offending artifact or entry. For cross-artifact rules:
   a validly named routine declaration's frontmatter, schedule, or body error
   uses that file;
 - E5xx transition findings use the affected base-state record or schema
-  path;
+  path, except E506, which uses the added candidate schema path;
 - E6xx managed-state and managed-store findings use the store root `.`;
 - a duplicated-description warning is emitted for every affected
 record.
@@ -1388,9 +1412,16 @@ policy does not authorize.
   from accepted state, coordinate as the sole automated worktree editor,
   and declare only the authorized changes as the initial candidate. Before
   creating a record,
-  follow README placement, resolve the type, and read its schema prose; start
-  from its template when present, otherwise from its universal and
-  declared fields. Regenerate affected catalogs, then prepare and validate
+  follow README placement and select an exact type reference. Unless the
+  authorized task specifies a revision, select the highest numeric revision
+  available in the destination family. Read that revision's schema prose and
+  start from its template when present, otherwise from its universal and
+  declared fields. Store the exact reference, never a moving alias or bare
+  name. An agent MUST NOT downgrade automatically to evade missing data or validation.
+  Normal edits, imports, and moves preserve an existing record's selected
+  revision unless an explicit migration is intended; base policies still bind.
+  When reading records, interpret each using its declared revision, not the
+  revision preferred for new records. Regenerate affected catalogs, then prepare and validate
   the final candidate. Only acceptance as one commit completes the
   write; dirty, unstaged, invalid, or rejected bytes are not persistent
   memory.
@@ -1549,6 +1580,10 @@ README map, every record declares a `type` resolved against schemas in
   affected catalogs, declare only the intended changes as the initial
   candidate, and use one managed transaction to prepare, validate, and
   accept the final candidate as one commit.
+- Records name exact schema revisions (name@vN). For new work without a
+  specified revision, choose the highest available revision; preserve the
+  declared revision during ordinary reads and edits. Never downgrade to evade
+  missing data or validation.
 - Never silently overwrite a contradicted record; supersede or surface.
 - Never invent a reference. A provenance field holds an exact source
   observed during authorized work — identifier, permalink, path, or
@@ -1564,7 +1599,7 @@ README map, every record declares a `type` resolved against schemas in
 engram: 1
 ```
 
-### A.3 `.engram/schemas/note.md`
+### A.3 `.engram/schemas/note@v1.md`
 
 The canonical `note` definition — byte-identical to
 [`schemas/note.md`](../../schemas/note.md).
@@ -1577,7 +1612,7 @@ description: "Free-form note; the universal low-ceremony baseline type."
 schema:
   type: object
   properties:
-    type: {const: note}
+    type: {const: note@v1}
     description: {type: string, minLength: 1, maxLength: 200}
     pinned: {type: boolean}
     tags:
@@ -1608,7 +1643,7 @@ links to records over tags when the target deserves existence.
 
 ```markdown
 ---
-type: note
+type: note@v1
 description: "<one line for the catalog>"
 ---
 # <Title>
@@ -1652,7 +1687,7 @@ stable interface.
 |---|---|
 | E201 | Record without frontmatter, or frontmatter unparsable under [§3](#3-the-root-manifest) YAML rules |
 | E202 | `type` missing, not a string, or empty |
-| E203 | String `type` is not a type slug or resolves to no visible schema |
+| E203 | String `type` is not an exact `<name>@v<N>` reference or resolves to no visible family |
 | E204 | Record `description` missing, not a string, empty, over-long, edge-spaced, or contains a forbidden control/line character |
 | E205 | Top-level record-frontmatter key has reserved ASCII `engram-` prefix |
 | E206 | README `description` missing, not a string, empty, over-long, edge-spaced, or contains a forbidden control/line character |
@@ -1666,20 +1701,21 @@ stable interface.
 |---|---|
 | E301 | Record frontmatter violates its type's `schema`; diagnostic detail SHOULD include all distinct failing instance-location JSON Pointers in UTF-8 byte order |
 | E302 | Record body missing a `required-sections` heading |
-| E303 | Schema boundary, tree, or file invalid under §2.4 precedence (wrong-kind boundary, non-file or non-`<type>.md` direct entry, closed frontmatter/body/policy/link-field grammar, slug/filename mismatch, unknown keyword, or JSON Schema profile violation) |
+| E303 | Schema boundary, tree, or file invalid under §2.4 precedence (wrong-kind boundary, non-file or non-`<name>@v<N>.md` direct entry, closed frontmatter/body/policy/link-field grammar, reference/filename/metadata/direct-type-constant mismatch, unknown keyword, or JSON Schema profile violation) |
 | E304 | Type shadowing ([§6.2](#62-shadowing-forbidden)) |
 | E305 | Schema sets top-level `additionalProperties: false` without direct top-level `properties` entries for `type` and `description` |
 | E306 | Mutually exclusive policies both set to `true` |
-| E307 | Root does not define the `note` baseline, or `note` violates [§6.3](#63-the-note-baseline) |
+| E307 | Root does not define `note@v1`, or a note revision violates [§6.3](#63-the-note-baseline) |
 | E308 | Under §2.4 precedence, a hook boundary or tree has a wrong kind, contains an entry other than `prepare-changeset/` or its direct regular programs, has an invalid hook filename, or has an invalid interpreter line under [§8.2](#82-prepare-changeset-hook-programs) |
 | E309 | Under §2.4 precedence, a routine boundary or tree has a wrong kind, contains an entry other than a direct `<slug>.md` regular declaration, or a routine declaration violates the [routine declarations annex](annex-routines.md) |
+| E310 | Selected schema family does not contain the exact revision required by a record |
 
 ### E4xx — Links and catalogs
 
 | Code | Finding |
 |---|---|
 | E401 | Wikilink does not resolve to a record |
-| E402 | Typed link target's type not in `x-engram-link.types` |
+| E402 | Typed link target matches no logical name or exact reference in `x-engram-link.types` |
 | E403 | Link target escapes the store, wikilink form is invalid, or local markdown destination form is invalid |
 | E404 | Relative markdown link destination does not exist |
 | E405 | Catalog region missing, duplicated, present with `catalog: none`, or not byte-exact with [§5.2](#52-the-catalog) regeneration |
@@ -1691,7 +1727,9 @@ stable interface.
 | E501 | `immutable` record modified, renamed, or deleted |
 | E502 | `append-only` record edited non-appendingly, renamed, or deleted |
 | E503 | Candidate retains a required inbound wikilink targeting a record path removed from the base |
-| E504 | Schema `version` decreased, or `schema`, `body`, or `policy` changed without a strict `version` increase |
+| E504 | Published schema metadata or semantic components changed in place |
+| E505 | Published schema revision removed or relocated |
+| E506 | Added schema revision does not exceed the base family maximum |
 
 ### E6xx — Managed Git store
 

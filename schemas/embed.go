@@ -37,7 +37,7 @@ func Inventory() ([]Entry, error) {
 		if err != nil {
 			return nil, fmt.Errorf("parse embedded schema %s: %w", filename, err)
 		}
-		typeName, err := documentprofile.Type(document.YAML.Root)
+		typeName, err := documentprofile.SchemaType(document.YAML.Root)
 		if err != nil {
 			return nil, fmt.Errorf("embedded schema %s type: %w", filename, err)
 		}

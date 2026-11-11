@@ -144,8 +144,8 @@ func Description(mapping *yamlprofile.Node) (string, error) {
 // by snapshot/schema traversal.
 func ValidTypeSlug(value string) bool { return snapshot.ValidTypeSlug(value) }
 
-// Type reads a required top-level type and validates its slug syntax.
-func Type(mapping *yamlprofile.Node) (string, error) {
+// SchemaType reads the logical type name in a schema definition.
+func SchemaType(mapping *yamlprofile.Node) (string, error) {
 	value, err := RequiredString(mapping, "type")
 	if err != nil {
 		return "", err

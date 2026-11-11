@@ -1,5 +1,5 @@
 ---
-type: dated-event
+type: dated-event@v1
 description: "Plain YAML date scalar that must validate as a JSON string."
 date: 2026-08-04
 ---

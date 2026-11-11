@@ -18,6 +18,7 @@ import (
 	"github.com/ontopix/engram/internal/cli"
 	"github.com/ontopix/engram/internal/discovery"
 	"github.com/ontopix/engram/internal/snapshot"
+	"github.com/ontopix/engram/internal/typeref"
 	"github.com/ontopix/engram/schemas"
 )
 
@@ -120,7 +121,7 @@ func runSchemaInventory(ctx context.Context, _ *cli.Invocation) cli.Result {
 	descriptions := make([]checker.SchemaDescription, len(entries))
 	for index, entry := range entries {
 		descriptions[index] = checker.SchemaDescription{
-			Type: entry.Type, Source: "inventory", Path: nil,
+			Reference: fmt.Sprintf("%s@v%d", entry.Type, entry.Version), Type: entry.Type, Source: "inventory", Path: nil,
 			Version: json.Number(strconv.FormatInt(entry.Version, 10)), Description: entry.Description,
 		}
 	}
@@ -148,7 +149,7 @@ func runSchemaShow(ctx context.Context, invocation *cli.Invocation) cli.Result {
 		return commandError(cli.ErrorInternal, "schema.show invocation has invalid arguments")
 	}
 	typeName := invocation.Arguments[0]
-	if !snapshot.ValidTypeSlug(typeName) {
+	if !typeref.Valid(typeName) {
 		return commandError(cli.ErrorUsage, fmt.Sprintf("invalid schema type %q", typeName))
 	}
 	return withLocalSchemas(ctx, invocation, func(checked *checker.Snapshot, at string) cli.Result {

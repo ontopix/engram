@@ -7,7 +7,7 @@ schema:
   required: [type, description]
   additionalProperties: false
   properties:
-    type: {const: append-log}
+    type: {const: append-log@v1}
     description: {type: string, minLength: 1, maxLength: 200}
 policy:
   append-only: true

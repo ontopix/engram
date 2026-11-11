@@ -52,3 +52,12 @@ apply using-engram before this workflow.
    it.
 6. Handle contradictions under core P5. Use declared superseding semantics or
    surface the conflict; never silently choose a version.
+
+## Exact schema references
+
+Records declare `type: name@vN`; resolve that exact revision in the record's
+scope. Preserve it during reading and ordinary edits. For new work with no
+specified revision, follow core P4 and choose the highest available numeric
+revision, then store the exact reference. An explicit older revision is
+allowed. Never downgrade to evade missing fields, and never change a protected
+record's type to bypass its base policy. Published definitions remain intact.

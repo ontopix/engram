@@ -35,7 +35,7 @@ func FuzzYAMLProfile(f *testing.F) {
 
 func FuzzDocumentAndMarkdownProfiles(f *testing.F) {
 	for _, seed := range []string{
-		"---\ntype: note\ndescription: ok\n---\n# Title\n",
+		"---\ntype: note@v1\ndescription: ok\n---\n# Title\n",
 		"---\na: b\n---\n[[target|label]] [link](asset.png)\n",
 		"```\n[[ignored]]\n```\n",
 	} {

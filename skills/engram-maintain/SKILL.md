@@ -45,3 +45,12 @@ apply using-engram before this workflow.
    while preserving links to source anchors and schema-defined provenance.
 4. Respect immutable and append-only policies; maintenance has no special
    exemption. Report both the accepted changes and any decision left to a human.
+
+## Exact schema references
+
+Records declare `type: name@vN`; resolve that exact revision in the record's
+scope. Preserve it during reading and ordinary edits. For new work with no
+specified revision, follow core P4 and choose the highest available numeric
+revision, then store the exact reference. An explicit older revision is
+allowed. Never downgrade to evade missing fields, and never change a protected
+record's type to bypass its base policy. Published definitions remain intact.

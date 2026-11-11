@@ -15,6 +15,7 @@ import (
 	"github.com/ontopix/engram/internal/documentprofile"
 	"github.com/ontopix/engram/internal/markdownprofile"
 	"github.com/ontopix/engram/internal/snapshot"
+	"github.com/ontopix/engram/internal/typeref"
 	"github.com/ontopix/engram/internal/unicode17"
 	"github.com/ontopix/engram/internal/yamlprofile"
 )
@@ -23,7 +24,7 @@ import (
 // catalog update without publishing either file.
 func PlanNew(ctx context.Context, root, typeName, logicalPath string, options NewOptions) (*Plan, NewResult, error) {
 	const operation = "new"
-	if !snapshot.ValidTypeSlug(typeName) {
+	if !typeref.Valid(typeName) {
 		return nil, NewResult{}, typed(ErrorUsage, operation, logicalPath, fmt.Errorf("invalid record type %q", typeName))
 	}
 	if !validRecordPath(logicalPath) {

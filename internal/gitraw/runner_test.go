@@ -233,11 +233,11 @@ func makeRepository(t *testing.T, format ObjectFormat) string {
 	testGitOK(t, repository, nil, "config", "user.email", "engram@example.test")
 	testGitOK(t, repository, nil, "config", "commit.gpgsign", "false")
 	files := map[string]string{
-		"README.md":               "---\ndescription: \"Test store.\"\n---\n# test\n",
-		".engram/root.yaml":       "engram: 1\n",
-		".engram/schemas/note.md": "---\ntype: note\nversion: 1\ndescription: \"Note.\"\nschema: {}\n---\n# note\n",
-		"topics/README.md":        "---\ndescription: \"Topics.\"\n---\n# topics\n",
-		"topics/one.md":           "---\ntype: note\ndescription: \"One.\"\n---\n# One\n",
+		"README.md":                  "---\ndescription: \"Test store.\"\n---\n# test\n",
+		".engram/root.yaml":          "engram: 1\n",
+		".engram/schemas/note@v1.md": "---\ntype: note\nversion: 1\ndescription: \"Note.\"\nschema: {}\n---\n# note\n",
+		"topics/README.md":           "---\ndescription: \"Topics.\"\n---\n# topics\n",
+		"topics/one.md":              "---\ntype: note@v1\ndescription: \"One.\"\n---\n# One\n",
 	}
 	for name, content := range files {
 		writeTestFile(t, repository, name, content)

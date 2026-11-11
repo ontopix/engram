@@ -71,7 +71,7 @@ Create a local store with configured Git author identity:
 ```sh
 git config --global user.name "Ada"
 git config --global user.email "ada@example.test"
-engram init ~/memory --schema person --schema project
+engram init ~/memory --schema person@v1 --schema project@v1
 ```
 
 Use `--dry-run` first when initializing an existing directory. Existing files
@@ -178,7 +178,7 @@ content directory and map:
 
 ```sh
 engram status
-engram new note topics/example.md \
+engram new note@v1 topics/example.md \
   --description "An example durable memory." --title "Example"
 engram add topics/example.md topics/README.md
 engram check --staged
@@ -276,3 +276,19 @@ specification revision.
   object fetching, and path aliases are isolated or rejected by managed flows.
 - Read/write, hook execution, credentials, fetch, and publication are separate
   authorities. One does not imply another.
+
+### Moving from rc.2 to rc.3
+
+The rc.3 draft format requires exact record type references and versioned
+schema filenames. Existing unversioned snapshots and their managed history
+are not accepted implicitly. Keep the original store and its matching CLI,
+then, with owner authorization, convert a copied snapshot and initialize a
+new managed lineage. Preserve the original history for reference. Do not
+change append-only or immutable frontmatter inside that original lineage.
+
+Match each converted record to its actual schema definition, rename the
+installed schema to `name@vN.md`, retain `type: name` and `version: N` in its
+schema metadata, and set the direct `schema.properties.type` constant and
+record/template type to `name@vN`. Run `engram check PATH` on the converted
+snapshot before initializing it. Reinstall unchanged canonical skills with
+`engram setup` after switching binaries.

@@ -170,7 +170,7 @@ func TestSchemaInventoryShapeAndOrdering(t *testing.T) {
 		if !ok {
 			t.Fatalf("schema %d = %#v", index, item)
 		}
-		assertExactKeys(t, description, "type", "source", "path", "version", "description")
+		assertExactKeys(t, description, "type", "reference", "scope", "source", "path", "version", "description")
 		wantVersion := float64(1)
 		if description["type"] == "fact" {
 			wantVersion = 2
@@ -199,19 +199,19 @@ func TestSchemaListAndShowMinimalFixture(t *testing.T) {
 		t.Fatalf("schemas = %#v", items)
 	}
 	note := items[0].(map[string]any)
-	assertExactKeys(t, note, "type", "source", "path", "version", "description")
-	if note["type"] != "note" || note["source"] != "local" || note["path"] != ".engram/schemas/note.md" || note["version"] != float64(1) {
+	assertExactKeys(t, note, "type", "reference", "scope", "source", "path", "version", "description")
+	if note["type"] != "note" || note["source"] != "local" || note["path"] != ".engram/schemas/note@v1.md" || note["version"] != float64(1) {
 		t.Fatalf("note = %#v", note)
 	}
 
-	shown := runJSON(t, context.Background(), "--store", minimal, "schema", "show", "note", "--at", "topics", "--format", "json")
+	shown := runJSON(t, context.Background(), "--store", minimal, "schema", "show", "note@v1", "--at", "topics", "--format", "json")
 	assertEnvelope(t, shown, "schema.show", cli.OutcomeOK, 0)
 	showResult := decodeObject(t, shown.Result)
 	assertExactKeys(t, showResult, "schema", "content")
 	if !reflect.DeepEqual(showResult["schema"], note) {
 		t.Fatalf("show schema = %#v, list schema = %#v", showResult["schema"], note)
 	}
-	wantContent, err := os.ReadFile(filepath.Join(minimal, ".engram", "schemas", "note.md"))
+	wantContent, err := os.ReadFile(filepath.Join(minimal, ".engram", "schemas", "note@v1.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,12 +231,12 @@ func TestSchemaAtUsesLocalResolution(t *testing.T) {
 	if err := os.MkdirAll(localDirectory, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	note, err := os.ReadFile(filepath.Join(minimal, ".engram", "schemas", "note.md"))
+	note, err := os.ReadFile(filepath.Join(minimal, ".engram", "schemas", "note@v1.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	local := bytes.ReplaceAll(note, []byte("note"), []byte("local-note"))
-	if err := os.WriteFile(filepath.Join(localDirectory, "local-note.md"), local, 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(localDirectory, "local-note@v1.md"), local, 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -250,11 +250,11 @@ func TestSchemaAtUsesLocalResolution(t *testing.T) {
 	if !reflect.DeepEqual(nestedTypes, []string{"local-note", "note"}) {
 		t.Fatalf("nested types = %v", nestedTypes)
 	}
-	shown := runJSON(t, context.Background(), "--store", store, "schema", "show", "local-note", "--at", "topics", "--format", "json")
+	shown := runJSON(t, context.Background(), "--store", store, "schema", "show", "local-note@v1", "--at", "topics", "--format", "json")
 	assertEnvelope(t, shown, "schema.show", cli.OutcomeOK, 0)
 	result := decodeObject(t, shown.Result)
 	description := result["schema"].(map[string]any)
-	if description["path"] != "topics/.engram/schemas/local-note.md" {
+	if description["path"] != "topics/.engram/schemas/local-note@v1.md" {
 		t.Fatalf("schema path = %#v", description["path"])
 	}
 }
@@ -269,7 +269,7 @@ func TestPortableHandlerErrorKinds(t *testing.T) {
 		kind    cli.ErrorKind
 	}{
 		{"invalid schema type", []string{"--store", minimal, "schema", "show", "Bad-Type", "--format", "json"}, "schema.show", cli.ErrorUsage},
-		{"missing schema", []string{"--store", minimal, "schema", "show", "missing", "--format", "json"}, "schema.show", cli.ErrorRepository},
+		{"missing schema", []string{"--store", minimal, "schema", "show", "missing@v1", "--format", "json"}, "schema.show", cli.ErrorRepository},
 		{"invalid at", []string{"--store", minimal, "schema", "list", "--at", "../topics", "--format", "json"}, "schema.list", cli.ErrorUsage},
 		{"missing at", []string{"--store", minimal, "schema", "list", "--at", "missing", "--format", "json"}, "schema.list", cli.ErrorRepository},
 		{"missing snapshot", []string{"check", filepath.Join(t.TempDir(), "absent"), "--format", "json"}, "check", cli.ErrorRepository},

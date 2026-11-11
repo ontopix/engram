@@ -38,7 +38,7 @@ func TestNoteSchemaIsByteIdenticalToNormativeAppendix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	heading := []byte("### A.3 `.engram/schemas/note.md`")
+	heading := []byte("### A.3 `.engram/schemas/note@v1.md`")
 	if bytes.Count(specification, heading) != 1 {
 		t.Fatal("core specification must contain exactly one Appendix A.3 note-schema heading")
 	}

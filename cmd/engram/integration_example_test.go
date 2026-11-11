@@ -34,13 +34,13 @@ func TestSessionContextReadsOneAcceptedCommit(t *testing.T) {
 		}
 	}
 	run("init", store)
-	run("--store", store, "new", "note", "record.md", "--description", "retrieval-accepted-original", "--title", "Original")
+	run("--store", store, "new", "note@v1", "record.md", "--description", "retrieval-accepted-original", "--title", "Original")
 	run("--store", store, "add", "record.md", "README.md")
 	run("--store", store, "commit", "-m", "Accept original")
 	original := strings.TrimSpace(runFixtureGit(t, environment, "-C", store, "rev-parse", "HEAD"))
 	ref := strings.TrimSpace(runFixtureGit(t, environment, "-C", store, "symbolic-ref", "HEAD"))
 
-	write("record.md", "---\ntype: note\ndescription: retrieval-accepted-later\n---\nLater\n")
+	write("record.md", "---\ntype: note@v1\ndescription: retrieval-accepted-later\n---\nLater\n")
 	run("--store", store, "fmt")
 	run("--store", store, "add", "record.md", "README.md")
 	run("--store", store, "commit", "-m", "Accept later")

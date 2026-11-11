@@ -7,7 +7,7 @@ schema:
   required: [type, description, target]
   additionalProperties: false
   properties:
-    type: {const: typed-link}
+    type: {const: typed-link@v1}
     description: {type: string, minLength: 1, maxLength: 200}
     target:
       type: string
