@@ -5,6 +5,8 @@ and command surface are unchanged.
 
 - The quick start and generic agent write handoff now use `new note@v1`.
   Their documented store and write commands run directly in integration tests.
+- The directory layout and curated-schema guide now show the versioned names
+  required when definitions are installed in a store.
 - The [complete journal](../examples/journal/README.md) adds 34 daily entries,
   five linked weekly reviews, and one monthly review. Its records, schema
   filenames, type constants, and templates all select exact revisions.

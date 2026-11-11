@@ -73,8 +73,8 @@ memory/
 ├── .engram/
 │   ├── root.yaml
 │   └── schemas/
-│       ├── note.md
-│       └── person.md
+│       ├── note@v1.md
+│       └── person@v1.md
 ├── README.md
 └── topics/
     ├── README.md
