@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- Added `examples/packages/`, a conforming snapshot without records that
+  installs three reusable memory packages side by side: an editable activity
+  journal with entry ids, source coverage, and three routine declarations;
+  project memory organized by locally defined scopes; and people records with
+  identity keys and default personal-data exclusions. Each package carries its
+  own local schemas and takes its settings from the host. An integration test
+  installs each package alone into a managed store.
+- Added an examples index that describes every bundled example and how the two
+  journal designs differ. Release archives include the new snapshot and index.
+  No store-format or CLI-command change is introduced.
+
 ## 1.0.0-rc.4 — 2026-11-11
 
 - Corrected the quick start and generic agent write example to use `note@v1`;

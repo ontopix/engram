@@ -31,6 +31,8 @@ reference command surface lives in `docs/cli/README.md`.
   normative core skeleton
 - `skills/*/SKILL.md` — canonical runtime-neutral skill artifacts
 - `examples/minimal/` — small conforming snapshot; must stay conforming
+- `examples/packages/` — reusable memory packages in one conforming snapshot
+  without records; keep them free of installation-specific names
 
 ## Constraints
 

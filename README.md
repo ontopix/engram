@@ -300,9 +300,11 @@ Start with the document that matches what you are trying to do:
 | [Implementation plan](docs/implementation-plan.md) | Completed M0-M6 roadmap, architecture, and release gates |
 | [Release notes](docs/release-notes.md) | Current release-candidate scope and compatibility status |
 | [Curated schemas](schemas/README.md) | Optional ready-to-copy record types |
+| [Examples index](examples/README.md) | What each bundled example demonstrates and where to start |
 | [Minimal example](examples/minimal/README.md) | A small conforming portable snapshot |
 | [Schema versions](examples/schema-versions/README.md) | Three journal contracts coexisting without rewriting old records |
 | [Journal example](examples/journal/README.md) | Daily evidence, linked weekly and monthly reviews, and a routine declaration |
+| [Memory packages](examples/packages/README.md) | Reusable journal, project, and people packages to copy into a store |
 | [Agent integrations](examples/integrations/README.md) | Copyable runtime attachment, skill, retrieval, and write workflows |
 
 The core specification and normative annexes define Engram. The Go CLI is a
